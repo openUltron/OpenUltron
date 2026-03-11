@@ -3,6 +3,7 @@
 
 const https = require('https')
 const http = require('http')
+const path = require('path')
 const { URL } = require('url')
 const { SSEParser } = require('./stream-parser')
 const { shouldCompress, compressMessages, flushMemoryBeforeCompaction } = require('./context-compressor')
@@ -1286,12 +1287,18 @@ class Orchestrator {
     }
 
     // 强制注入项目路径，避免 AI 遗漏或填错
+    // 注意：__main_chat__/__feishu__/__gateway__ 是会话标识，不是实际文件系统路径
     const session = this.activeSessions.get(sessionId)
-    const projectPath = session?.projectPath || ''
-    if (projectPath) {
-      if (name === 'execute_command' && !args.cwd) {
-        args = { ...args, cwd: projectPath }
+    const projectPath = String(session?.projectPath || '').trim()
+    const hasRealProjectPath = !!projectPath && !projectPath.startsWith('__') && path.isAbsolute(projectPath)
+    if (name === 'execute_command') {
+      const rawCwd = args && typeof args.cwd === 'string' ? String(args.cwd).trim() : ''
+      const invalidCwd = !rawCwd || rawCwd.startsWith('__') || !path.isAbsolute(rawCwd)
+      if (invalidCwd) {
+        args = { ...args, cwd: hasRealProjectPath ? projectPath : getAppRootPath() }
       }
+    }
+    if (hasRealProjectPath) {
       if (name === 'git_operation' && !args.repo_path) {
         args = { ...args, repo_path: projectPath }
       }
