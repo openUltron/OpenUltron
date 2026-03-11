@@ -234,6 +234,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // ==================== 工作区 ====================
   workspace: {
+    getDefaults: () => ipcRenderer.invoke('workspace-get-defaults'),
     load: (data) => ipcRenderer.invoke('workspace-load', data),
     save: (data) => ipcRenderer.invoke('workspace-save', data),
     pickFolder: () => ipcRenderer.invoke('workspace-pick-folder'),
@@ -291,6 +292,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveChatHistory: (data) => ipcRenderer.invoke('ai-save-chat-history', data),
     loadChatHistory: (data) => ipcRenderer.invoke('ai-load-chat-history', data),
     clearChatHistory: (data) => ipcRenderer.invoke('ai-clear-chat-history', data),
+    saveSessionSummary: (data) => ipcRenderer.invoke('ai-save-session-summary', data),
+    listSessionSummaries: (data) => ipcRenderer.invoke('ai-list-session-summaries', data),
     evolveFromSession: (data) => ipcRenderer.invoke('ai-evolve-from-session', data),
     listConversations: (data) => ipcRenderer.invoke('ai-list-conversations', data),
     renameConversation: (data) => ipcRenderer.invoke('ai-rename-conversation', data),

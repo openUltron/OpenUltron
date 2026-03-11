@@ -745,10 +745,60 @@ const onImageClick = (e) => {
 
 // ---- 会话历史持久化（projectPath 辅助函数提前，供历史列表复用）----
 const historyProjectPath = () => props.projectPath || '__general__'
+const HISTORY_CMD_RE = /^\/(history|memory)\s*$/i
 
 // ---- 历史对话列表 ----
 const showHistory = ref(false)
 const conversationList = ref([])
+const carrySummaryForNextSession = ref('')
+
+const compactSummaryText = (s) => String(s || '').replace(/\s+/g, ' ').trim()
+const extractTextFromMessage = (m) => {
+  if (!m) return ''
+  if (typeof m.content === 'string') return compactSummaryText(m.content)
+  if (Array.isArray(m.content)) {
+    return compactSummaryText((m.content || []).map(p => (p && p.text) || '').join(' '))
+  }
+  return ''
+}
+const buildSessionSummary = (msgs = []) => {
+  const list = (msgs || [])
+    .filter(m => m && (m.role === 'user' || m.role === 'assistant'))
+    .map(m => ({ role: m.role, text: extractTextFromMessage(m) }))
+    .filter(m => m.text)
+  if (!list.length) return ''
+  const recent = list.slice(-24)
+  const userPoints = []
+  const assistantPoints = []
+  for (const item of recent) {
+    if (item.role === 'user') {
+      if (userPoints.length < 6) userPoints.push(item.text.slice(0, 120))
+    } else if (item.role === 'assistant') {
+      if (assistantPoints.length < 6) assistantPoints.push(item.text.slice(0, 140))
+    }
+  }
+  const out = []
+  out.push(`会话压缩摘要（${new Date().toLocaleString('zh-CN', { hour12: false })}）`)
+  if (userPoints.length) {
+    out.push('用户关注点：')
+    userPoints.forEach(p => out.push(`- ${p}`))
+  }
+  if (assistantPoints.length) {
+    out.push('已完成/已回复：')
+    assistantPoints.forEach(p => out.push(`- ${p}`))
+  }
+  return out.join('\n')
+}
+const formatSummaryList = (summaries = []) => {
+  if (!summaries.length) return '暂无历史记忆摘要。'
+  const lines = ['最近历史记忆摘要：']
+  summaries.forEach((s) => {
+    const t = (s.updatedAt || s.createdAt || '').replace('T', ' ').replace('Z', '')
+    const oneLine = compactSummaryText(s.content || '').slice(0, 160)
+    lines.push(`- [${t}] ${oneLine}`)
+  })
+  return lines.join('\n')
+}
 
 const loadConversationList = async () => {
   try {
@@ -785,7 +835,6 @@ const switchConversation = async (sessionId) => {
 const startNewConversation = () => {
   if (isStreaming.value) return
   showHistory.value = false
-  currentSessionId.value = null
   clearMessages()
   emit('session-created', null)
 }
@@ -1045,18 +1094,48 @@ const handleSend = async () => {
   if (!text && !hasActiveSlash.value) return
   if (isStreaming.value) return
 
-  // /new：在当前会话插入用户消息 + AI 回复「已开启新会话」并持久化，再切到新会话
+  if (HISTORY_CMD_RE.test(text)) {
+    inputText.value = ''
+    adjustTextareaHeight()
+    try {
+      const res = await window.electronAPI.ai.listSessionSummaries({
+        projectPath: historyProjectPath(),
+        limit: 6
+      })
+      messages.value.push({ role: 'user', content: text })
+      messages.value.push({ role: 'assistant', content: formatSummaryList(res?.summaries || []) })
+      await persistSave()
+      nextTick(() => forceScrollToBottom())
+    } catch {
+      messages.value.push({ role: 'assistant', content: '读取历史记忆失败。' })
+    }
+    return
+  }
+
+  // /new：先压缩归档当前会话，再切到新会话；下一轮自动携带摘要
   const isNewCmd = /^\/new\s*$/i.test(text) || text === '/new'
   if (isNewCmd) {
     inputText.value = ''
     adjustTextareaHeight()
+    const summary = buildSessionSummary(messages.value)
+    if (summary) carrySummaryForNextSession.value = summary
     if (currentSessionId.value != null && currentSessionId.value !== '') {
       const userMsg = { role: 'user', content: '/new' }
-      const assistantMsg = { role: 'assistant', content: 'Started a new session.' }
+      const assistantMsg = { role: 'assistant', content: '已归档当前会话并开启新会话。历史记忆将自动继承。' }
       messages.value = [...messages.value, userMsg, assistantMsg]
+      if (summary) {
+        await window.electronAPI.ai.saveSessionSummary({
+          projectPath: historyProjectPath(),
+          sessionId: currentSessionId.value,
+          messages: messages.value
+        }).catch(() => {})
+      }
       await persistSave()
     }
     startNewConversation()
+    if (summary) {
+      messages.value = [{ role: 'assistant', content: '新会话已创建，并继承上一会话摘要。可发送 /history 查看历史摘要。' }]
+    }
     return
   }
 
@@ -1125,9 +1204,13 @@ const handleSend = async () => {
   if (isFirstMessage) emit('first-message', { text, sessionId: currentSessionId.value })
 
   // 斜杠命令的 systemPrompt 优先级最高，覆盖 buildSystemPrompt
+  const carryPrompt = carrySummaryForNextSession.value
+    ? `[会话延续记忆]\n以下为上一会话压缩摘要，请在本轮回答中继承上下文，不要丢失关键信息：\n${carrySummaryForNextSession.value}`
+    : ''
+  const basePrompt = [carryPrompt, buildSystemPrompt() || ''].filter(Boolean).join('\n\n')
   const systemPrompt = slashSystemPrompt
-    ? slashSystemPrompt + '\n\n---\n' + (buildSystemPrompt() || '')
-    : buildSystemPrompt()
+    ? slashSystemPrompt + '\n\n---\n' + (basePrompt || '')
+    : basePrompt
 
   sendMessage(finalText, {
     model: currentModel.value || undefined,
@@ -1137,6 +1220,7 @@ const handleSend = async () => {
     panelId,
     sessionId: currentSessionId.value || undefined
   })
+  if (carrySummaryForNextSession.value) carrySummaryForNextSession.value = ''
   nextTick(() => forceScrollToBottom())
 }
 
@@ -1372,12 +1456,6 @@ const clearMessages = () => {
     }).catch(() => {})
   }
   useAIChatInstance.clearMessages()
-  try {
-    window.electronAPI.ai.clearChatHistory({
-      projectPath: historyProjectPath(),
-      sessionId: currentSessionId.value
-    })
-  } catch { /* ignore */ }
   currentSessionId.value = null
   useAIChatInstance.setCurrentSessionId(null) // 同步 composable 内 sessionId，否则新会话首条消息会复用旧 id，可能导致事件对不上或无回复
   syncSessionName()

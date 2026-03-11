@@ -2,7 +2,6 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import AutoImport from 'unplugin-auto-import/vite'
 import Components from 'unplugin-vue-components/vite'
-import monacoEditorPlugin from 'vite-plugin-monaco-editor'
 
 export default defineConfig({
   base: '/',   // History 模式无 #，开发/生产均通过 HTTP 服务访问
@@ -21,8 +20,7 @@ export default defineConfig({
     }),
     Components({
       dts: true
-    }),
-    monacoEditorPlugin({})
+    })
   ],
   server: {
     host: '127.0.0.1', // 明确绑定 IPv4，使 localhost 与 127.0.0.1 都能访问（避免只监听 IPv6 ::1 导致 127 打不开）

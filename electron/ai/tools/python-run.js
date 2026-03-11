@@ -5,15 +5,19 @@
 const path = require('path')
 const fs = require('fs')
 const { spawn } = require('child_process')
-const { getAppRootPath } = require('../../app-root')
+const { getAppRootPath, getWorkspacePath } = require('../../app-root')
 
-const SCRIPTS_DIR = getAppRootPath('scripts')
+const SCRIPTS_DIR = getWorkspacePath('scripts')
+const LEGACY_SCRIPTS_DIR = getAppRootPath('scripts')
 const DEFAULT_TIMEOUT_MS = 60000
 const MAX_STDOUT_LEN = 32 * 1024
 const MAX_STDERR_LEN = 8 * 1024
 
 function getAllowedBases(projectPath) {
   const bases = [SCRIPTS_DIR]
+  if (fs.existsSync(LEGACY_SCRIPTS_DIR)) {
+    bases.push(LEGACY_SCRIPTS_DIR)
+  }
   if (projectPath && path.isAbsolute(projectPath) && fs.existsSync(projectPath)) {
     bases.push(path.resolve(projectPath))
   }

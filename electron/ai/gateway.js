@@ -12,6 +12,7 @@
 
 const http = require('http')
 const WebSocket = require('ws')
+const { getWorkspaceRoot } = require('../app-root')
 
 const DEFAULT_PORT = 28790
 
@@ -197,7 +198,7 @@ function createGateway(opts) {
       tools: useTools,
       sender: wrappedSender,
       config: resolvedConfig,
-      projectPath: projectPath || require('os').homedir(),
+      projectPath: projectPath || getWorkspaceRoot(),
       panelId: panelId || undefined,
       feishuChatId: feishuChatId || undefined
     }).then(() => ({}))

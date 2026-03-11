@@ -12,7 +12,7 @@ const pty = require('node-pty')
 const invokeRegistry = require('./api/invokeRegistry')
 const { registerConfigHandlers } = require('./api/registerConfigHandlers')
 const { createApiServer, DEFAULT_PORT: API_DEFAULT_PORT } = require('./api/server')
-const { getAppRoot, getAppRootPath } = require('./app-root')
+const { getAppRoot, getAppRootPath, getWorkspaceRoot, getWorkspacePath, ensureWorkspaceDirs } = require('./app-root')
 const { getLogPath, readTail, getForAi, logger: appLogger, patchConsole } = require('./app-logger')
 const { filterSessionsList, isRunSessionId } = require('./ai/sessions-list-filter')
 
@@ -2831,6 +2831,8 @@ function getAIConfigLegacy() {
 aiConfigFile.ensureAIConfigFile(app, store)
 // 确保 <appRoot>/prompts/ 存在且缺失的提示词文件写入默认（可被 AI 通过 file_operation 修改）
 ensurePromptsDirAndDefaults()
+// 统一 AI 工作空间：~/.openultron/workspace/{scripts,projects}
+ensureWorkspaceDirs()
 
 function writeAIConfigFromTool(data) {
   aiConfigFile.writeAIConfig(app, data)
@@ -3419,7 +3421,7 @@ async function runHeartbeat() {
     ]
 
     await aiGateway.runChat(
-      { sessionId, messages, model: undefined, tools: getToolsForChat(), projectPath: os_module.homedir() },
+      { sessionId, messages, model: undefined, tools: getToolsForChat(), projectPath: getWorkspaceRoot() },
       fakeSender
     )
     console.log('[Heartbeat] 巡检完成')
@@ -4108,6 +4110,56 @@ function stripToolExecutionFromMessages(messages) {
     .filter(m => m.role !== 'assistant' || (m.content && String(m.content).trim()))
 }
 
+function compactSummaryText(s) {
+  return String(s || '').replace(/\s+/g, ' ').trim()
+}
+
+function extractMessageTextForSummary(msg) {
+  if (!msg || typeof msg !== 'object') return ''
+  const c = msg.content
+  if (typeof c === 'string') return compactSummaryText(c)
+  if (Array.isArray(c)) {
+    return compactSummaryText(c.map((x) => {
+      if (!x) return ''
+      if (typeof x === 'string') return x
+      if (typeof x.text === 'string') return x.text
+      return ''
+    }).join(' '))
+  }
+  return ''
+}
+
+function buildSessionSummary(messages = []) {
+  const list = (messages || [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+    .map((m) => ({ role: m.role, text: extractMessageTextForSummary(m) }))
+    .filter((m) => m.text)
+  if (!list.length) return ''
+
+  const recent = list.slice(-24)
+  const userPoints = []
+  const assistantPoints = []
+  for (const item of recent) {
+    if (item.role === 'user') {
+      if (userPoints.length < 6) userPoints.push(item.text.slice(0, 120))
+    } else if (item.role === 'assistant') {
+      if (assistantPoints.length < 6) assistantPoints.push(item.text.slice(0, 140))
+    }
+  }
+
+  const lines = []
+  lines.push(`会话压缩摘要（${new Date().toLocaleString('zh-CN', { hour12: false })}）`)
+  if (userPoints.length) {
+    lines.push('用户关注点：')
+    for (const p of userPoints) lines.push(`- ${p}`)
+  }
+  if (assistantPoints.length) {
+    lines.push('已完成/已回复：')
+    for (const p of assistantPoints) lines.push(`- ${p}`)
+  }
+  return lines.join('\n')
+}
+
 registerChannel('ai-save-chat-history', async (event, { projectPath, messages, sessionId, model, apiBaseUrl }) => {
   try {
     const projectKey = conversationFile.hashProjectPath(projectPath)
@@ -4124,6 +4176,47 @@ const MAIN_CHAT_PROJECT = '__main_chat__'
 const FEISHU_PROJECT = '__feishu__'
 const GATEWAY_PROJECT = '__gateway__'
 const TELEGRAM_PROJECT = '__telegram__'
+
+registerChannel('ai-save-session-summary', async (event, { projectPath, sessionId, messages }) => {
+  try {
+    const proj = String(projectPath || MAIN_CHAT_PROJECT).trim() || MAIN_CHAT_PROJECT
+    const sid = String(sessionId || '').trim()
+    if (!sid || !Array.isArray(messages) || messages.length === 0) {
+      return { success: false, message: 'invalid args' }
+    }
+    const summary = buildSessionSummary(messages)
+    if (!summary) return { success: true, summary: '' }
+    memoryStore.saveMemory({
+      content: summary,
+      tags: ['session-summary', `project:${proj}`, `session:${sid}`],
+      projectPath: proj,
+      source: 'auto'
+    })
+    return { success: true, summary }
+  } catch (e) {
+    return { success: false, message: e.message }
+  }
+})
+
+registerChannel('ai-list-session-summaries', async (event, { projectPath, limit }) => {
+  try {
+    const proj = String(projectPath || MAIN_CHAT_PROJECT).trim() || MAIN_CHAT_PROJECT
+    const lim = Math.min(Math.max(Number(limit) || 5, 1), 20)
+    const rows = memoryStore.listMemoriesByTags(['session-summary', `project:${proj}`], proj, lim)
+    return {
+      success: true,
+      summaries: (rows || []).map((m) => ({
+        id: m.id,
+        content: m.content || '',
+        createdAt: m.createdAt || null,
+        updatedAt: m.updatedAt || null,
+        tags: m.tags || []
+      }))
+    }
+  } catch (e) {
+    return { success: false, summaries: [], message: e.message }
+  }
+})
 
 registerChannel('ai-load-chat-history', async (event, { projectPath, sessionId }) => {
   try {
@@ -4471,6 +4564,24 @@ function stripFeishuScreenshotMisfireText(text) {
   return s.replace(/\n{3,}/g, '\n\n').trim()
 }
 
+// 仅从 assistant 消息内容中提取可发送文本（支持 string / 多段 content）
+function getAssistantText(message) {
+  if (!message || message.role !== 'assistant') return ''
+  const c = message.content
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) {
+    return c
+      .map((part) => {
+        if (!part) return ''
+        if (typeof part === 'string') return part
+        if (typeof part.text === 'string') return part.text
+        return ''
+      })
+      .join('')
+  }
+  return ''
+}
+
 // 主 Agent + 子 Agent：新消息到达时派生子 Agent，不直接停前一个；子 Agent 可调 stop_previous_task 停掉前边，或 wait_for_previous_run 等待前边完成再继续
 function channelSessionKey(binding) {
   return `${binding.projectPath}:${binding.sessionId}`
@@ -4485,6 +4596,12 @@ async function processMessageReplace(payload) {
   if (!binding || (binding.channel !== 'feishu' && binding.channel !== 'telegram')) return
   const key = channelSessionKey(binding)
   const mainSessionId = binding.sessionId
+  // 同一会话收到新消息时，默认中止之前仍在运行的子任务，避免并发串话/错答
+  const existingRuns = channelCurrentRun.get(key) || []
+  for (const r of existingRuns) {
+    abortedRunSessionIds.add(r.runSessionId)
+    aiOrchestrator.stopChat(r.runSessionId)
+  }
   const runId = Date.now()
   const runSessionId = `${mainSessionId}-run-${runId}`
   const startTime = Date.now()
@@ -4551,19 +4668,12 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     eventBus.emit('chat.session.completed', { binding: errBinding, payload: { text: '请先在应用内配置 API Key 后再使用。' } })
     return
   }
-  let lastAssistantText = ''
   const collectedScreenshots = []
   const completePromise = new Promise((resolve, reject) => {
     const fakeSender = {
       send: (channel, data) => {
         if (channel === 'ai-chat-complete' && data && data.messages) {
-          const msgs = data.messages
-          const last = [...msgs].reverse().find(m => m.role === 'assistant')
-          if (last && last.content) {
-            if (typeof last.content === 'string') lastAssistantText = last.content
-            else if (Array.isArray(last.content)) lastAssistantText = (last.content.map(c => (c && c.text) || '')).join('')
-          }
-          resolve(msgs)
+          resolve(data.messages)
         }
         if (channel === 'ai-chat-error') reject(new Error((data && data.error) || 'AI 出错'))
         if (channel === 'ai-chat-tool-result' && data) {
@@ -4604,7 +4714,11 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       }
       return
     }
-    const toSend = lastAssistantText || '（无回复内容）'
+    const delta = finalMessages.slice(originalConvLength)
+    const latestAssistant = [...delta]
+      .reverse()
+      .find((m) => m && m.role === 'assistant' && getAssistantText(m).trim())
+    const toSend = latestAssistant ? getAssistantText(latestAssistant) : ''
     const { cleanedText: cleanedRaw, filePaths: pathsFromText } = extractLocalResourceScreenshots(toSend)
     const currentRound = getCurrentRoundMessages(finalMessages)
     const screenshotsFromTools = extractScreenshotsFromMessages(currentRound)
@@ -4639,7 +4753,6 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     }
     const mainConv = conversationFile.loadConversation(projectKey, mainSessionId)
     const baseMessages = (mainConv && mainConv.messages) ? mainConv.messages : []
-    const delta = finalMessages.slice(originalConvLength)
     const insertAt = Math.min(originalConvLength, baseMessages.length)
     const merged = [...baseMessages.slice(0, insertAt), ...delta, ...baseMessages.slice(insertAt)]
     const messagesToSave = stripToolExecutionFromMessages(merged)
@@ -5695,6 +5808,20 @@ registerChannel('coze-logout', async () => {
 })
 
 // ==================== Workspace ====================
+registerChannel('workspace-get-defaults', async () => {
+  try {
+    ensureWorkspaceDirs()
+    return {
+      success: true,
+      root: getWorkspaceRoot(),
+      scriptsPath: getWorkspacePath('scripts'),
+      projectsPath: getWorkspacePath('projects')
+    }
+  } catch (e) {
+    return { success: false, message: e.message }
+  }
+})
+
 registerChannel('workspace-load', async (event, { primaryPath }) => {
   try {
     const key = `workspace_${primaryPath}`

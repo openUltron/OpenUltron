@@ -166,6 +166,7 @@ export function installBrowserPolyfill(baseUrl = DEFAULT_API_BASE) {
     },
 
     workspace: {
+      getDefaults: () => invoke('workspace-get-defaults', []),
       load: (data) => invoke('workspace-load', [data]),
       save: (data) => invoke('workspace-save', [data]),
       pickFolder: () => invoke('workspace-pick-folder', []),
@@ -221,6 +222,8 @@ export function installBrowserPolyfill(baseUrl = DEFAULT_API_BASE) {
       saveChatHistory: (data) => invoke('ai-save-chat-history', [data]),
       loadChatHistory: (data) => invoke('ai-load-chat-history', [data]),
       clearChatHistory: (data) => invoke('ai-clear-chat-history', [data]),
+      saveSessionSummary: (data) => invoke('ai-save-session-summary', [data]),
+      listSessionSummaries: (data) => invoke('ai-list-session-summaries', [data]),
       evolveFromSession: (data) => invoke('ai-evolve-from-session', [data]).catch(() => ({ success: true })),
       listConversations: (data) => invoke('ai-list-conversations', [data]),
       renameConversation: (data) => invoke('ai-rename-conversation', [data]),

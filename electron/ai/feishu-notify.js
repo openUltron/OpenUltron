@@ -19,6 +19,42 @@ let cachedToken = null
 let tokenExpireAt = 0
 const EXPIRE_BUFFER_MS = 60 * 1000 // 提前 1 分钟刷新
 
+function detectImageExtFromBuffer(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null
+  // PNG
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'png'
+  // JPEG
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[buf.length - 2] === 0xFF && buf[buf.length - 1] === 0xD9) return 'jpg'
+  // GIF
+  if (buf.slice(0, 6).toString('ascii') === 'GIF87a' || buf.slice(0, 6).toString('ascii') === 'GIF89a') return 'gif'
+  // WebP: RIFF....WEBP
+  if (buf.slice(0, 4).toString('ascii') === 'RIFF' && buf.slice(8, 12).toString('ascii') === 'WEBP') return 'webp'
+  // BMP
+  if (buf[0] === 0x42 && buf[1] === 0x4D) return 'bmp'
+  return null
+}
+
+function normalizeImageBase64(input) {
+  if (!input || typeof input !== 'string') throw new Error('image_base64 为空')
+  let raw = input.trim()
+  let hintedMime = null
+  // 支持 data URL：data:image/png;base64,xxxx
+  const m = raw.match(/^data:([^;,]+);base64,(.*)$/i)
+  if (m) {
+    hintedMime = (m[1] || '').toLowerCase()
+    raw = m[2] || ''
+  }
+  // 去掉空白/换行并兼容 url-safe base64
+  raw = raw.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')
+  // 补齐 padding
+  while (raw.length % 4 !== 0) raw += '='
+  const buf = Buffer.from(raw, 'base64')
+  if (!buf || buf.length === 0) throw new Error('image_base64 解码失败')
+  const ext = detectImageExtFromBuffer(buf)
+  if (!ext) throw new Error("Can't recognize image format.")
+  return { buffer: buf, ext, hintedMime }
+}
+
 function getConfig() {
   return openultronConfig.getFeishu()
 }
@@ -179,7 +215,14 @@ async function sendText(receiveId, text, receiveIdType = 'chat_id') {
 async function uploadImage(imageBuffer, filename = 'image.png') {
   const token = await getTenantAccessToken()
   const ext = path.extname(filename).toLowerCase() || '.png'
-  const mime = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' }[ext] || 'image/png'
+  const mime = {
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.png': 'image/png',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+    '.bmp': 'image/bmp'
+  }[ext] || 'image/png'
   const formParts = [
     { name: 'image_type', body: 'message' },
     { name: 'image', body: imageBuffer, filename, contentType: mime }
@@ -197,9 +240,13 @@ async function sendImage(receiveId, imageKeyOrOptions, receiveIdType = 'chat_id'
   let image_key = imageKeyOrOptions
   if (typeof imageKeyOrOptions === 'object' && imageKeyOrOptions != null) {
     if (imageKeyOrOptions.image_base64) {
-      const buf = Buffer.from(imageKeyOrOptions.image_base64, 'base64')
-      const name = imageKeyOrOptions.filename || 'image.png'
-      image_key = await uploadImage(buf, name)
+      const normalized = normalizeImageBase64(imageKeyOrOptions.image_base64)
+      const ext = normalized.ext || 'png'
+      const defaultName = `image.${ext}`
+      let name = imageKeyOrOptions.filename || defaultName
+      // 若 filename 无扩展名，按检测出的真实格式补齐，避免 Content-Type 错配
+      if (!path.extname(name)) name = `${name}.${ext}`
+      image_key = await uploadImage(normalized.buffer, name)
     } else {
       image_key = imageKeyOrOptions.image_key
     }

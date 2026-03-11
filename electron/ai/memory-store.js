@@ -359,6 +359,26 @@ function searchMemories(query, projectPath, limit = 10) {
 }
 
 /**
+ * 按标签列出记忆（用于会话摘要历史）
+ * @param {string[]} tags - 必须同时包含的标签
+ * @param {string|null} projectPath - 可选，按项目过滤
+ * @param {number} limit
+ */
+function listMemoriesByTags(tags = [], projectPath = null, limit = 10) {
+  const required = (tags || []).map(t => String(t || '').trim()).filter(Boolean)
+  const memories = readAll()
+  return memories
+    .filter((m) => {
+      if (projectPath && m.projectPath !== projectPath) return false
+      if (!required.length) return true
+      const mTags = Array.isArray(m.tags) ? m.tags : []
+      return required.every(t => mTags.includes(t))
+    })
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime())
+    .slice(0, limit)
+}
+
+/**
  * 获取指定 id 的记忆，并更新访问统计
  */
 function getMemory(id) {
@@ -560,6 +580,7 @@ async function cacheEmbeddingForMemory(memoryId, apiConfig) {
 
 module.exports = {
   searchMemories,
+  listMemoriesByTags,
   searchMemoriesSemantic,
   generateEmbedding,
   cacheEmbeddingForMemory,

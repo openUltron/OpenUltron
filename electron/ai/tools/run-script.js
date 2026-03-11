@@ -1,14 +1,14 @@
 // AI 工具：在临时工作空间编写并运行脚本（如 Python），用于爬虫、读 Excel/PDF/Word 等
-// 工作目录：<appRoot>/temp/<task_id>/，脚本可沉淀为技能（install_skill，type: script）供备份与复用
+// 工作目录：<workspace>/temp/<task_id>/，脚本可沉淀为技能（install_skill，type: script）供备份与复用
 
 const path = require('path')
 const fs = require('fs')
 const { spawn } = require('child_process')
 const { randomUUID } = require('crypto')
-const { getAppRootPath } = require('../../app-root')
+const { getWorkspacePath } = require('../../app-root')
 const executorRegistry = require('../../extensions/executor-registry')
 
-const TEMP_BASE = getAppRootPath('temp')
+const TEMP_BASE = getWorkspacePath('temp')
 const DEFAULT_SCRIPT_TIMEOUT_MS = 90 * 1000
 const DEFAULT_PIP_TIMEOUT_MS = 120 * 1000
 
@@ -46,7 +46,7 @@ function runPipInstall(workDir, timeoutMs) {
 
 const definition = {
   description: [
-    '在临时工作空间（<appRoot>/temp/<task_id>/）中编写并运行脚本。',
+    '在临时工作空间（<workspace>/temp/<task_id>/）中编写并运行脚本。',
     '支持 runtime: python（默认）/ node / shell（Bash）。',
     'Python：可传 requirements 自动 pip 安装依赖（如 requests、openpyxl、PyPDF2）。',
     'Node：执行一段 Node.js 脚本（如读写文件、http 请求、数据处理）。',
