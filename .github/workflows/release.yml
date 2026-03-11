@@ -44,10 +44,58 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Sync package version from tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          if [[ -z "$VERSION" || "$VERSION" == "$TAG" ]]; then
+            echo "Invalid tag: $TAG (expected vX.Y.Z)"
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version
+          echo "Build version set to: $(node -p \"require('./package.json').version\")"
+
       - name: Build renderer
         run: npm run build
 
+      - name: Build Electron app (mac prepackaged dir)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: npx electron-builder --mac --arm64 --x64 --dir --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Ad-hoc sign mac app bundles
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          APPS=(dist-electron/mac*/OpenUltron.app)
+          if [ ${#APPS[@]} -eq 0 ]; then
+            echo "No app bundles found in dist-electron/mac*"
+            ls -la dist-electron || true
+            exit 1
+          fi
+          for APP in "${APPS[@]}"; do
+            echo "Ad-hoc signing: $APP"
+            xattr -cr "$APP" 2>/dev/null || true
+            codesign --force --deep --sign - "$APP"
+            codesign --verify --deep --strict --verbose=2 "$APP"
+          done
+
+      - name: Repackage signed mac artifacts
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          rm -f dist-electron/*.dmg dist-electron/*-mac.zip dist-electron/*.blockmap dist-electron/latest*.yml 2>/dev/null || true
+          npx electron-builder --mac --arm64 --prepackaged="dist-electron/mac-arm64" --publish never
+          npx electron-builder --mac --x64 --prepackaged="dist-electron/mac" --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
       - name: Build Electron app (no publish)
+        if: runner.os != 'macOS'
         run: npx electron-builder ${{ matrix.build_args }} --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
