@@ -378,7 +378,10 @@ class Orchestrator {
             const normalizedToolCallsForRepeat = response.toolCalls.map((tc, idx) => ({
               id: (tc.id && String(tc.id).trim()) || `call_${idx}_${Date.now()}`,
               type: tc.type === 'function' ? 'function' : 'function',
-              function: tc.function || { name: '', arguments: '{}' }
+              function: {
+                name: tc.function?.name || '',
+                arguments: this._normalizeToolArguments(tc.function?.arguments)
+              }
             }))
             // 仍向前端发送 tool-call / tool-result，让用户能看到「本轮的命令执行情况」（结果为已跳过）
             for (const toolCall of normalizedToolCallsForRepeat) {
@@ -416,7 +419,10 @@ class Orchestrator {
           const normalizedToolCalls = response.toolCalls.map((tc, idx) => ({
             id: (tc.id && String(tc.id).trim()) || `call_${idx}_${Date.now()}`,
             type: tc.type === 'function' ? 'function' : 'function',
-            function: tc.function || { name: '', arguments: '{}' }
+            function: {
+              name: tc.function?.name || '',
+              arguments: this._normalizeToolArguments(tc.function?.arguments)
+            }
           }))
           currentMessages.push({
             role: 'assistant',
@@ -442,7 +448,7 @@ class Orchestrator {
               if (abortController.signal.aborted) return { toolCall, resultStr: '{"error":"已取消"}' }
               let result
               try {
-                const args = JSON.parse(toolCall.function.arguments)
+                const args = this._parseToolArgumentsObject(toolCall.function.arguments)
                 // 记录实际使用的工具名称与参数，便于排查「chrome-devtools vs webview_control」等选择
                 try {
                   console.log('[AI][ToolCall]', {
@@ -829,12 +835,47 @@ class Orchestrator {
         const tool_calls = m.tool_calls.map((tc, idx) => ({
           id: (tc.id && String(tc.id).trim()) || `call_${idx}_${Date.now()}`,
           type: tc.type === 'function' ? 'function' : 'function',
-          function: tc.function || { name: '', arguments: '{}' }
+          function: {
+            name: tc.function?.name || '',
+            arguments: this._normalizeToolArguments(tc.function?.arguments)
+          }
         }))
         return { ...m, tool_calls }
       }
       return m
     })
+  }
+
+  /** 规范化工具参数为合法 JSON 字符串，避免上游校验 "function.arguments must be JSON format" */
+  _normalizeToolArguments(rawArgs) {
+    if (rawArgs == null) return '{}'
+    if (typeof rawArgs === 'object') {
+      try {
+        return JSON.stringify(rawArgs)
+      } catch {
+        return '{}'
+      }
+    }
+    const text = String(rawArgs).trim()
+    if (!text) return '{}'
+    try {
+      const parsed = JSON.parse(text)
+      return JSON.stringify(parsed)
+    } catch {
+      return '{}'
+    }
+  }
+
+  /** 将工具参数解析为对象，非对象参数降级为空对象，避免执行层抛异常中断 */
+  _parseToolArgumentsObject(rawArgs) {
+    const normalized = this._normalizeToolArguments(rawArgs)
+    try {
+      const parsed = JSON.parse(normalized)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed
+      return {}
+    } catch {
+      return {}
+    }
   }
 
   // ========== OpenAI 兼容 API ==========
@@ -913,7 +954,7 @@ class Orchestrator {
               toolCalls = Object.values(toolCallBuffers).map((tc, idx) => ({
                 id: (tc.id && String(tc.id).trim()) || `call_${idx}_${Date.now()}`,
                 type: 'function',
-                function: { name: tc.name || '', arguments: tc.arguments || '' }
+                function: { name: tc.name || '', arguments: this._normalizeToolArguments(tc.arguments) }
               }))
             }
           }
@@ -923,7 +964,7 @@ class Orchestrator {
             toolCalls = Object.values(toolCallBuffers).map((tc, idx) => ({
               id: (tc.id && String(tc.id).trim()) || `call_${idx}_${Date.now()}`,
               type: 'function',
-              function: { name: tc.name || '', arguments: tc.arguments || '' }
+              function: { name: tc.name || '', arguments: this._normalizeToolArguments(tc.arguments) }
             }))
           }
           resolve({ content: fullContent, toolCalls })
@@ -1096,7 +1137,7 @@ class Orchestrator {
         if (msg.tool_calls) {
           for (const tc of msg.tool_calls) {
             let input = {}
-            try { input = JSON.parse(tc.function.arguments) } catch {}
+            input = this._parseToolArgumentsObject(tc.function?.arguments)
             content.push({
               type: 'tool_use',
               id: tc.id,
