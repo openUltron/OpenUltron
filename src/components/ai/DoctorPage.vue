@@ -1,10 +1,10 @@
 <template>
   <div class="doctor-page">
     <div class="doctor-header">
-      <h2 class="doctor-title">诊断</h2>
-      <p class="doctor-desc">检查 Gateway、飞书连接、配置目录与文件是否正常。</p>
+      <h2 class="doctor-title">{{ t('doctor.title') }}</h2>
+      <p class="doctor-desc">{{ t('doctor.desc') }}</p>
       <button class="doctor-run-btn" :disabled="loading" @click="runDoctor">
-        {{ loading ? '检查中…' : '运行诊断' }}
+        {{ loading ? t('doctor.checking') : t('doctor.run') }}
       </button>
     </div>
     <div v-if="error" class="doctor-error">{{ error }}</div>
@@ -28,10 +28,12 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useI18n } from '../../composables/useI18n'
 
 const loading = ref(false)
 const error = ref('')
 const result = ref(null)
+const { t } = useI18n()
 
 function statusIcon(status) {
   if (status === 'pass') return '✓'
@@ -46,7 +48,7 @@ async function runDoctor() {
   try {
     const api = window.electronAPI
     if (!api || typeof api.invoke !== 'function') {
-      error.value = '无法调用主进程（仅 Electron 环境支持）'
+      error.value = t('doctor.electronOnly')
       return
     }
     const data = await api.invoke('doctor-run', [])

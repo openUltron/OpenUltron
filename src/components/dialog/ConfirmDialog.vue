@@ -30,25 +30,28 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useI18n } from '../../composables/useI18n.js'
+
+const { t } = useI18n()
 
 const visible = ref(false)
-const title = ref('确认')
+const title = ref(t('dialog.confirm'))
 const message = ref('')
 const detail = ref('')
 const type = ref('warning') // warning, danger, info
-const confirmText = ref('确定')
-const cancelText = ref('取消')
+const confirmText = ref(t('dialog.ok'))
+const cancelText = ref(t('dialog.cancel'))
 
 let resolvePromise = null
 
 const show = (options) => {
   return new Promise((resolve) => {
-    title.value = options.title || '确认'
+    title.value = options.title || t('dialog.confirm')
     message.value = options.message || ''
     detail.value = options.detail || ''
     type.value = options.type || 'warning'
-    confirmText.value = options.confirmText || '确定'
-    cancelText.value = options.cancelText || '取消'
+    confirmText.value = options.confirmText || t('dialog.ok')
+    cancelText.value = options.cancelText || t('dialog.cancel')
     visible.value = true
     resolvePromise = resolve
   })

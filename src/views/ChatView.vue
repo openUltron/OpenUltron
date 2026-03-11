@@ -19,6 +19,7 @@ import { ref, computed, watch, onMounted, onActivated } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChatPanel from '../components/ai/ChatPanel.vue'
 import { useLastChatSession } from '../composables/useLastChatSession.js'
+import { useI18n } from '../composables/useI18n.js'
 
 defineOptions({ name: 'ChatView' })
 
@@ -26,6 +27,7 @@ const MAIN_CHAT_PROJECT = '__main_chat__'
 
 const route = useRoute()
 const router = useRouter()
+const { t } = useI18n()
 const { lastProjectPath, lastSessionId, setLast } = useLastChatSession()
 
 // 优先用 URL，无则用「上次聊天会话」——避免侧栏 to="/chat" 导致 key 变化、ChatPanel 被销毁
@@ -62,7 +64,7 @@ const onSessionCreated = (sessionId) => {
 
 const updateSessionTitle = async (sessionId, firstMessage) => {
   if (!sessionId || !firstMessage) return
-  const title = firstMessage.slice(0, 24).trim() || '新对话'
+  const title = firstMessage.slice(0, 24).trim() || t('sessions.newChat')
   try {
     await window.electronAPI.ai.saveSession({
       projectPath: projectPath.value,

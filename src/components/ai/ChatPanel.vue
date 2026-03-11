@@ -6,15 +6,15 @@
       <div v-if="compressionSummaryText" class="chat-compression-notice">
         <div class="compression-notice-head">
           <Info :size="16" />
-          <span>此会话的早期消息已被压缩，完整记录无法恢复。以下为当时保存的摘要：</span>
+          <span>{{ t('chat.compressedHint') }}</span>
         </div>
         <pre class="compression-notice-body">{{ compressionSummaryText }}</pre>
       </div>
       <div v-if="displayMessages.length === 0 && !compressionSummaryText" class="chat-empty">
         <img :src="logoUrl" alt="" class="empty-icon avatar-logo-large" />
-        <p>我是{{ agentDisplayName || 'Ultron' }}，有什么可以帮你的？</p>
-        <button type="button" class="chat-empty-edit-role" @click="openIdentityMd">编辑我的名字与角色</button>
-        <p v-if="identityPathForHint" class="chat-empty-path-hint">名字来自：{{ identityPathForHint }}</p>
+        <p>{{ t('chat.emptyWelcome', { name: agentDisplayName || 'Ultron' }) }}</p>
+        <button type="button" class="chat-empty-edit-role" @click="openIdentityMd">{{ t('chat.editRole') }}</button>
+        <p v-if="identityPathForHint" class="chat-empty-path-hint">{{ t('chat.nameFrom') }}{{ identityPathForHint }}</p>
       </div>
       <ChatMessage
         v-for="(msg, idx) in displayMessages"
@@ -25,7 +25,7 @@
       <!-- 没有工具卡片时才显示纯思考指示器 -->
       <div v-if="isStreaming && !lastAssistantHasActivity" class="streaming-indicator">
         <Loader :size="14" class="spin" />
-        <span>AI 思考中...</span>
+        <span>{{ t('chat.thinking') }}</span>
       </div>
       <!-- 用户确认对话框 -->
       <div v-if="pendingConfirm" class="confirm-dialog" :class="pendingConfirm.severity">
@@ -36,7 +36,7 @@
         </div>
         <div class="confirm-body">
           <div class="confirm-title">
-            {{ pendingConfirm.severity === 'danger' ? '危险操作确认' : pendingConfirm.severity === 'warning' ? '操作确认' : '确认' }}
+            {{ pendingConfirm.severity === 'danger' ? t('chat.dangerConfirm') : pendingConfirm.severity === 'warning' ? t('chat.operationConfirm') : t('chat.confirm') }}
           </div>
           <div class="confirm-message">{{ pendingConfirm.message }}</div>
           <textarea
@@ -46,20 +46,20 @@
             rows="3"
           ></textarea>
           <div class="confirm-actions">
-            <button class="confirm-btn cancel" @click="respondConfirm(false)">取消</button>
+            <button class="confirm-btn cancel" @click="respondConfirm(false)">{{ t('chat.cancel') }}</button>
             <button
               v-if="pendingConfirm.allowPush"
               class="confirm-btn ok push"
               @click="handleConfirmPush"
-            >确认并推送</button>
-            <button class="confirm-btn ok" :class="pendingConfirm.severity" @click="handleConfirmOk">确认</button>
+            >{{ t('chat.confirmAndPush') }}</button>
+            <button class="confirm-btn ok" :class="pendingConfirm.severity" @click="handleConfirmOk">{{ t('chat.confirm') }}</button>
           </div>
         </div>
       </div>
       <div v-if="error" class="chat-error">
         <AlertCircle :size="14" />
         <span class="chat-error-text">{{ error }}</span>
-        <button type="button" class="chat-error-dismiss" @click="clearChatError" title="关闭">×</button>
+        <button type="button" class="chat-error-dismiss" @click="clearChatError" :title="t('chat.close')">×</button>
       </div>
     </div>
 
@@ -112,14 +112,14 @@
               >
                 <Zap :size="11" />
                 <span>{{ s.name }}</span>
-                <button class="slash-tag-remove" @click="removeSlashSkill(s)" title="删除">×</button>
+                <button class="slash-tag-remove" @click="removeSlashSkill(s)" :title="t('chat.remove')">×</button>
               </div>
             </template>
             <div class="input-inner-field">
               <textarea
                 ref="inputRef"
                 v-model="inputText"
-                :placeholder="hasActiveSlash ? `输入补充说明，或删除标签后重新输入...` : isStreaming ? 'AI 回复中...' : ''"
+                :placeholder="hasActiveSlash ? t('chat.inputHintWithSlash') : isStreaming ? t('chat.aiReplying') : ''"
                 :disabled="isStreaming"
                 @keydown="onKeyDown"
                 @input="onInput"
@@ -137,7 +137,7 @@
           v-if="isStreaming"
           class="send-btn stop"
           @click="stopChat"
-          title="停止"
+          :title="t('chat.stop')"
         >
           <Square :size="14" />
         </button>
@@ -146,7 +146,7 @@
           class="send-btn"
           :disabled="!inputText.trim() && !hasActiveSlash"
           @click="handleSend"
-          title="发送"
+          :title="t('chat.send')"
         >
           <Send :size="14" />
         </button>
@@ -172,8 +172,10 @@ import MentionPalette from './MentionPalette.vue'
 import ImageViewer from './ImageViewer.vue'
 import { useAIChat } from '../../composables/useAIChat'
 import { useLogoUrl } from '../../composables/useLogoUrl.js'
+import { useI18n } from '../../composables/useI18n'
 
 const logoUrl = useLogoUrl()
+const { t } = useI18n()
 const props = defineProps({
   systemPrompt: { type: String, default: '' },
   model: { type: String, default: '' },
@@ -286,7 +288,7 @@ const loadMcpServers = async () => {
     const res = await window.electronAPI.ai.getMcpStatus()
     if (res?.success && res.status) {
       mcpServers.value = Object.entries(res.status).map(([name, info]) => ({
-        id: name, name, description: `${info.toolCount || 0} 个工具`, type: 'mcp', raw: { name, ...info }
+        id: name, name, description: `${info.toolCount || 0} tools`, type: 'mcp', raw: { name, ...info }
       }))
     }
   } catch { /* ignore */ }
@@ -294,9 +296,9 @@ const loadMcpServers = async () => {
 
 // 跑马灯快捷指令提示（轮播）
 const MARQUEE_HINTS = [
-  '输入 / 选择技能或命令',
-  'Enter 发送 · Shift+Enter 换行',
-  '/skills 使用技能 · /mcp 使用 MCP 工具',
+  'Type / to choose skills or commands',
+  'Enter to send · Shift+Enter for newline',
+  '/skills for skills · /mcp for MCP tools',
 ]
 const marqueeHintIndex = ref(0)
 const marqueeHint = computed(() => MARQUEE_HINTS[marqueeHintIndex.value] ?? MARQUEE_HINTS[0])
@@ -316,8 +318,8 @@ function stopMarquee() {
 
 // 一级菜单：分类（自进化由后台自动执行，不再提供 /evolve 指令）
 const SLASH_CATEGORIES = [
-  { id: 'skills', name: 'skills', description: '技能库',   type: 'category' },
-  { id: 'mcp',    name: 'mcp',    description: 'MCP 工具', type: 'category' },
+  { id: 'skills', name: 'skills', description: 'Skills', type: 'category' },
+  { id: 'mcp', name: 'mcp', description: 'MCP Tools', type: 'category' },
 ]
 
 // 根据当前分类和 query 计算候选列表
@@ -884,7 +886,7 @@ const currentConvTitle = () => {
 // 同步会话名称到 session-registry（多 Agent 编排可见）
 const syncSessionName = () => {
   const lastAst = [...messages.value].reverse().find(m => m.role === 'assistant' && m.content)
-  const projectName = props.projectPath ? props.projectPath.split('/').pop() : (agentDisplayName.value || 'AI 助手')
+  const projectName = props.projectPath ? props.projectPath.split('/').pop() : (agentDisplayName.value || 'AI Assistant')
   window.electronAPI?.ai?.sessionUpdateMeta?.({
     sessionId: panelId,
     projectName,
@@ -1050,7 +1052,7 @@ const handleSend = async () => {
     adjustTextareaHeight()
     if (currentSessionId.value != null && currentSessionId.value !== '') {
       const userMsg = { role: 'user', content: '/new' }
-      const assistantMsg = { role: 'assistant', content: '已开启新会话' }
+      const assistantMsg = { role: 'assistant', content: 'Started a new session.' }
       messages.value = [...messages.value, userMsg, assistantMsg]
       await persistSave()
     }
@@ -1070,8 +1072,8 @@ const handleSend = async () => {
     slashSystemPrompt = prompts.filter(Boolean).join('\n\n')
     if (!finalText) {
       finalText = activeSlashSkills.value.length === 1
-        ? `使用技能：${activeSlashSkills.value[0].name}`
-        : `使用所选技能（${activeSlashSkills.value.map(s => s.name).join('、')}）`
+        ? `Using skill: ${activeSlashSkills.value[0].name}`
+        : `Using selected skills (${activeSlashSkills.value.map(s => s.name).join(', ')})`
     }
     clearSlash()
   }
@@ -1104,15 +1106,15 @@ const handleSend = async () => {
           if (lines <= 200) {
             inlineParts.push(`\`\`\`\n// @${f.relativePath || f.name}\n${res.content}\n\`\`\``)
           } else {
-            largePaths.push(`- ${f.relativePath}（${lines} 行，请用 file_operation 工具读取）`)
+            largePaths.push(`- ${f.relativePath} (${lines} lines, please read with file_operation)`)
           }
         }
       } catch { /* ignore */ }
     }
     const parts = []
-    if (snippetParts.length > 0) parts.push('以下是相关代码片段：\n\n' + snippetParts.join('\n\n'))
-    if (inlineParts.length > 0) parts.push('以下是相关文件内容：\n\n' + inlineParts.join('\n\n'))
-    if (largePaths.length > 0) parts.push('以下文件较大，请用 file_operation 工具自行读取：\n' + largePaths.join('\n'))
+    if (snippetParts.length > 0) parts.push('Relevant code snippets:\n\n' + snippetParts.join('\n\n'))
+    if (inlineParts.length > 0) parts.push('Relevant file content:\n\n' + inlineParts.join('\n\n'))
+    if (largePaths.length > 0) parts.push('These files are large, please read with file_operation:\n' + largePaths.join('\n'))
     if (parts.length > 0) {
       finalText = finalText + '\n\n' + parts.join('\n\n')
       displayText = (displayText ? displayText + '\n' : '') + fileNames.join(' ')
@@ -1199,7 +1201,7 @@ onMounted(async () => {
   // 注册前端视图到 session-registry
   // projectName = 分类名（项目名 或 Agent 名字 / "AI 助手"），sessionTitle = 具体会话标题
   const lastAssistant = [...messages.value].reverse().find(m => m.role === 'assistant' && m.content)
-  const projectName = props.projectPath ? props.projectPath.split('/').pop() : (agentDisplayName.value || 'AI 助手')
+  const projectName = props.projectPath ? props.projectPath.split('/').pop() : (agentDisplayName.value || 'AI Assistant')
   window.electronAPI?.ai?.sessionRegisterView?.({
     sessionId: panelId,
     projectPath: props.projectPath || '',

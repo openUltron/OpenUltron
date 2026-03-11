@@ -2,7 +2,7 @@
   <div class="sessions-list-view">
     <div class="sl-header">
       <MessageSquare :size="16" />
-      <span>会话</span>
+      <span>{{ t('sessions.title') }}</span>
     </div>
     <div class="sl-list" v-if="sessions.length">
       <div
@@ -23,7 +23,7 @@
           v-if="s.source !== 'main'"
           type="button"
           class="sl-item-delete"
-          title="删除会话"
+          :title="t('sessions.deleteTitle')"
           @click.stop="confirmDelete(s)"
         >
           <Trash2 :size="14" />
@@ -33,7 +33,7 @@
     </div>
     <div v-else class="sl-empty">
       <img :src="logoUrl" alt="" class="sl-empty-icon" />
-      <p>暂无会话</p>
+      <p>{{ t('sessions.empty') }}</p>
     </div>
   </div>
 </template>
@@ -43,20 +43,22 @@ import { ref, computed, watch, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { MessageSquare, ChevronRight, Trash2 } from 'lucide-vue-next'
 import { useLogoUrl } from '../composables/useLogoUrl.js'
+import { useI18n } from '../composables/useI18n.js'
 
 const router = useRouter()
 const route = useRoute()
 const logoUrl = useLogoUrl()
+const { t, locale } = useI18n()
 const sessions = ref([])
 const currentSessionId = computed(() => route.query.sessionId || null)
 const currentProjectPath = computed(() => route.query.projectPath || '__main_chat__')
 
 const sessionTitle = (s) => {
-  return s.title || (s.source === 'feishu' ? '飞书会话' : s.source === 'telegram' ? 'Telegram 会话' : s.source === 'dingtalk' ? '钉钉会话' : s.source === 'gateway' ? 'Gateway 会话' : '新对话')
+  return s.title || (s.source === 'feishu' ? t('sessions.sourceFeishuSession') : s.source === 'telegram' ? t('sessions.sourceTelegramSession') : s.source === 'dingtalk' ? t('sessions.sourceDingtalkSession') : s.source === 'gateway' ? t('sessions.sourceGatewaySession') : t('sessions.newChat'))
 }
 
 const sourceLabel = (source) => {
-  return source === 'feishu' ? '飞书' : source === 'telegram' ? 'Telegram' : source === 'dingtalk' ? '钉钉' : source === 'main' ? '主' : source === 'gateway' ? 'Gateway' : source || ''
+  return source === 'feishu' ? t('sessions.sourceFeishu') : source === 'telegram' ? 'Telegram' : source === 'dingtalk' ? t('sessions.sourceDingtalk') : source === 'main' ? t('sessions.sourceMain') : source === 'gateway' ? 'Gateway' : source || ''
 }
 
 const formatTime = (t) => {
@@ -66,8 +68,9 @@ const formatTime = (t) => {
   if (Number.isNaN(d.getTime())) return '--'
   const now = new Date()
   const sameDay = d.toDateString() === now.toDateString()
-  if (sameDay) return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-  return d.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const localeCode = locale.value === 'en-US' ? 'en-US' : 'zh-CN'
+  if (sameDay) return d.toLocaleTimeString(localeCode, { hour: '2-digit', minute: '2-digit' })
+  return d.toLocaleDateString(localeCode, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 const loadSessions = async () => {
@@ -82,7 +85,7 @@ const openChat = (s) => {
 }
 
 const confirmDelete = async (s) => {
-  if (!confirm(`确定删除会话「${sessionTitle(s)}」？`)) return
+  if (!confirm(t('sessions.deleteConfirm', { title: sessionTitle(s) }))) return
   try {
     await window.electronAPI.ai.deleteSession({
       projectPath: s.projectPath || '__main_chat__',

@@ -2,15 +2,15 @@
   <div class="cron-page">
     <div class="cron-header">
       <Clock :size="16" />
-      <span>定时任务</span>
-      <button class="cron-refresh-btn" title="刷新列表（AI 创建/取消后会自动刷新）" @click="loadTasks">刷新</button>
+      <span>{{ t('cron.title') }}</span>
+      <button class="cron-refresh-btn" :title="t('cron.refreshTitle')" @click="loadTasks">{{ t('common.refresh') }}</button>
     </div>
-    <p class="cron-desc">让 AI 帮你创建定时任务（如：每天 9 点执行 Heartbeat 巡检）。此处仅管理与查看，到点自动执行，也可点「立即执行」马上跑一次。</p>
+    <p class="cron-desc">{{ t('cron.desc') }}</p>
 
     <section class="cron-section">
-      <h3 class="cron-section-title">任务列表</h3>
-      <p class="cron-list-hint">到点会按 Cron 时间自动执行；要马上跑一次请点右侧「▶ 立即执行」。</p>
-      <div v-if="tasks.length === 0" class="cron-empty">暂无定时任务，在对话里让 AI 创建（例如：「每天 9 点执行 Heartbeat」）。</div>
+      <h3 class="cron-section-title">{{ t('cron.listTitle') }}</h3>
+      <p class="cron-list-hint">{{ t('cron.listHint') }}</p>
+      <div v-if="tasks.length === 0" class="cron-empty">{{ t('cron.empty') }}</div>
       <div v-else class="cron-list">
         <div
           v-for="t in tasks"
@@ -21,32 +21,32 @@
           <div class="cron-item-main">
             <span class="cron-item-name">{{ t.name }}</span>
             <code class="cron-item-schedule">{{ t.schedule }}</code>
-            <span class="cron-item-type">{{ t.type === 'heartbeat' ? 'Heartbeat' : '命令' }}</span>
-            <span v-if="t.lastRun" class="cron-item-last">上次: {{ formatTime(t.lastRun) }} {{ t.lastResult ? `(${t.lastResult})` : '' }}</span>
+            <span class="cron-item-type">{{ t.type === 'heartbeat' ? 'Heartbeat' : t('cron.command') }}</span>
+            <span v-if="t.lastRun" class="cron-item-last">{{ t('cron.lastRun') }}: {{ formatTime(t.lastRun) }} {{ t.lastResult ? `(${t.lastResult})` : '' }}</span>
           </div>
           <div class="cron-item-actions">
             <button
               class="cron-item-btn cron-toggle"
               :class="{ on: t.enabled, off: !t.enabled }"
-              :title="t.enabled ? '点击禁用' : '点击启用'"
+              :title="t.enabled ? t('cron.clickDisable') : t('cron.clickEnable')"
               @click="toggleEnabled(t)"
             >
               <ToggleRight v-if="t.enabled" :size="14" />
               <ToggleLeft v-else :size="14" />
-              <span>{{ t.enabled ? '启用' : '禁用' }}</span>
+              <span>{{ t.enabled ? t('cron.enabled') : t('cron.disabled') }}</span>
             </button>
             <button
               class="cron-item-btn"
               :class="{ running: runningTaskId === t.id }"
-              :title="runningTaskId === t.id ? '执行中…' : '立即执行'"
+              :title="runningTaskId === t.id ? t('cron.running') : t('cron.runNow')"
               :disabled="runningTaskId !== null"
               @click="runNow(t.id)"
             >
               <Loader v-if="runningTaskId === t.id" :size="14" class="spin" />
               <Play v-else :size="14" />
-              <span class="cron-run-label">{{ runningTaskId === t.id ? '执行中…' : '立即执行' }}</span>
+              <span class="cron-run-label">{{ runningTaskId === t.id ? t('cron.running') : t('cron.runNow') }}</span>
             </button>
-            <button class="cron-item-btn danger" title="删除" @click="removeTask(t.id)">
+            <button class="cron-item-btn danger" :title="t('cron.delete')" @click="removeTask(t.id)">
               <Trash2 :size="14" />
             </button>
           </div>
@@ -62,11 +62,13 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import { Clock, Play, Trash2, ToggleRight, ToggleLeft, Loader } from 'lucide-vue-next'
+import { useI18n } from '../../composables/useI18n.js'
 
 const tasks = ref([])
 const runResult = ref(null)
 const runningTaskId = ref(null)
 let refreshTimer = null
+const { t, locale } = useI18n()
 
 const api = () => window.electronAPI?.cron
 
@@ -74,7 +76,7 @@ function formatTime(iso) {
   if (!iso) return ''
   try {
     const d = new Date(iso)
-    return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    return d.toLocaleString(locale.value === 'en-US' ? 'en-US' : 'zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
   } catch {
     return iso
   }
@@ -100,10 +102,10 @@ async function runNow(taskId) {
   runningTaskId.value = taskId
   try {
     const res = await api().runNow(taskId)
-    runResult.value = { ok: !!res?.success, message: res?.message || (res?.success ? '已执行' : '执行失败') }
+    runResult.value = { ok: !!res?.success, message: res?.message || (res?.success ? t('cron.executed') : t('cron.failed')) }
     await loadTasks()
   } catch (e) {
-    runResult.value = { ok: false, message: e?.message || '执行失败' }
+    runResult.value = { ok: false, message: e?.message || t('cron.failed') }
   } finally {
     runningTaskId.value = null
   }
@@ -112,7 +114,7 @@ async function runNow(taskId) {
 /** 直接删除任务 */
 async function removeTask(taskId) {
   if (!api()) return
-  if (!confirm('确定删除该定时任务？')) return
+  if (!confirm(t('cron.deleteConfirm'))) return
   const res = await api().remove(taskId)
   if (res?.success) {
     runResult.value = null

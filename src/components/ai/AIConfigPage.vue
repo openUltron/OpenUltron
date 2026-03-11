@@ -17,15 +17,15 @@
     <div class="amp-content">
       <!-- 首次使用引导：未配置 API 或可选通道时展示 -->
       <div v-if="onboarding.needsApiConfig || onboarding.needsFeishuConfig" class="onboarding-banner">
-        <p class="onboarding-title">首次使用？请先完成以下配置</p>
+        <p class="onboarding-title">{{ t('config.onboardingTitle') }}</p>
         <ul class="onboarding-steps">
           <li v-if="onboarding.needsApiConfig">
-            <strong>API 配置（必填）</strong>：填写 API Key 后才能使用 AI 对话。
-            <button type="button" class="onboarding-btn" @click="activeTab = 'config'">去配置</button>
+            <strong>{{ t('config.onboardingApiTitle') }}</strong>：{{ t('config.onboardingApiDesc') }}
+            <button type="button" class="onboarding-btn" @click="activeTab = 'config'">{{ t('config.goConfig') }}</button>
           </li>
           <li v-if="onboarding.needsFeishuConfig">
-            <strong>消息通知（可选）</strong>：配置飞书/Telegram 可接收远程消息。
-            <button type="button" class="onboarding-btn" @click="activeTab = 'feishu'">去配置</button>
+            <strong>{{ t('config.onboardingNotifyTitle') }}</strong>：{{ t('config.onboardingNotifyDesc') }}
+            <button type="button" class="onboarding-btn" @click="activeTab = 'feishu'">{{ t('config.goConfig') }}</button>
           </li>
         </ul>
       </div>
@@ -38,12 +38,13 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import { Settings, Send, Archive, Activity } from 'lucide-vue-next'
 import AISettingsPage from './AISettingsPage.vue'
 import NotifyChannelsPage from './NotifyChannelsPage.vue'
 import AIBackupPage from './AIBackupPage.vue'
 import DoctorPage from './DoctorPage.vue'
+import { useI18n } from '../../composables/useI18n.js'
 
 const api = () => window.electronAPI?.ai
 
@@ -51,14 +52,15 @@ const props = defineProps({
   initialTab: { type: String, default: 'config' }
 })
 
-const menuItems = [
-  { key: 'config', label: 'API 配置', icon: Settings },
-  { key: 'feishu', label: '消息通知', icon: Send },
-  { key: 'backup', label: '数据备份', icon: Archive },
-  { key: 'doctor', label: '诊断', icon: Activity }
-]
+const { t } = useI18n()
+const menuItems = computed(() => ([
+  { key: 'config', label: t('config.menuApi'), icon: Settings },
+  { key: 'feishu', label: t('config.menuNotify'), icon: Send },
+  { key: 'backup', label: t('config.menuBackup'), icon: Archive },
+  { key: 'doctor', label: t('config.menuDoctor'), icon: Activity }
+]))
 
-const activeTab = ref(menuItems.some(m => m.key === props.initialTab) ? props.initialTab : 'config')
+const activeTab = ref(menuItems.value.some(m => m.key === props.initialTab) ? props.initialTab : 'config')
 const onboarding = ref({ needsApiConfig: false, needsFeishuConfig: false })
 
 async function refreshOnboarding() {
@@ -86,7 +88,7 @@ onUnmounted(() => {
 })
 
 watch(() => props.initialTab, (val) => {
-  if (val && menuItems.some(m => m.key === val)) activeTab.value = val
+  if (val && menuItems.value.some(m => m.key === val)) activeTab.value = val
 })
 </script>
 

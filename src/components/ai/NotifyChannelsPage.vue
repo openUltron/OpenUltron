@@ -2,9 +2,9 @@
   <div class="feishu-page">
     <div class="feishu-header">
       <Send :size="16" />
-      <span>消息通知</span>
+      <span>{{ t('notify.title') }}</span>
     </div>
-    <p class="feishu-desc">配置主流 IM 平台后，AI 或系统可向指定群/会话发送文本通知（任务完成、报错提醒等）；部分平台支持接收消息并触发 AI 会话。</p>
+    <p class="feishu-desc">{{ t('notify.desc') }}</p>
 
     <!-- 平台切换 -->
     <div class="notify-platform-tabs">
@@ -23,11 +23,11 @@
     <template v-if="activePlatform === 'feishu'">
 
     <div v-if="!receiveRunning && receiveEnabled" class="feishu-tip">
-      <strong>若飞书控制台提示「应用未建立长连接」：</strong>请先在本页填写并保存 App ID、App Secret，勾选「接收飞书消息」后点击「开启接收」，待本应用与飞书建立长连接后，再回飞书开放平台保存或配置。
+      <strong>{{ t('notify.longConnectionTipTitle') }}</strong>{{ t('notify.longConnectionTip') }}
     </div>
 
     <section class="feishu-section">
-      <h3 class="feishu-section-title">飞书 · 应用配置</h3>
+      <h3 class="feishu-section-title">{{ t('notify.feishuAppConfig') }}</h3>
       <div class="feishu-form">
         <div class="feishu-row">
           <label>App ID</label>
@@ -35,7 +35,7 @@
             v-model="appId"
             type="text"
             class="feishu-input"
-            placeholder="飞书应用 App ID"
+            :placeholder="t('notify.appIdPh')"
             @blur="saveConfigDebounced"
           />
         </div>
@@ -45,56 +45,56 @@
             v-model="appSecret"
             type="password"
             class="feishu-input"
-            placeholder="飞书应用 App Secret"
+            :placeholder="t('notify.appSecretPh')"
             @blur="saveConfigDebounced"
           />
         </div>
         <div class="feishu-row">
-          <label>默认会话 ID（可选）</label>
+          <label>{{ t('notify.defaultSessionId') }}</label>
           <input
             v-model="defaultChatId"
             type="text"
             class="feishu-input"
-            placeholder="群/会话 chat_id，AI 回复与任务完成通知时使用"
+            :placeholder="t('notify.defaultSessionIdPh')"
             @blur="saveConfigDebounced"
           />
         </div>
         <div class="feishu-row">
-          <label>测试发往 chat_id（可选）</label>
+          <label>{{ t('notify.testChatId') }}</label>
           <input
             v-model="testChatId"
             type="text"
             class="feishu-input"
-            placeholder="不填则用上方默认会话 ID；填任意群/会话 ID 即可点「测试发送」"
+            :placeholder="t('notify.testChatIdPh')"
           />
         </div>
         <div class="feishu-row feishu-row-check">
           <label class="feishu-check-label">
             <input v-model="notifyOnComplete" type="checkbox" @change="saveConfigDebounced" />
-            <span>会话结束时发送完成通知到默认会话</span>
+            <span>{{ t('notify.notifyOnComplete') }}</span>
           </label>
         </div>
         <div class="feishu-row feishu-row-check">
           <label class="feishu-check-label">
             <input v-model="receiveEnabled" type="checkbox" @change="saveConfigDebounced" />
-            <span>接收飞书消息（长连接）：飞书后台需 <strong>事件与回调 → 事件订阅 → 添加事件 → 勾选「接收消息」</strong>，否则收不到推送。群里 @ 机器人或私聊机器人发文本即可触发，会话在「AI 助手」中查看；发 <code>/new</code> 开新会话。</span>
+            <span>{{ t('notify.receiveFeishu') }}</span>
           </label>
         </div>
       </div>
       <div class="feishu-actions">
         <button class="feishu-btn primary" :disabled="saving" @click="saveConfig">
           <Loader v-if="saving" :size="13" class="spin" />
-          {{ saving ? '保存中…' : '保存配置' }}
+          {{ saving ? t('notify.saving') : t('notify.saveConfig') }}
         </button>
         <button
           class="feishu-btn"
           :disabled="sending || !sendTestChatId"
           @click="sendTest"
-          title="需填写「默认会话 ID」或「测试发往 chat_id」之一"
+          :title="t('notify.testSendRequirement')"
         >
           <Loader v-if="sending" :size="13" class="spin" />
           <Send v-else :size="13" />
-          {{ sending ? '发送中…' : '测试发送' }}
+          {{ sending ? t('notify.sending') : t('notify.testSend') }}
         </button>
         <button
           v-if="receiveEnabled"
@@ -104,7 +104,7 @@
         >
           <Loader v-if="receiveStarting" :size="13" class="spin" />
           <Wifi v-else :size="13" />
-          {{ receiveRunning ? '已连接（点击断开）' : '开启接收' }}
+          {{ receiveRunning ? t('notify.connectedClickToDisconnect') : t('notify.enableReceive') }}
         </button>
       </div>
       <div v-if="result" class="feishu-result" :class="result.ok ? 'ok' : 'err'">
@@ -112,7 +112,7 @@
       </div>
       <div v-if="receiveError" class="feishu-result err">
         {{ receiveError }}
-        <span v-if="receiveError.includes('npm install')" class="feishu-err-hint">在终端进入项目根目录后执行上述命令，再重启应用。</span>
+        <span v-if="receiveError.includes('npm install')" class="feishu-err-hint">{{ t('notify.npmInstallHint') }}</span>
       </div>
     </section>
     </template>
@@ -120,8 +120,8 @@
     <!-- Telegram -->
     <template v-else-if="activePlatform === 'telegram'">
     <section class="feishu-section">
-      <h3 class="feishu-section-title">Telegram · Bot 配置</h3>
-      <p class="telegram-desc">在 BotFather 创建 Bot 后填入 Token；勾选「接收消息」并保存，私聊或群内 @ 机器人即可触发 AI，发 <code>/new</code> 开新会话。</p>
+      <h3 class="feishu-section-title">{{ t('notify.telegramConfig') }}</h3>
+      <p class="telegram-desc">{{ t('notify.telegramDesc') }}</p>
       <div class="feishu-form">
         <div class="feishu-row">
           <label>Bot Token</label>
@@ -129,25 +129,25 @@
             v-model="telegramBotToken"
             type="password"
             class="feishu-input"
-            placeholder="从 BotFather 获取的 token"
+            :placeholder="t('notify.telegramTokenPh')"
             @blur="saveTelegramDebounced"
           />
         </div>
         <div class="feishu-row feishu-row-check">
           <label class="feishu-check-label">
             <input v-model="telegramEnabled" type="checkbox" @change="saveTelegramDebounced" />
-            <span>接收 Telegram 消息（开启后与飞书等渠道一并启动）</span>
+            <span>{{ t('notify.receiveTelegram') }}</span>
           </label>
         </div>
       </div>
       <div class="feishu-actions">
         <button class="feishu-btn primary" :disabled="telegramSaving" @click="saveTelegram">
           <Loader v-if="telegramSaving" :size="13" class="spin" />
-          {{ telegramSaving ? '保存中…' : '保存配置' }}
+          {{ telegramSaving ? t('notify.saving') : t('notify.saveConfig') }}
         </button>
       </div>
       <div v-if="telegramStatusLoaded" class="feishu-result" :class="telegramRunning ? 'ok' : ''">
-        接收状态：{{ telegramRunning ? '运行中' : '未连接' }}
+        {{ t('notify.receiveStatus') }}{{ telegramRunning ? t('notify.running') : t('notify.disconnected') }}
         <span v-if="!telegramRunning && telegramError" class="feishu-result err-inline">{{ telegramError }}</span>
       </div>
     </section>
@@ -156,8 +156,8 @@
     <!-- 钉钉 -->
     <template v-else-if="activePlatform === 'dingtalk'">
     <section class="feishu-section">
-      <h3 class="feishu-section-title">钉钉 · 应用配置</h3>
-      <p class="dingtalk-desc">在钉钉开放平台创建应用后填入 AppKey、AppSecret；可选填默认会话 ID 用于发送通知。勾选「接收消息」后，钉钉消息将触发 AI 会话（需后续实现接收能力）。</p>
+      <h3 class="feishu-section-title">{{ t('notify.dingtalkConfig') }}</h3>
+      <p class="dingtalk-desc">{{ t('notify.dingtalkDesc') }}</p>
       <div class="feishu-form">
         <div class="feishu-row">
           <label>AppKey</label>
@@ -165,7 +165,7 @@
             v-model="dingtalkAppKey"
             type="text"
             class="feishu-input"
-            placeholder="钉钉应用 AppKey"
+            :placeholder="t('notify.dingtalkAppKeyPh')"
             @blur="saveDingtalkDebounced"
           />
         </div>
@@ -175,31 +175,31 @@
             v-model="dingtalkAppSecret"
             type="password"
             class="feishu-input"
-            placeholder="钉钉应用 AppSecret"
+            :placeholder="t('notify.dingtalkAppSecretPh')"
             @blur="saveDingtalkDebounced"
           />
         </div>
         <div class="feishu-row">
-          <label>默认会话 ID（可选）</label>
+          <label>{{ t('notify.defaultSessionId') }}</label>
           <input
             v-model="dingtalkDefaultChatId"
             type="text"
             class="feishu-input"
-            placeholder="群/会话 ID，发送通知时使用"
+            :placeholder="t('notify.dingtalkDefaultChatIdPh')"
             @blur="saveDingtalkDebounced"
           />
         </div>
         <div class="feishu-row feishu-row-check">
           <label class="feishu-check-label">
             <input v-model="dingtalkReceiveEnabled" type="checkbox" @change="saveDingtalkDebounced" />
-            <span>接收钉钉消息（开启后与飞书等渠道一并启动，接收能力待实现）</span>
+            <span>{{ t('notify.receiveDingtalk') }}</span>
           </label>
         </div>
       </div>
       <div class="feishu-actions">
         <button class="feishu-btn primary" :disabled="dingtalkSaving" @click="saveDingtalk">
           <Loader v-if="dingtalkSaving" :size="13" class="spin" />
-          {{ dingtalkSaving ? '保存中…' : '保存配置' }}
+          {{ dingtalkSaving ? t('notify.saving') : t('notify.saveConfig') }}
         </button>
       </div>
       <div v-if="dingtalkResult" class="feishu-result" :class="dingtalkResult.ok ? 'ok' : 'err'">
@@ -210,8 +210,8 @@
 
     <!-- 其他 -->
     <section v-else class="feishu-section notify-placeholder">
-      <h3 class="feishu-section-title">其他平台</h3>
-      <p class="notify-placeholder-text">Slack 等主流平台后续支持。</p>
+      <h3 class="feishu-section-title">{{ t('notify.otherPlatforms') }}</h3>
+      <p class="notify-placeholder-text">{{ t('notify.otherPlatformsDesc') }}</p>
     </section>
   </div>
 </template>
@@ -219,13 +219,16 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { Send, Loader, Wifi } from 'lucide-vue-next'
+import { useI18n } from '../../composables/useI18n'
 
-const platforms = [
-  { key: 'feishu', label: '飞书' },
-  { key: 'telegram', label: 'Telegram' },
-  { key: 'dingtalk', label: '钉钉' },
-  { key: 'other', label: '其他' }
-]
+const { t } = useI18n()
+
+const platforms = computed(() => ([
+  { key: 'feishu', label: t('notify.platformFeishu') },
+  { key: 'telegram', label: t('notify.platformTelegram') },
+  { key: 'dingtalk', label: t('notify.platformDingtalk') },
+  { key: 'other', label: t('notify.platformOther') }
+]))
 const activePlatform = ref('feishu')
 
 const appId = ref('')
@@ -343,9 +346,9 @@ async function saveDingtalk() {
       default_chat_id: (dingtalkDefaultChatId.value || '').trim(),
       receive_enabled: dingtalkReceiveEnabled.value
     })
-    dingtalkResult.value = { ok: true, message: '已保存' }
+    dingtalkResult.value = { ok: true, message: t('notify.saved') }
   } catch (e) {
-    dingtalkResult.value = { ok: false, message: e?.message || '保存失败' }
+    dingtalkResult.value = { ok: false, message: e?.message || t('notify.saveFailed') }
   } finally {
     dingtalkSaving.value = false
   }
@@ -370,9 +373,9 @@ async function saveConfig() {
       receive_enabled: receiveEnabled.value
     })
     if (res?.success) {
-      result.value = { ok: true, message: '已保存' }
+      result.value = { ok: true, message: t('notify.saved') }
     } else {
-      result.value = { ok: false, message: res?.message || '保存失败' }
+      result.value = { ok: false, message: res?.message || t('notify.saveFailed') }
     }
   } finally {
     saving.value = false
@@ -393,11 +396,11 @@ async function sendTest() {
   try {
     const res = await api().sendMessage({
       chat_id: chatId,
-      text: '【OpenUltron】飞书通知测试消息'
+      text: t('notify.testMessage')
     })
-    result.value = { ok: !!res?.success, message: res?.message || (res?.success ? '发送成功' : '发送失败') }
+    result.value = { ok: !!res?.success, message: res?.message || (res?.success ? t('notify.sendOk') : t('notify.sendFailed')) }
   } catch (e) {
-    result.value = { ok: false, message: e?.message || '发送失败' }
+    result.value = { ok: false, message: e?.message || t('notify.sendFailed') }
   } finally {
     sending.value = false
   }
@@ -425,7 +428,7 @@ async function toggleReceive() {
       }
     }
   } catch (e) {
-    receiveError.value = e?.message || '连接失败'
+    receiveError.value = e?.message || t('notify.connectFailed')
   } finally {
     receiveStarting.value = false
   }

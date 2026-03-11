@@ -5,9 +5,9 @@
       <div class="title-bar-drag-spacer" v-if="isMac"></div>
       <div class="title-bar-drag"></div>
       <div v-if="isWin" class="title-bar-controls">
-        <button type="button" class="tb-btn minimize" title="最小化" @click="onMinimize">−</button>
-        <button type="button" class="tb-btn maximize" title="最大化/还原" @click="onMaximize">□</button>
-        <button type="button" class="tb-btn close" title="关闭" @click="onClose">×</button>
+        <button type="button" class="tb-btn minimize" title="Minimize" @click="onMinimize">−</button>
+        <button type="button" class="tb-btn maximize" title="Maximize / Restore" @click="onMaximize">□</button>
+        <button type="button" class="tb-btn close" title="Close" @click="onClose">×</button>
       </div>
     </header>
     <div class="shell-body">
@@ -21,21 +21,21 @@
       </div>
       <nav class="sidebar-nav">
         <div class="nav-group">
-          <div class="nav-group-label">聊天</div>
+          <div class="nav-group-label">{{ t('shell.groupChat') }}</div>
           <router-link to="/chat" class="nav-item" active-class="active">
             <MessageSquare :size="16" />
-            <span>聊天</span>
+            <span>{{ t('shell.chat') }}</span>
           </router-link>
           <router-link to="/sessions" class="nav-item" active-class="active">
             <Radio :size="16" />
-            <span>会话</span>
+            <span>{{ t('shell.sessions') }}</span>
           </router-link>
         </div>
         <div class="nav-group">
-          <div class="nav-group-label">控制</div>
+          <div class="nav-group-label">{{ t('shell.groupControl') }}</div>
           <router-link to="/control/cron" class="nav-item" active-class="active">
             <Clock :size="16" />
-            <span>定时任务</span>
+            <span>{{ t('shell.cron') }}</span>
           </router-link>
         </div>
         <div class="nav-group">
@@ -46,25 +46,28 @@
           </router-link>
         </div>
         <div class="nav-group">
-          <div class="nav-group-label">设置</div>
+          <div class="nav-group-label">{{ t('shell.groupSettings') }}</div>
           <router-link to="/settings/config" class="nav-item" active-class="active">
             <Settings :size="16" />
-            <span>配置</span>
+            <span>{{ t('shell.config') }}</span>
           </router-link>
           <router-link to="/settings/logs" class="nav-item" active-class="active">
             <FileText :size="16" />
-            <span>日志</span>
+            <span>{{ t('shell.logs') }}</span>
           </router-link>
         </div>
       </nav>
       <div class="sidebar-footer">
+        <button class="lang-btn" :title="isEnglish ? t('shell.switchToChinese') : t('shell.switchToEnglish')" @click="toggleLocale">
+          {{ isEnglish ? t('common.zh') : t('common.en') }}
+        </button>
         <button class="theme-btn" :title="themeButtonTitle" @click="cycleTheme">
           <Sun v-if="effectiveTheme === 'light'" :size="18" />
           <Moon v-else :size="18" />
         </button>
-        <div v-if="healthLabel" class="health-status" :class="healthStatus" :title="'健康状况 ' + healthLabel">
+        <div v-if="healthLabel" class="health-status" :class="healthStatus" :title="`${t('shell.health')} ${healthLabel}`">
           <span class="health-dot"></span>
-          <span class="health-label">健康状况 {{ healthLabel }}</span>
+          <span class="health-label">{{ t('shell.health') }} {{ healthLabel }}</span>
         </div>
       </div>
     </aside>
@@ -97,9 +100,11 @@ import {
 import { useTheme } from '../../composables/useTheme.js'
 import { useLogoUrl } from '../../composables/useLogoUrl.js'
 import { useHealthCheck } from '../../composables/useHealthCheck.js'
+import { useI18n } from '../../composables/useI18n.js'
 
 const logoUrl = useLogoUrl()
 const { status: healthStatus, label: healthLabel } = useHealthCheck()
+const { t, isEnglish, toggleLocale } = useI18n()
 const { theme, effectiveTheme, setTheme, cycleTheme } = useTheme()
 const themeClass = computed(() => `theme-${effectiveTheme.value}`)
 
@@ -112,7 +117,7 @@ const onMaximize = () => window.electronAPI?.toggleMaximize?.()
 const onClose = () => window.electronAPI?.windowClose?.()
 const themeButtonTitle = computed(() => {
   const eff = effectiveTheme.value
-  return eff === 'light' ? '当前：浅色；点击切换为深色' : '当前：深色；点击切换为浅色'
+  return eff === 'light' ? t('shell.lightToDark') : t('shell.darkToLight')
 })
 
 onMounted(() => {
@@ -295,6 +300,21 @@ onMounted(() => {
 }
 .health-label { white-space: nowrap; }
 
+.lang-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--ou-border);
+  background: transparent;
+  color: var(--ou-text);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
 .theme-btn {
   display: flex;
   align-items: center;
@@ -310,6 +330,9 @@ onMounted(() => {
 }
 
 .theme-btn:hover {
+  background: var(--ou-bg-hover);
+}
+.lang-btn:hover {
   background: var(--ou-bg-hover);
 }
 

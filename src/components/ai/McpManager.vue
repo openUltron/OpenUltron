@@ -6,17 +6,17 @@
         <span>MCP</span>
       </div>
       <div class="mm-header-actions">
-        <button class="mm-btn-ghost" @click="refreshStatus" :disabled="refreshing" title="重新连接所有 MCP 并刷新状态">
+        <button class="mm-btn-ghost" @click="refreshStatus" :disabled="refreshing" :title="t('mcp.reconnectTitle')">
           <RefreshCw :size="13" :class="{ spin: refreshing }" />
-          <span>{{ refreshing ? '连接中...' : '重新连接' }}</span>
+          <span>{{ refreshing ? t('mcp.connecting') : t('mcp.reconnect') }}</span>
         </button>
         <button class="mm-btn-ghost" @click="view = view === 'json' ? 'list' : 'json'">
           <Code :size="13" />
-          <span>{{ view === 'json' ? '服务器列表' : '编辑 JSON' }}</span>
+          <span>{{ view === 'json' ? t('mcp.serverList') : t('mcp.editJson') }}</span>
         </button>
         <button v-if="view === 'json'" class="mm-btn-primary" @click="saveConfig" :disabled="saving">
           <Save :size="13" />
-          <span>{{ saving ? '保存中...' : '保存并重启' }}</span>
+          <span>{{ saving ? t('mcp.saving') : t('mcp.saveAndRestart') }}</span>
         </button>
       </div>
     </div>
@@ -31,8 +31,8 @@
     <div v-if="view === 'list'" class="mm-list-view">
       <div v-if="serverEntries.length === 0" class="mm-empty">
         <Plug :size="36" class="mm-empty-icon" />
-        <p>暂无 MCP</p>
-        <p class="mm-empty-hint">点击「编辑 JSON」添加服务器配置</p>
+        <p>{{ t('mcp.empty') }}</p>
+        <p class="mm-empty-hint">{{ t('mcp.emptyHint') }}</p>
       </div>
 
       <div v-for="entry in serverEntries" :key="entry.name" class="mm-server-card" :class="{ disabled: entry.disabled }">
@@ -49,18 +49,18 @@
             v-if="!entry.disabled"
             class="mm-restart-btn"
             :disabled="restartingServer === entry.name"
-            :title="entry.name === 'chrome-devtools' ? '重启并清除 Chrome 锁（解决被占用）' : '重启该 MCP 服务器'"
+            :title="entry.name === 'chrome-devtools' ? t('mcp.restartChrome') : t('mcp.restartServer')"
             @click="restartServer(entry.name)"
           >
             <RefreshCw :size="12" :class="{ spin: restartingServer === entry.name }" />
           </button>
           <!-- 启用开关 -->
-          <label class="mm-toggle" :title="entry.disabled ? '已禁用' : '已启用'">
+          <label class="mm-toggle" :title="entry.disabled ? t('mcp.disabled') : t('mcp.enabled')">
             <input type="checkbox" :checked="!entry.disabled" @change="toggleServer(entry.name, $event.target.checked)" />
             <span class="mm-toggle-track"></span>
           </label>
           <!-- 删除按钮 -->
-          <button class="mm-delete-btn" @click="deleteServer(entry.name)" title="删除">
+          <button class="mm-delete-btn" @click="deleteServer(entry.name)" :title="t('mcp.delete')">
             <Trash2 :size="12" />
           </button>
         </div>
@@ -80,12 +80,12 @@
         <!-- 工具列表 -->
         <div class="mm-tools-section">
           <template v-if="entry.disabled">
-            <span class="mm-tools-hint disabled-hint">已禁用</span>
+            <span class="mm-tools-hint disabled-hint">{{ t('mcp.disabled') }}</span>
           </template>
           <template v-else-if="serverStatus[entry.name]?.ready">
             <div class="mm-tools-header">
               <Wrench :size="10" />
-              <span>{{ serverStatus[entry.name].toolCount }} 个工具</span>
+              <span>{{ t('mcp.toolsCount', { count: serverStatus[entry.name].toolCount }) }}</span>
             </div>
             <div class="mm-tools-list">
               <span
@@ -98,13 +98,13 @@
           </template>
           <template v-else-if="serverStatus[entry.name]?.error">
             <div class="mm-tools-hint error-hint" :title="serverStatus[entry.name].error">
-              <span class="error-label">连接失败:</span>
+              <span class="error-label">{{ t('mcp.connectFailed') }}</span>
               <pre class="error-detail">{{ serverStatus[entry.name].error }}</pre>
-              <span v-if="entry.name === 'chrome-devtools'" class="error-tip">chrome-devtools 需本机已安装 Chrome 且 Node ≥ 20.19 LTS。若报错含 "does not support Node"，请升级 Node（如 nvm install 20 或从 nodejs.org 安装 20 LTS）。无需时可在此禁用或于「编辑 JSON」中删除后保存。</span>
+              <span v-if="entry.name === 'chrome-devtools'" class="error-tip">{{ t('mcp.chromeTip') }}</span>
             </div>
           </template>
           <template v-else>
-            <span class="mm-tools-hint">未连接</span>
+            <span class="mm-tools-hint">{{ t('mcp.disconnected') }}</span>
           </template>
         </div>
       </div>
@@ -114,7 +114,7 @@
     <div v-else class="mm-json-view">
       <div class="mm-editor-panel">
         <div class="mm-editor-hint">
-          <span class="mm-hint-text">配置格式与 Claude Desktop 的 <code>mcpServers</code> 完全兼容，支持直接粘贴 Claude Desktop 的完整配置</span>
+          <span class="mm-hint-text">{{ t('mcp.configCompat') }} <code>mcpServers</code></span>
         </div>
         <textarea
           ref="editorRef"
@@ -127,7 +127,7 @@
 
       <!-- 示例说明 -->
       <div class="mm-example">
-        <div class="mm-example-title">配置示例</div>
+        <div class="mm-example-title">{{ t('mcp.configExample') }}</div>
         <pre class="mm-example-code">{{ EXAMPLE_CONFIG }}</pre>
       </div>
     </div>
@@ -137,6 +137,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { Plug, RefreshCw, Save, AlertCircle, Code, Wrench, Trash2 } from 'lucide-vue-next'
+import { useI18n } from '../../composables/useI18n'
+
+const { t } = useI18n()
 
 const EXAMPLE_CONFIG = `{
   "filesystem": {
@@ -230,10 +233,10 @@ const restartServer = async (name) => {
       const statusRes = await window.electronAPI.ai.getMcpStatus()
       if (statusRes.success) serverStatus.value = statusRes.status || {}
     } else {
-      errorMsg.value = res.message || '重启失败'
+      errorMsg.value = res.message || t('mcp.restartFailed')
     }
   } catch (e) {
-    errorMsg.value = e.message || '重启失败'
+    errorMsg.value = e.message || t('mcp.restartFailed')
   } finally {
     restartingServer.value = null
   }
@@ -244,7 +247,7 @@ const saveConfig = async () => {
   try {
     JSON.parse(configText.value)
   } catch (e) {
-    errorMsg.value = `JSON 格式错误: ${e.message}`
+    errorMsg.value = t('mcp.jsonFormatError', { message: e.message })
     return
   }
   saving.value = true
@@ -253,7 +256,7 @@ const saveConfig = async () => {
     if (res.success) {
       await refreshStatus()
     } else {
-      errorMsg.value = res.message || '保存失败'
+      errorMsg.value = res.message || t('mcp.saveFailed')
     }
   } catch (e) {
     errorMsg.value = e.message
@@ -275,7 +278,7 @@ const toggleServer = async (name, enabled) => {
       }
       await refreshStatus()
     } else {
-      errorMsg.value = res.message || '操作失败'
+      errorMsg.value = res.message || t('mcp.operationFailed')
     }
   } catch (e) {
     errorMsg.value = e.message

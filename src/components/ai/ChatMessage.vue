@@ -4,7 +4,7 @@
     <div class="chat-bubble user">
       <div class="bubble-avatar user-avatar"><User :size="14" /></div>
       <div class="bubble-body">
-        <div class="bubble-name">你</div>
+        <div class="bubble-name">{{ t('chatMessage.me') }}</div>
         <div class="bubble-text user-text">{{ message.content }}</div>
       </div>
     </div>
@@ -45,28 +45,28 @@
             v-if="screenshotFromResult(tc.result).url"
             class="chat-image tc-screenshot"
             :src="screenshotFromResult(tc.result).url"
-            alt="截图"
+            :alt="t('chatMessage.screenshot')"
           />
           <img
             v-else-if="screenshotFromResult(tc.result).base64"
             class="chat-image tc-screenshot"
             :src="'data:image/png;base64,' + screenshotFromResult(tc.result).base64"
-            alt="截图"
+            :alt="t('chatMessage.screenshot')"
           />
         </template>
         <div v-if="tc.name === 'execute_command'" class="tc-command-meta">
           <div class="tc-command-line" v-if="commandOf(tc)">
-            <span class="tc-command-label">命令</span>
+            <span class="tc-command-label">{{ t('chatMessage.command') }}</span>
             <code class="tc-command-code">{{ commandOf(tc) }}</code>
           </div>
           <div class="tc-command-line" v-if="cwdOf(tc)">
-            <span class="tc-command-label">目录</span>
+            <span class="tc-command-label">{{ t('chatMessage.cwd') }}</span>
             <code class="tc-command-code">{{ cwdOf(tc) }}</code>
           </div>
         </div>
         <template v-if="tc.name === 'execute_command'">
           <pre v-if="tc.result" class="tc-pre">{{ formatResult(tc.result, tc.name) }}</pre>
-          <pre v-else class="tc-pre tc-running">执行中…</pre>
+          <pre v-else class="tc-pre tc-running">{{ t('chatMessage.running') }}</pre>
         </template>
         <pre v-else-if="tc.result" class="tc-pre">{{ formatResult(tc.result, tc.name) }}</pre>
       </div>
@@ -79,7 +79,7 @@
         :key="idx"
         class="chat-image message-screenshot-img"
         :src="src"
-        alt="截图"
+        :alt="t('chatMessage.screenshot')"
       />
     </div>
 
@@ -89,7 +89,7 @@
       <div class="bubble-body">
         <div class="bubble-name">
           {{ agentDisplayName || 'Ultron' }}
-          <button class="copy-btn" :class="{ copied }" @click="copyContent" :title="copied ? '已复制' : '复制'">
+          <button class="copy-btn" :class="{ copied }" @click="copyContent" :title="copied ? t('chatMessage.copied') : t('chatMessage.copy')">
             <Check v-if="copied" :size="11" />
             <Copy v-else :size="11" />
           </button>
@@ -98,7 +98,7 @@
         <div v-if="thinkContent" class="think-block">
           <div class="think-header" @click="thinkExpanded = !thinkExpanded">
             <ChevronRight :size="12" class="think-chevron" :class="{ rotated: thinkExpanded }" />
-            <span>思考过程</span>
+            <span>{{ t('chatMessage.thinkingProcess') }}</span>
           </div>
           <div v-if="thinkExpanded" class="think-body" v-html="renderThink(thinkContent)"></div>
         </div>
@@ -112,8 +112,10 @@
 import { ref, computed } from 'vue'
 import { User, Wrench, ChevronRight, Terminal, GitBranch, FileText, Shield, Search, CheckCircle, XCircle, Copy, Check } from 'lucide-vue-next'
 import { useLogoUrl } from '../../composables/useLogoUrl.js'
+import { useI18n } from '../../composables/useI18n'
 
 const logoUrl = useLogoUrl()
+const { t } = useI18n()
 const MAX_VISIBLE_TOOL_CALLS = 8
 const props = defineProps({
   message: { type: Object, required: true },
@@ -194,7 +196,15 @@ const toolIcon = (name) => {
 }
 
 const toolLabel = (name) => {
-  const map = { execute_command: '执行命令', git_operation: 'Git 操作', file_operation: '文件操作', analyze_project: '分析项目', user_confirmation: '请求确认', webview_control: '浏览器', feishu_send_message: '飞书发送' }
+  const map = {
+    execute_command: t('chatMessage.executeCommand'),
+    git_operation: t('chatMessage.gitOperation'),
+    file_operation: t('chatMessage.fileOperation'),
+    analyze_project: t('chatMessage.analyzeProject'),
+    user_confirmation: t('chatMessage.requestConfirmation'),
+    webview_control: t('chatMessage.browser'),
+    feishu_send_message: t('chatMessage.feishuSend')
+  }
   return map[name] || name
 }
 
@@ -216,16 +226,16 @@ const toolSummary = (tc) => {
       return (args.projectPath || args.project_path || '').split('/').pop()
     }
     if (tc.name === 'user_confirmation') {
-      return args.message || '请求确认'
+      return args.message || t('chatMessage.requestConfirm')
     }
     if (tc.name === 'webview_control') {
       const a = args.action || ''
-      if (a === 'take_screenshot') return '截图'
+      if (a === 'take_screenshot') return t('chatMessage.capture')
       if (a === 'navigate') return (args.url || '').slice(0, 40) + (args.url?.length > 40 ? '…' : '')
-      return a || '操作'
+      return a || t('chatMessage.action')
     }
-    if (tc.name === 'feishu_send_message') return args.text ? '发文本' : args.image_base64 || args.image_key ? '发图' : args.file_key || args.file_path ? '发文件' : '发送'
-    if (tc.name === 'sessions_spawn') return args.role_name ? `子 Agent（${args.role_name}）` : '子 Agent'
+    if (tc.name === 'feishu_send_message') return args.text ? t('chatMessage.sendText') : args.image_base64 || args.image_key ? t('chatMessage.sendImage') : args.file_key || args.file_path ? t('chatMessage.sendFile') : t('chatMessage.send')
+    if (tc.name === 'sessions_spawn') return args.role_name ? `${t('chatMessage.childAgent')}（${args.role_name}）` : t('chatMessage.childAgent')
     return ''
   } catch {
     return ''
@@ -246,7 +256,7 @@ const tcResultClass = (tc) => {
 }
 
 const tcResultText = (tc) => {
-  return tcStatus(tc) === 'failed' ? '失败' : '完成'
+  return tcStatus(tc) === 'failed' ? t('chatMessage.failed') : t('chatMessage.done')
 }
 
 const commandOf = (tc) => {
@@ -280,7 +290,7 @@ const formatResult = (resultStr, toolName) => {
       }
       let out = obj.stdout || ''
       if (obj.stderr) out += (out ? '\n' : '') + obj.stderr
-      if (!out) out = obj.success !== false ? '(成功，无输出)' : `(失败，exitCode: ${obj.exitCode})`
+      if (!out) out = obj.success !== false ? t('chatMessage.successNoOutput') : t('chatMessage.failedWithCode', { exitCode: obj.exitCode })
       return header + out
     }
     return JSON.stringify(obj, null, 2)

@@ -3,12 +3,12 @@
     <div class="settings-header">
       <div class="header-left">
         <Settings :size="16" />
-        <span>API 配置</span>
+        <span>{{ t('aiSettings.title') }}</span>
       </div>
       <div class="header-right">
         <button class="btn primary" @click="saveConfig" :disabled="saving">
           <Save :size="14" />
-          <span>{{ saving ? '保存中...' : '保存配置' }}</span>
+          <span>{{ saving ? t('aiSettings.saving') : t('aiSettings.saveConfig') }}</span>
         </button>
         <span v-if="saveMsg" class="status-msg" :class="saveType">{{ saveMsg }}</span>
       </div>
@@ -17,7 +17,7 @@
     <div class="settings-top">
       <!-- 左：API 连接 -->
       <div class="top-left">
-        <h3>API 连接</h3>
+        <h3>{{ t('aiSettings.apiConnection') }}</h3>
         <div class="provider-presets">
           <div
             v-for="p in providers"
@@ -30,7 +30,7 @@
             <button
               v-if="isCustomProvider(p)"
               class="chip-remove"
-              title="删除自定义供应商"
+              :title="t('aiSettings.removeCustomProvider')"
               @click.stop="removeProvider(p)"
             >
               <XCircle :size="12" />
@@ -43,25 +43,25 @@
             @click="showCustomForm = true"
           >
             <Plus :size="14" />
-            <span>自定义</span>
+            <span>{{ t('aiSettings.customProvider') }}</span>
           </button>
         </div>
         <div v-if="showCustomForm" class="custom-provider-form">
           <div class="form-row">
-            <input v-model="customName" placeholder="名称（如：自建 OpenAI）" class="custom-input" />
-            <input v-model="customBaseUrl" placeholder="API 地址（如 https://api.example.com/v1）" class="custom-input wide" />
+            <input v-model="customName" :placeholder="t('aiSettings.customNamePh')" class="custom-input" />
+            <input v-model="customBaseUrl" :placeholder="t('aiSettings.customApiUrlPh')" class="custom-input wide" />
           </div>
           <div class="form-row">
             <input v-model="customApiKey" type="password" placeholder="API Key" class="custom-input" />
-            <input v-model="customDefaultModel" placeholder="默认模型（可选）" class="custom-input" />
+            <input v-model="customDefaultModel" :placeholder="t('aiSettings.customDefaultModelPh')" class="custom-input" />
           </div>
           <div class="form-actions">
-            <button type="button" class="btn primary" @click="addCustomProvider">添加</button>
-            <button type="button" class="btn" @click="cancelCustomForm">取消</button>
+            <button type="button" class="btn primary" @click="addCustomProvider">{{ t('aiSettings.add') }}</button>
+            <button type="button" class="btn" @click="cancelCustomForm">{{ t('aiSettings.cancel') }}</button>
           </div>
         </div>
         <div class="form-group">
-          <label>API 地址</label>
+          <label>{{ t('aiSettings.apiUrl') }}</label>
           <input
             type="text"
             v-model="config.apiBaseUrl"
@@ -75,7 +75,7 @@
             <input
               :type="showKey ? 'text' : 'password'"
               v-model="config.apiKey"
-              placeholder="输入 API Key，填写后自动验证"
+              :placeholder="t('aiSettings.apiKeyPh')"
               @blur="onKeyBlur"
               @keydown.enter="onKeyBlur"
             />
@@ -84,7 +84,7 @@
               <EyeOff v-else :size="14" />
             </button>
           </div>
-          <span class="hint">每个提供商的 Key 独立保存，切换提供商自动恢复对应 Key</span>
+          <span class="hint">{{ t('aiSettings.keyHint') }}</span>
           <div class="connection-status" v-if="connectionState !== 'idle'">
             <Loader v-if="connectionState === 'testing'" :size="13" class="spin" />
             <CheckCircle2 v-else-if="connectionState === 'success'" :size="13" />
@@ -94,7 +94,7 @@
               v-if="connectionState !== 'testing'"
               class="retest-btn"
               @click="retestConnection"
-              title="重新验证"
+              :title="t('aiSettings.retest')"
             >
               <RefreshCw :size="12" />
             </button>
@@ -104,32 +104,32 @@
 
       <!-- 右：高级参数 -->
       <div class="top-right">
-        <h3>高级参数</h3>
+        <h3>{{ t('aiSettings.advanced') }}</h3>
         <div class="form-group">
-          <label>当前模型</label>
+          <label>{{ t('aiSettings.currentModel') }}</label>
           <input
             type="text"
             v-model="config.defaultModel"
-            placeholder="输入模型名称"
+            :placeholder="t('aiSettings.modelPh')"
           />
-          <span class="hint">可直接输入模型名（列表可能不含所有可用模型）</span>
+          <span class="hint">{{ t('aiSettings.modelHint') }}</span>
         </div>
         <div class="params-row">
           <div class="form-group">
             <label>Temperature</label>
             <input type="number" v-model.number="config.temperature" min="0" max="2" step="0.1" />
-            <span class="hint">0 = 确定性输出，适合代码任务</span>
+            <span class="hint">{{ t('aiSettings.tempHint') }}</span>
           </div>
           <div class="form-group">
             <label>Max Tokens</label>
             <input type="number" v-model.number="config.maxTokens" min="0" max="131072" step="256" />
-            <span class="hint">0 = 不限制，使用模型默认值</span>
+            <span class="hint">{{ t('aiSettings.maxTokenHint') }}</span>
           </div>
         </div>
         <div class="form-group">
-          <label>最大工具调用轮数</label>
+          <label>{{ t('aiSettings.maxToolIterations') }}</label>
           <input type="number" v-model.number="config.maxToolIterations" min="0" max="500" />
-          <span class="hint">0 = 不限制（安全上限 200）</span>
+          <span class="hint">{{ t('aiSettings.maxToolHint') }}</span>
         </div>
       </div>
     </div>
@@ -138,7 +138,7 @@
     <div class="models-section">
       <div class="models-header">
         <h3>
-          模型列表
+          {{ t('aiSettings.modelList') }}
           <span class="model-count" v-if="models.length">{{ filteredModels.length }} / {{ models.length }}</span>
         </h3>
         <div class="models-toolbar">
@@ -147,7 +147,7 @@
             <input
               type="text"
               v-model="modelSearch"
-              placeholder="搜索模型..."
+              :placeholder="t('aiSettings.searchModelPh')"
               class="model-search-input"
             />
           </div>
@@ -155,10 +155,10 @@
             class="refresh-models-btn"
             @click="refreshModels"
             :disabled="fetchingModels"
-            title="重新请求接口获取最新模型列表"
+            :title="t('aiSettings.refreshModelsTitle')"
           >
             <RefreshCw :size="13" :class="{ spin: fetchingModels }" />
-            <span>刷新</span>
+            <span>{{ t('aiSettings.refreshModels') }}</span>
           </button>
         </div>
       </div>
@@ -185,17 +185,17 @@
         </div>
       </div>
       <div v-else-if="models.length > 0 && modelSearch" class="empty-models">
-        <span>没有匹配 "{{ modelSearch }}" 的模型</span>
+        <span>{{ t('aiSettings.noMatchedModel', { query: modelSearch }) }}</span>
       </div>
       <div v-else-if="connectionState === 'testing'" class="empty-models">
         <Loader :size="14" class="spin" />
-        <span>正在验证连接并获取可用模型（首次可能较慢）...</span>
+        <span>{{ t('aiSettings.testingAndFetching') }}</span>
       </div>
       <div v-else-if="connectionState === 'success' && models.length === 0" class="empty-models">
-        <span>API 未返回模型列表，请手动输入模型名称</span>
+        <span>{{ t('aiSettings.noModelsFromApi') }}</span>
       </div>
       <div v-else-if="connectionState === 'idle'" class="empty-models">
-        <span>选择提供商并填写 API Key 后，点击上方「刷新」获取可用模型列表</span>
+        <span>{{ t('aiSettings.emptyModelGuide') }}</span>
       </div>
     </div>
   </div>
@@ -204,6 +204,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount } from 'vue'
 import { Settings, Eye, EyeOff, Save, RefreshCw, Loader, CheckCircle2, XCircle, Search, Plus } from 'lucide-vue-next'
+import { useI18n } from '../../composables/useI18n'
+
+const { t } = useI18n()
 
 // 与 electron/openultron-config.js DEFAULT_AI.providers 保持一致（国内 + 国外主流）
 const DEFAULT_PROVIDERS = [
@@ -394,7 +397,7 @@ onMounted(async () => {
       models.value = res.models
       if (config.apiKey) {
         connectionState.value = 'success'
-        connectionMsg.value = `已加载缓存，${models.value.length} 个模型（点击刷新可重新获取）`
+        connectionMsg.value = t('aiSettings.loadedCached', { count: models.value.length })
       }
     }
   } catch { /* ignore */ }
@@ -406,7 +409,7 @@ onMounted(async () => {
       if (res.success && res.models?.length > 0) {
         models.value = res.models
         connectionState.value = 'success'
-        connectionMsg.value = `已同步（含 AI 修改），${models.value.length} 个模型`
+        connectionMsg.value = t('aiSettings.syncedWithAi', { count: models.value.length })
       } else {
         models.value = []
       }
@@ -440,7 +443,7 @@ const selectProvider = (p) => {
         if (res.success && res.models?.length > 0) {
           models.value = res.models
           connectionState.value = 'success'
-          connectionMsg.value = `已加载缓存，${models.value.length} 个模型（点击刷新可重新获取）`
+          connectionMsg.value = t('aiSettings.loadedCached', { count: models.value.length })
         } else {
           models.value = []
         }
@@ -474,7 +477,7 @@ const onKeyBlur = async () => {
     if (res.success && res.models?.length > 0) {
       models.value = res.models
       connectionState.value = 'success'
-      connectionMsg.value = `已加载缓存，${models.value.length} 个模型（点击刷新可重新获取）`
+      connectionMsg.value = t('aiSettings.loadedCached', { count: models.value.length })
     }
   } catch { /* ignore */ }
 }
@@ -488,11 +491,11 @@ const retestConnection = async () => {
 
 const testAndFetchModels = async (forceRefresh = false) => {
   connectionState.value = 'testing'
-  connectionMsg.value = '正在验证连接...'
+  connectionMsg.value = t('aiSettings.testing')
 
   try {
     if (typeof window.electronAPI.ai.fetchModels !== 'function') {
-      throw new Error('请重启应用以加载最新功能')
+      throw new Error(t('aiSettings.restartToLoad'))
     }
     const res = await window.electronAPI.ai.fetchModels({ forceRefresh })
     if (res.success) {
@@ -501,11 +504,11 @@ const testAndFetchModels = async (forceRefresh = false) => {
 
       if (res.keyInvalid) {
         connectionState.value = 'error'
-        connectionMsg.value = res.message || 'API Key 无效，模型列表可能为公开接口'
+        connectionMsg.value = res.message || t('aiSettings.keyInvalid')
       } else {
         connectionState.value = 'success'
         const claudeInfo = res.claudeDiag ? ` (${res.claudeDiag})` : ''
-        connectionMsg.value = `连接成功，${models.value.length} 个可用模型${claudeInfo}`
+        connectionMsg.value = t('aiSettings.connectOk', { count: models.value.length, extra: claudeInfo })
       }
 
       if (models.value.length > 0) {
@@ -516,11 +519,11 @@ const testAndFetchModels = async (forceRefresh = false) => {
       }
     } else {
       connectionState.value = 'error'
-      connectionMsg.value = res.message || '连接失败'
+      connectionMsg.value = res.message || t('aiSettings.connectFailed')
     }
   } catch (e) {
     connectionState.value = 'error'
-    connectionMsg.value = e.message || '连接失败'
+    connectionMsg.value = e.message || t('aiSettings.connectFailed')
   }
 }
 
@@ -556,12 +559,12 @@ const doSaveConfig = async () => {
     if (res && res.success) {
       window.dispatchEvent(new CustomEvent('ai-config-updated'))
     } else if (res && !res.success) {
-      saveMsg.value = res.message || '保存失败'
+      saveMsg.value = res.message || t('aiSettings.saveFailed')
       saveType.value = 'error'
       setTimeout(() => { saveMsg.value = '' }, 4000)
     }
   } catch (e) {
-    saveMsg.value = (e && e.message) || '保存失败'
+    saveMsg.value = (e && e.message) || t('aiSettings.saveFailed')
     saveType.value = 'error'
     setTimeout(() => { saveMsg.value = '' }, 4000)
   }
@@ -575,11 +578,11 @@ const saveConfig = async () => {
     const res = await window.electronAPI.ai.saveConfig({ raw })
     if (res.success) {
       Object.assign(rawData, raw)
-      saveMsg.value = '配置已保存'
+      saveMsg.value = t('aiSettings.saved')
       saveType.value = 'success'
       window.dispatchEvent(new CustomEvent('ai-config-updated'))
     } else {
-      saveMsg.value = res.message || '保存失败'
+      saveMsg.value = res.message || t('aiSettings.saveFailed')
       saveType.value = 'error'
     }
   } catch (e) {

@@ -2,65 +2,65 @@
   <div class="ai-backup-page">
     <div class="abp-header">
       <Archive :size="16" />
-      <span>数据备份</span>
+      <span>{{ t('backup.title') }}</span>
     </div>
 
     <!-- 备份区 -->
     <section class="abp-section">
-      <h3 class="abp-section-title">导出备份</h3>
-      <p class="abp-desc">将 <code>~/.openultron/</code> 整个目录打包为 ZIP 文件。</p>
+      <h3 class="abp-section-title">{{ t('backup.exportTitle') }}</h3>
+      <p class="abp-desc">{{ t('backup.exportDesc') }}</p>
 
       <div class="abp-actions">
         <button class="abp-btn primary" :disabled="exporting" @click="doExport">
           <Loader v-if="exporting" :size="13" class="spin" />
           <Download v-else :size="13" />
-          {{ exporting ? '导出中…' : '导出 ZIP' }}
+          {{ exporting ? t('backup.exporting') : t('backup.exportZip') }}
         </button>
       </div>
 
       <div v-if="exportResult" class="abp-result" :class="exportResult.ok ? 'ok' : 'err'">
         <template v-if="exportResult.ok">
-          已保存到 <code>{{ exportResult.savePath }}</code>（{{ formatSize(exportResult.fileSize) }}）
+          {{ t('backup.savedTo', { path: exportResult.savePath, size: formatSize(exportResult.fileSize) }) }}
         </template>
-        <template v-else>导出失败：{{ exportResult.message }}</template>
+        <template v-else>{{ t('backup.exportFailed', { message: exportResult.message }) }}</template>
       </div>
     </section>
 
     <!-- 恢复区 -->
     <section class="abp-section">
-      <h3 class="abp-section-title">从备份恢复</h3>
-      <p class="abp-desc">恢复时会先清空 <code>~/.openultron/</code>，再用 ZIP 内容完整覆盖。</p>
+      <h3 class="abp-section-title">{{ t('backup.restoreTitle') }}</h3>
+      <p class="abp-desc">{{ t('backup.restoreDesc') }}</p>
 
       <div class="abp-actions">
         <button class="abp-btn" :disabled="previewing" @click="doPreview">
           <FolderOpen :size="13" />
-          选择备份文件
+          {{ t('backup.chooseFile') }}
         </button>
       </div>
 
       <!-- 备份信息 -->
       <div v-if="previewMeta" class="abp-meta-card">
         <div class="abp-meta-row">
-          <span class="abp-meta-label">备份时间</span>
+          <span class="abp-meta-label">{{ t('backup.backupTime') }}</span>
           <span>{{ formatDate(previewMeta.exportedAt) }}</span>
         </div>
         <div class="abp-meta-row">
-          <span class="abp-meta-label">文件</span>
+          <span class="abp-meta-label">{{ t('backup.file') }}</span>
           <code class="abp-meta-path">{{ previewFilePath }}</code>
         </div>
         <div class="abp-meta-stats">
-          <span v-if="previewMeta.mode === 'full_app_root'">整目录备份</span>
-          <span v-if="previewMeta.stats.fileCount">{{ previewMeta.stats.fileCount }} 个文件</span>
-          <span v-if="previewMeta.stats.dirCount">{{ previewMeta.stats.dirCount }} 个目录</span>
+          <span v-if="previewMeta.mode === 'full_app_root'">{{ t('backup.fullBackup') }}</span>
+          <span v-if="previewMeta.stats.fileCount">{{ previewMeta.stats.fileCount }} files</span>
+          <span v-if="previewMeta.stats.dirCount">{{ previewMeta.stats.dirCount }} dirs</span>
           <span v-if="previewMeta.stats.totalBytes">{{ formatSize(previewMeta.stats.totalBytes) }}</span>
-          <span v-if="previewMeta.mode !== 'full_app_root'">旧版分项备份</span>
+          <span v-if="previewMeta.mode !== 'full_app_root'">{{ t('backup.legacyBackup') }}</span>
         </div>
 
         <div class="abp-actions mt8">
           <button class="abp-btn danger" :disabled="restoring" @click="doRestore">
             <Loader v-if="restoring" :size="13" class="spin" />
             <RotateCcw v-else :size="13" />
-            {{ restoring ? '恢复中…' : '清空并恢复' }}
+            {{ restoring ? t('backup.restoring') : t('backup.restoreNow') }}
           </button>
         </div>
       </div>
@@ -68,8 +68,8 @@
       <div v-if="restoreResult" class="abp-result" :class="restoreResult.ok ? 'ok' : 'err'">
         <template v-if="restoreResult.ok">
           <template v-if="restoreResult.summary.mode === 'full_app_root'">
-            恢复完成：已写入 {{ restoreResult.summary.restoredFiles || 0 }} 个文件
-            <span v-if="restoreResult.summary.rollbackPath">，恢复前快照：<code>{{ restoreResult.summary.rollbackPath }}</code></span>
+            {{ t('backup.restoreDone', { count: restoreResult.summary.restoredFiles || 0 }) }}
+            <span v-if="restoreResult.summary.rollbackPath">{{ t('backup.rollback') }}<code>{{ restoreResult.summary.rollbackPath }}</code></span>
           </template>
           <template v-else>
             恢复完成：技能 {{ restoreResult.summary.skillsRestored }} 个，
@@ -79,7 +79,7 @@
             {{ restoreResult.summary.mcpRestored ? '，MCP已恢复' : '' }}
           </template>
         </template>
-        <template v-else>恢复失败：{{ restoreResult.message }}</template>
+        <template v-else>{{ t('backup.restoreFailed', { message: restoreResult.message }) }}</template>
       </div>
     </section>
   </div>
@@ -88,6 +88,9 @@
 <script setup>
 import { ref } from 'vue'
 import { Archive, Download, FolderOpen, RotateCcw, Loader } from 'lucide-vue-next'
+import { useI18n } from '../../composables/useI18n.js'
+
+const { t, locale } = useI18n()
 
 const exporting = ref(false)
 const exportResult = ref(null)
@@ -152,7 +155,7 @@ function formatSize(bytes) {
 
 function formatDate(iso) {
   if (!iso) return '-'
-  return new Date(iso).toLocaleString('zh-CN')
+  return new Date(iso).toLocaleString(locale.value === 'en-US' ? 'en-US' : 'zh-CN')
 }
 </script>
 

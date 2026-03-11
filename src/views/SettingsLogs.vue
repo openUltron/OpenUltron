@@ -2,28 +2,28 @@
   <div class="settings-logs-view">
     <div class="page-header">
       <FileText :size="16" />
-      <span>日志</span>
+      <span>{{ t('logs.title') }}</span>
     </div>
-    <p class="page-desc">应用主进程及关键模块的全局日志，便于排查问题。</p>
+    <p class="page-desc">{{ t('logs.desc') }}</p>
 
     <template v-if="isElectron">
       <div class="logs-path">
-        <span class="path-label">日志文件：</span>
+        <span class="path-label">{{ t('logs.file') }}</span>
         <code class="path-value">{{ logPath || '…' }}</code>
-        <button type="button" class="btn secondary" @click="openLogDir" :disabled="!logPath">打开日志目录</button>
+        <button type="button" class="btn secondary" @click="openLogDir" :disabled="!logPath">{{ t('logs.openDir') }}</button>
       </div>
       <div class="logs-toolbar">
-        <button type="button" class="btn primary" @click="loadTail" :disabled="loading">刷新</button>
-        <button type="button" class="btn secondary" @click="copyAll" :disabled="!logContent">复制全部</button>
-        <span v-if="copySuccess" class="copy-success">已复制到剪贴板</span>
-        <span class="tail-hint">最近 <input v-model.number="tailLines" type="number" min="100" max="10000" step="100" class="lines-input" /> 行</span>
+        <button type="button" class="btn primary" @click="loadTail" :disabled="loading">{{ t('common.refresh') }}</button>
+        <button type="button" class="btn secondary" @click="copyAll" :disabled="!logContent">{{ t('common.copyAll') }}</button>
+        <span v-if="copySuccess" class="copy-success">{{ t('logs.copySuccess') }}</span>
+        <span class="tail-hint">{{ t('logs.lastLines') }} <input v-model.number="tailLines" type="number" min="100" max="10000" step="100" class="lines-input" /> {{ t('logs.lines') }}</span>
       </div>
       <div class="logs-content-wrap">
-        <pre class="logs-content" ref="preRef">{{ logContent || '（暂无日志或尚未加载）' }}</pre>
+        <pre class="logs-content" ref="preRef">{{ logContent || t('logs.empty') }}</pre>
       </div>
     </template>
     <template v-else>
-      <p class="no-electron">当前为浏览器环境，应用日志仅在 Electron 中可用。</p>
+      <p class="no-electron">{{ t('logs.browserOnly') }}</p>
     </template>
   </div>
 </template>
@@ -31,6 +31,9 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { FileText } from 'lucide-vue-next'
+import { useI18n } from '../composables/useI18n.js'
+
+const { t } = useI18n()
 
 const isElectron = computed(() => typeof window !== 'undefined' && typeof window.electronAPI?.logs === 'object')
 
@@ -58,7 +61,7 @@ async function loadTail() {
     const lines = Math.max(100, Math.min(10000, tailLines.value || 2000))
     logContent.value = await window.electronAPI.logs.readTail(lines)
   } catch (e) {
-    logContent.value = '读取失败: ' + (e?.message || e)
+    logContent.value = t('logs.readFailed') + (e?.message || e)
   } finally {
     loading.value = false
   }

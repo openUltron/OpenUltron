@@ -1,5 +1,7 @@
 # OpenUltron
 
+中文 | [English](./README.en.md)
+
 OpenUltron 是一个基于 **Electron + Vue 3 + Vite** 的 AI 桌面应用，定位为可本地运行、可扩展工具链的智能工作台。
 
 项目融合了会话式 AI、Skills、MCP、定时任务、通知通道与本地持久化，核心目标是让 AI 可以在桌面端稳定地执行工程化任务。
