@@ -95,7 +95,8 @@ class Orchestrator {
         if (channel === 'ai-chat-tool-call' && data.sessionId === sessionId) {
           sessionRegistry.updateToolCall(registryId, data.toolCall || {})
         }
-      }
+      },
+      isDestroyed: () => !canSend(sender)
     }
 
     const useModel = model || config.defaultModel || 'deepseek-v3'
@@ -142,6 +143,13 @@ class Orchestrator {
       if (session && session.feishuChatId) {
         const feishuText = loadPrompt('feishu-session')
         if (feishuText) memParts.push(feishuText)
+        memParts.push(
+          '[飞书附件处理规则]\n' +
+          '当用户消息中已包含附件的 local_path（例如 [Inbound Attachment Paths] 或 local_path: /...）时：\n' +
+          '1) 必须优先使用这些路径读取/分析；\n' +
+          '2) 不要在 ~/Downloads 或其他目录盲目搜索同名文件；\n' +
+          '3) 若路径读取失败，再明确说明失败原因并给出下一步。'
+        )
       }
 
       // 0.6 联网与实时信息（prompts/realtime-info.md）
@@ -458,7 +466,7 @@ class Orchestrator {
                     argsPreview: JSON.stringify(args).slice(0, 300)
                   })
                 } catch (_) { /* ignore */ }
-                result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId)
+                result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId, toolCall.id)
               } catch (e) {
                 result = { error: e.message }
               }
@@ -1114,6 +1122,34 @@ class Orchestrator {
 
   // ---------- 格式转换 ----------
 
+  _openAIUserContentToAnthropic(content) {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return String(content || '')
+    const out = []
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue
+      if (part.type === 'text') {
+        out.push({ type: 'text', text: String(part.text || '') })
+        continue
+      }
+      if (part.type === 'image_url') {
+        const url = part.image_url?.url || ''
+        const m = String(url).match(/^data:([^;]+);base64,(.+)$/)
+        if (m) {
+          out.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: m[1] || 'image/png',
+              data: m[2] || ''
+            }
+          })
+        }
+      }
+    }
+    return out.length > 0 ? out : ''
+  }
+
   // OpenAI messages → Anthropic { system, messages }
   _toAnthropicMessages(openaiMessages) {
     let system = ''
@@ -1126,7 +1162,7 @@ class Orchestrator {
       }
 
       if (msg.role === 'user') {
-        messages.push({ role: 'user', content: msg.content })
+        messages.push({ role: 'user', content: this._openAIUserContentToAnthropic(msg.content) })
         continue
       }
 
@@ -1304,7 +1340,7 @@ class Orchestrator {
     })
   }
 
-  async _executeTool(name, args, sender, sessionId) {
+  async _executeTool(name, args, sender, sessionId, toolCallId = '') {
     if (!this.toolRegistry) {
       return { error: `工具系统未初始化` }
     }
@@ -1362,7 +1398,7 @@ class Orchestrator {
       args = { ...args, chat_id: session.feishuChatId }
     }
 
-    return await tool.execute(args, { sender, sessionId, projectPath })
+    return await tool.execute(args, { sender, sessionId, projectPath, toolCallId })
   }
 }
 

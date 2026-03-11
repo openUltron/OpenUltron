@@ -12,6 +12,49 @@ function getConfig() {
 let wsClient = null
 let lastError = null
 
+function parseMaybeJson(raw) {
+  if (!raw) return null
+  if (typeof raw === 'object') return raw
+  if (typeof raw !== 'string') return null
+  const s = raw.trim()
+  if (!s) return null
+  try { return JSON.parse(s) } catch { return null }
+}
+
+function collectContentSignals(node, out) {
+  if (node == null) return
+  if (typeof node === 'string') {
+    const v = node.trim()
+    if (v) out.texts.add(v)
+    return
+  }
+  if (Array.isArray(node)) {
+    for (const x of node) collectContentSignals(x, out)
+    return
+  }
+  if (typeof node !== 'object') return
+
+  const imageKey = node.image_key
+  if (typeof imageKey === 'string' && imageKey.trim()) {
+    out.imageKeys.add(imageKey.trim())
+  }
+  const fileKey = node.file_key
+  if (typeof fileKey === 'string' && fileKey.trim()) {
+    const key = fileKey.trim()
+    const fileName = (typeof node.file_name === 'string' && node.file_name.trim())
+      ? node.file_name.trim()
+      : (typeof node.name === 'string' ? node.name.trim() : '')
+    if (!out.fileKeys.has(key)) out.fileKeys.set(key, fileName)
+  }
+
+  for (const k of ['text', 'title']) {
+    const v = node[k]
+    if (typeof v === 'string' && v.trim()) out.texts.add(v.trim())
+  }
+
+  for (const v of Object.values(node)) collectContentSignals(v, out)
+}
+
 /**
  * 解析飞书 im.message.receive_v1 事件，提取 chat_id、文本、message_id、附件键
  * 事件结构参考：data 可能为 { message: { message_id, chat_id, content, message_type } }
@@ -22,32 +65,75 @@ function parseMessageEvent(data) {
   const chatId = msg.chat_id || (msg.chat && msg.chat.chat_id) || msg.open_chat_id
   const messageId = msg.message_id || msg.open_message_id
   const messageType = String(msg.message_type || '').trim()
-  let text = ''
-  let parsedContent = null
-  const content = msg.content
-  if (typeof content === 'string') {
-    try {
-      parsedContent = JSON.parse(content)
-      text = (parsedContent && parsedContent.text) || ''
-    } catch {
-      text = content
-    }
-  } else if (content && typeof content === 'object') {
-    parsedContent = content
-    text = content.text || content.content || ''
+  const rawContentStr = typeof msg.content === 'string'
+    ? msg.content
+    : (typeof (msg.body && msg.body.content) === 'string' ? msg.body.content : '')
+  const contentObj = parseMaybeJson(msg.content) || parseMaybeJson(msg.body && msg.body.content) || {}
+  const collected = { texts: new Set(), imageKeys: new Set(), fileKeys: new Map() }
+  collectContentSignals(contentObj, collected)
+
+  // 兜底：部分事件把 key 放在 message 顶层
+  if (typeof msg.image_key === 'string' && msg.image_key.trim()) {
+    collected.imageKeys.add(msg.image_key.trim())
   }
-  text = (text || '').trim()
+  if (typeof msg.file_key === 'string' && msg.file_key.trim()) {
+    collected.fileKeys.set(msg.file_key.trim(), (typeof msg.file_name === 'string' && msg.file_name.trim()) ? msg.file_name.trim() : '')
+  }
+
+  let text = Array.from(collected.texts).join(' ').replace(/\s+/g, ' ').trim()
+  if (!text && typeof msg.content === 'string' && !parseMaybeJson(msg.content)) {
+    text = msg.content.trim()
+  }
+
   const attachments = []
-  if (messageType === 'image') {
-    const imageKey = parsedContent && parsedContent.image_key
-    if (imageKey) attachments.push({ type: 'image', image_key: imageKey })
-  } else if (messageType === 'file') {
-    const fileKey = parsedContent && parsedContent.file_key
-    const fileName = (parsedContent && parsedContent.file_name) || ''
-    if (fileKey) attachments.push({ type: 'file', file_key: fileKey, file_name: fileName })
+  for (const imageKey of collected.imageKeys) {
+    attachments.push({ type: 'image', image_key: imageKey })
   }
+  for (const [fileKey, fileName] of collected.fileKeys.entries()) {
+    attachments.push({ type: 'file', file_key: fileKey, file_name: fileName || '' })
+  }
+
+  // 某些场景 message_type 已明确，但正文未含 key，尝试从已解析对象直接拿
+  if (attachments.length === 0 && contentObj && typeof contentObj === 'object') {
+    if (messageType === 'image' && typeof contentObj.image_key === 'string' && contentObj.image_key.trim()) {
+      attachments.push({ type: 'image', image_key: contentObj.image_key.trim() })
+    } else if (messageType === 'file' && typeof contentObj.file_key === 'string' && contentObj.file_key.trim()) {
+      attachments.push({
+        type: 'file',
+        file_key: contentObj.file_key.trim(),
+        file_name: (typeof contentObj.file_name === 'string' && contentObj.file_name.trim()) ? contentObj.file_name.trim() : ''
+      })
+    }
+  }
+
+  // 最后兜底：直接从原始 content 字符串抓取 key（兼容飞书结构变化/解析失败）
+  if (attachments.length === 0 && rawContentStr) {
+    const imgMatches = [...rawContentStr.matchAll(/"image_key"\s*:\s*"([^"]+)"/g)]
+    for (const m of imgMatches) {
+      const key = (m && m[1]) ? m[1].trim() : ''
+      if (key) attachments.push({ type: 'image', image_key: key })
+    }
+    const fileMatches = [...rawContentStr.matchAll(/"file_key"\s*:\s*"([^"]+)"/g)]
+    for (const m of fileMatches) {
+      const key = (m && m[1]) ? m[1].trim() : ''
+      if (!key) continue
+      const fileNameMatch = rawContentStr.match(/"file_name"\s*:\s*"([^"]+)"/)
+      const fileName = fileNameMatch && fileNameMatch[1] ? fileNameMatch[1].trim() : ''
+      attachments.push({ type: 'file', file_key: key, file_name: fileName })
+    }
+  }
+
   if (!chatId) return null
-  return { chatId, messageId, text, messageType, attachments }
+  const uniq = []
+  const seen = new Set()
+  for (const a of attachments) {
+    if (!a) continue
+    const key = a.type === 'image' ? `i:${a.image_key || ''}` : `f:${a.file_key || ''}`
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    uniq.push(a)
+  }
+  return { chatId, messageId, text, messageType, attachments: uniq, _rawContent: rawContentStr }
 }
 
 /**
@@ -81,8 +167,20 @@ async function start(onMessage) {
       }
       return
     }
+    console.log('[Feishu WS] 解析结果:', {
+      messageType: parsed.messageType,
+      textLen: (parsed.text || '').length,
+      attachments: (parsed.attachments || []).length,
+      imageCount: (parsed.attachments || []).filter(a => a?.type === 'image').length,
+      fileCount: (parsed.attachments || []).filter(a => a?.type === 'file').length,
+      messageId: parsed.messageId || ''
+    })
     if (!parsed.text && (!parsed.attachments || parsed.attachments.length === 0)) {
-      console.warn('[Feishu WS] 跳过：无文本内容且无可处理附件')
+      console.warn('[Feishu WS] 跳过：无文本内容且无可处理附件', {
+        messageType: parsed.messageType,
+        hasContent: !!(data && data.message && data.message.content),
+        rawContentPreview: String(parsed._rawContent || '').slice(0, 300)
+      })
       return
     }
     try {

@@ -220,6 +220,8 @@ const emit = defineEmits(['first-message', 'model-change', 'provider-change', 's
 
 const useAIChatInstance = useAIChat()
 const { messages, isStreaming, error, pendingConfirm, sendMessage, stopChat, loadMessages, respondConfirm } = useAIChatInstance
+const seenFeishuMessageIds = new Set()
+const seenFeishuContentMap = new Map() // key=sessionId|content -> timestamp
 
 // 带输入框的确认弹框
 const confirmInputText = ref('')
@@ -1262,6 +1264,7 @@ const handleSend = async () => {
 
   let finalText = text
   let slashSystemPrompt = null
+  let visionImageParts = []
 
   if (activeSlashSkills.value.length > 0) {
     const prompts = await Promise.all(activeSlashSkills.value.map(s => buildSlashSystemPrompt(s)))
@@ -1283,11 +1286,18 @@ const handleSend = async () => {
       a.error = ''
     }
     try {
+      const visionRes = await window.electronAPI.ai.modelSupportsVision({
+        model: currentModel.value || undefined
+      })
+      const supportsVision = !!visionRes?.supportsVision
       const sessionForAttachments = currentSessionId.value || `pending-${Date.now()}`
       const payload = []
+      const base64ByClientId = new Map()
       for (const a of filesForUpload) {
         const dataBase64 = await readFileAsBase64(a.file)
+        base64ByClientId.set(a.id, dataBase64)
         payload.push({
+          clientId: a.id,
           name: a.name,
           mime: a.mime,
           size: a.size,
@@ -1297,12 +1307,25 @@ const handleSend = async () => {
       const res = await window.electronAPI.ai.uploadAttachments({
         sessionId: sessionForAttachments,
         source: 'main',
-        attachments: payload
+        attachments: payload,
+        imageMode: supportsVision ? 'vision' : 'ocr'
       })
       if (res?.success) {
         const rejectedNames = new Set((res.rejected || []).map(r => r.name))
         for (const a of filesForUpload) {
           a.status = rejectedNames.has(a.name) ? 'rejected' : 'ok'
+        }
+        if (supportsVision) {
+          const imageAccepted = (res.accepted || []).filter(a => a.kind === 'image')
+          visionImageParts = imageAccepted.map((a) => {
+            const b64 = base64ByClientId.get(a.clientId || '')
+            if (!b64) return null
+            const mime = a.mime || 'image/png'
+            return {
+              type: 'image_url',
+              image_url: { url: `data:${mime};base64,${b64}` }
+            }
+          }).filter(Boolean)
         }
         const acceptedNames = (res.accepted || []).map(a => `@${a.name}`)
         if (res.contextText) {
@@ -1384,10 +1407,15 @@ const handleSend = async () => {
     ? slashSystemPrompt + '\n\n---\n' + (basePrompt || '')
     : basePrompt
 
+  const userContentParts = visionImageParts.length > 0
+    ? [{ type: 'text', text: finalText }, ...visionImageParts]
+    : null
+
   sendMessage(finalText, {
     model: currentModel.value || undefined,
     systemPrompt,
     projectPath: props.projectPath || undefined,
+    userContentParts,
     displayContent: finalText !== displayText ? displayText : undefined,
     panelId,
     sessionId: currentSessionId.value || undefined
@@ -1476,6 +1504,16 @@ onMounted(async () => {
   // 飞书会话：收到新消息时切到对应会话并展示，/new 后新消息会进新 sessionId，必须切过去才能看到
   window.electronAPI?.ai?.onFeishuSessionUserMessage?.(async (data) => {
     if (!data?.sessionId || props.projectPath !== '__feishu__') return
+    const incomingMsgId = String(data?.messageId || '').trim()
+    if (incomingMsgId) {
+      if (seenFeishuMessageIds.has(incomingMsgId)) return
+      seenFeishuMessageIds.add(incomingMsgId)
+      if (seenFeishuMessageIds.size > 500) {
+        const keep = Array.from(seenFeishuMessageIds).slice(-250)
+        seenFeishuMessageIds.clear()
+        keep.forEach((id) => seenFeishuMessageIds.add(id))
+      }
+    }
     const incomingSessionId = data.sessionId
     const needSwitch = currentSessionId.value !== incomingSessionId
     if (needSwitch) {
@@ -1493,7 +1531,30 @@ onMounted(async () => {
         useAIChatInstance.clearMessages()
       }
     }
-    messages.value.push({ role: 'user', content: data.text || '' })
+    const text = String(data?.text || '').trim()
+    let attachmentText = ''
+    if (Array.isArray(data?.attachments) && data.attachments.length > 0) {
+      const lines = []
+      for (const a of data.attachments) {
+        if (!a) continue
+        if (a.type === 'image') lines.push(`[图片] ${a.name || ''}`.trim())
+        else if (a.type === 'file') lines.push(`[文件] ${a.name || ''}`.trim())
+        if (a.path) lines.push(`local_path: ${a.path}`)
+      }
+      attachmentText = lines.join('\n')
+    }
+    const userContent = [text, attachmentText].filter(Boolean).join('\n')
+    const dedupeKey = `${incomingSessionId}|${userContent || '[附件]'}`
+    const now = Date.now()
+    const lastTs = seenFeishuContentMap.get(dedupeKey) || 0
+    if (!incomingMsgId && now - lastTs < 8000) return
+    seenFeishuContentMap.set(dedupeKey, now)
+    if (seenFeishuContentMap.size > 500) {
+      const entries = Array.from(seenFeishuContentMap.entries()).slice(-250)
+      seenFeishuContentMap.clear()
+      entries.forEach(([k, v]) => seenFeishuContentMap.set(k, v))
+    }
+    messages.value.push({ role: 'user', content: userContent || '[附件]' })
     useAIChatInstance.setCurrentSessionId(incomingSessionId)
     useAIChatInstance.startStreamingPlaceholder()
     nextTick(() => forceScrollToBottom())

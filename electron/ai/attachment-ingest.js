@@ -107,6 +107,8 @@ function buildAttachmentContext(accepted = []) {
         out.push('```text')
         out.push(item.visionText)
         out.push('```')
+      } else if (item.visionInput) {
+        out.push('   note: image provided directly to vision-capable model; no local OCR was executed.')
       } else {
         out.push('   note: image saved; no OCR/vision output available, use local_path if further reading is needed.')
       }
@@ -121,6 +123,7 @@ async function ingestRoundAttachments({
   sessionId,
   source = 'main',
   attachments = [],
+  imageMode = 'ocr',
   perFileLimit = MAX_SINGLE_FILE_BYTES,
   roundLimit = MAX_ROUND_TOTAL_BYTES
 } = {}) {
@@ -161,6 +164,7 @@ async function ingestRoundAttachments({
 
     const item = {
       attachmentId,
+      clientId: raw.clientId || '',
       source,
       kind,
       name,
@@ -169,19 +173,24 @@ async function ingestRoundAttachments({
       localPath: dataPath,
       status: 'ok',
       extractedText: '',
-      visionText: ''
+      visionText: '',
+      visionInput: false
     }
 
     if (kind === 'text') {
       item.extractedText = extractText(buffer)
     } else if (kind === 'image') {
-      const ocr = await runImageOcr(dataPath)
-      if (ocr.ok && ocr.text) {
-        item.visionText = trimOcrText(ocr.text)
-        item.status = 'ok'
+      if (imageMode === 'vision') {
+        item.visionInput = true
       } else {
-        item.status = 'degraded'
-        item.visionText = ''
+        const ocr = await runImageOcr(dataPath)
+        if (ocr.ok && ocr.text) {
+          item.visionText = trimOcrText(ocr.text)
+          item.status = 'ok'
+        } else {
+          item.status = 'degraded'
+          item.visionText = ''
+        }
       }
     }
 

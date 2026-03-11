@@ -264,6 +264,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     restoreConfigFromBackup: (payload) => ipcRenderer.invoke('ai-restore-config-from-backup', payload),
     fetchModels: (options) => ipcRenderer.invoke('ai-fetch-models', options),
     getModels: (providerBaseUrl) => ipcRenderer.invoke('ai-get-models', providerBaseUrl),
+    modelSupportsVision: (data) => ipcRenderer.invoke('ai-model-supports-vision', data),
     getTools: () => ipcRenderer.invoke('ai-get-tools'),
     chatStart: (data) => ipcRenderer.invoke('ai-chat-start', data),
     chatStop: (data) => ipcRenderer.invoke('ai-chat-stop', data),

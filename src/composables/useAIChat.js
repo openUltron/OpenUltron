@@ -11,6 +11,7 @@ export function useAIChat() {
 
   let currentSessionId = null
   let listenersRegistered = false
+  const toolResultPushState = new Map() // toolCallId -> { lastTs, timer, latest }
 
   // 生成唯一会话 ID
   const genSessionId = () => `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -45,6 +46,8 @@ export function useAIChat() {
           name: data.toolCall.name,
           arguments: data.toolCall.arguments,
           result: null,
+          _startedAt: Date.now(),
+          _endedAt: null,
           _expanded: false
         })
       }
@@ -52,16 +55,55 @@ export function useAIChat() {
 
     window.electronAPI.ai.onToolResult((data) => {
       if (!isCurrentSession(data)) return
-      // 找到对应的 toolCall 并填充结果
-      for (const msg of messages.value) {
-        if (msg.toolCalls) {
-          const tc = msg.toolCalls.find(t => t.id === data.toolCallId)
-          if (tc) {
-            tc.result = data.result
-            break
+      const applyResult = (payload) => {
+        for (const msg of messages.value) {
+          if (msg.toolCalls) {
+            const tc = msg.toolCalls.find(t => t.id === payload.toolCallId)
+            if (tc) {
+              if (!tc._startedAt) tc._startedAt = Date.now()
+              tc.result = payload.result
+              let partial = false
+              try {
+                const obj = typeof payload.result === 'string' ? JSON.parse(payload.result) : payload.result
+                partial = !!(obj && typeof obj === 'object' && (obj.partial === true || obj.running === true))
+              } catch { /* ignore */ }
+              if (!partial) tc._endedAt = Date.now()
+              break
+            }
           }
         }
       }
+      let isPartial = false
+      try {
+        const obj = typeof data.result === 'string' ? JSON.parse(data.result) : data.result
+        isPartial = !!(obj && typeof obj === 'object' && (obj.partial === true || obj.running === true))
+      } catch { /* ignore */ }
+      if (!isPartial) {
+        const state = toolResultPushState.get(data.toolCallId)
+        if (state?.timer) clearTimeout(state.timer)
+        toolResultPushState.delete(data.toolCallId)
+        applyResult(data)
+        return
+      }
+      const now = Date.now()
+      const state = toolResultPushState.get(data.toolCallId) || { lastTs: 0, timer: null, latest: null }
+      state.latest = data
+      const gap = now - state.lastTs
+      if (gap >= 300) {
+        state.lastTs = now
+        if (state.timer) {
+          clearTimeout(state.timer)
+          state.timer = null
+        }
+        applyResult(data)
+      } else if (!state.timer) {
+        state.timer = setTimeout(() => {
+          state.lastTs = Date.now()
+          state.timer = null
+          if (state.latest) applyResult(state.latest)
+        }, 300 - gap)
+      }
+      toolResultPushState.set(data.toolCallId, state)
     })
 
     window.electronAPI.ai.onComplete((data) => {
@@ -111,7 +153,7 @@ export function useAIChat() {
   }
 
   // 发送消息
-  const sendMessage = async (content, { model, systemPrompt, projectPath, displayContent, panelId, sessionId: passedSessionId } = {}) => {
+  const sendMessage = async (content, { model, systemPrompt, projectPath, displayContent, userContentParts, panelId, sessionId: passedSessionId } = {}) => {
     error.value = ''
 
     // 添加用户消息（展示用 displayContent，发给 AI 用 content）
@@ -149,8 +191,11 @@ export function useAIChat() {
         continue
       }
     }
-    // 最后一条用户消息用完整 content（含 @ 文件内容）
-    if (displayContent && reqMessages.length > 0) {
+    // 最后一条用户消息：优先用多模态 content（例如 image_url）；否则按原文本覆盖
+    if (Array.isArray(userContentParts) && userContentParts.length > 0 && reqMessages.length > 0) {
+      const last = reqMessages[reqMessages.length - 1]
+      if (last.role === 'user') last.content = userContentParts
+    } else if (displayContent && reqMessages.length > 0) {
       const last = reqMessages[reqMessages.length - 1]
       if (last.role === 'user') last.content = content
     }
@@ -195,7 +240,15 @@ export function useAIChat() {
             const last = messages.value[messages.value.length - 1]
             if (last && last.role === 'assistant') {
               if (!last.toolCalls) last.toolCalls = []
-              last.toolCalls.push({ id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments, result: null, _expanded: false })
+              last.toolCalls.push({
+                id: toolCall.id,
+                name: toolCall.name,
+                arguments: toolCall.arguments,
+                result: null,
+                _startedAt: Date.now(),
+                _endedAt: null,
+                _expanded: false
+              })
             }
           },
           onToolResult: (toolCallId, result) => {
@@ -406,6 +459,10 @@ export function useAIChat() {
 
   // 清理
   const cleanup = () => {
+    for (const state of toolResultPushState.values()) {
+      if (state?.timer) clearTimeout(state.timer)
+    }
+    toolResultPushState.clear()
     // 不调用全局 removeAllListeners()，避免影响其他正在运行的 AI 会话
     // 各监听器已按 sessionId 过滤，此实例的监听器不会处理其他会话的事件
     listenersRegistered = false

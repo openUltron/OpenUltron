@@ -119,7 +119,8 @@ function httpsGetBuffer(host, pathName, token) {
         const text = body.toString('utf8')
         try {
           const json = JSON.parse(text)
-          reject(new Error(json.msg || json.error_description || text || `HTTP ${res.statusCode}`))
+          const msg = json.msg || json.error_description || json.code || text || `HTTP ${res.statusCode}`
+          reject(new Error(msg))
         } catch {
           reject(new Error(text || `HTTP ${res.statusCode}`))
         }
@@ -128,6 +129,26 @@ function httpsGetBuffer(host, pathName, token) {
     req.on('error', reject)
     req.end()
   })
+}
+
+function combineErrors(errors = []) {
+  return errors
+    .filter(Boolean)
+    .map(e => String(e && e.message ? e.message : e))
+    .filter(Boolean)
+    .join(' | ')
+}
+
+async function downloadMessageResourceByKey(messageId, key, type) {
+  if (!messageId || !String(messageId).trim()) throw new Error('missing message_id')
+  if (!key || !String(key).trim()) throw new Error(`missing ${type}_key`)
+  const token = await getTenantAccessToken()
+  const mid = encodeURIComponent(String(messageId).trim())
+  const rid = encodeURIComponent(String(key).trim())
+  const t = encodeURIComponent(type)
+  const pathWithQuery = `/open-apis/im/v1/messages/${mid}/resources/${rid}?type=${t}`
+  const { buffer, headers } = await httpsGetBuffer(AUTH_URL, pathWithQuery, token)
+  return { buffer, headers }
 }
 
 function parseFilenameFromDisposition(disposition, fallback = 'download.bin') {
@@ -377,23 +398,59 @@ async function sendPost(receiveId, postPayload, receiveIdType = 'chat_id') {
   return res
 }
 
-async function downloadImageByKey(imageKey) {
+async function downloadImageByKey(imageKey, options = {}) {
   if (!imageKey || !String(imageKey).trim()) throw new Error('downloadImageByKey: missing imageKey')
-  const token = await getTenantAccessToken()
   const key = String(imageKey).trim()
-  const pathWithQuery = `/open-apis/im/v1/images/${encodeURIComponent(key)}?image_type=message`
-  const { buffer, headers } = await httpsGetBuffer(AUTH_URL, pathWithQuery, token)
+  const messageId = options && options.messageId ? String(options.messageId).trim() : ''
+  let result = null
+  const errs = []
+  if (messageId) {
+    try {
+      result = await downloadMessageResourceByKey(messageId, key, 'image')
+    } catch (e) {
+      errs.push(new Error(`message_resource(image): ${e.message}`))
+    }
+  }
+  if (!result) {
+    try {
+      const token = await getTenantAccessToken()
+      const pathWithQuery = `/open-apis/im/v1/images/${encodeURIComponent(key)}?image_type=message`
+      result = await httpsGetBuffer(AUTH_URL, pathWithQuery, token)
+    } catch (e) {
+      errs.push(new Error(`images_api: ${e.message}`))
+    }
+  }
+  if (!result) throw new Error(combineErrors(errs) || 'download image failed')
+  const { buffer, headers } = result
   const contentType = String(headers['content-type'] || 'image/png').split(';')[0]
   const fileName = parseFilenameFromDisposition(headers['content-disposition'], `image-${Date.now()}.png`)
   return { buffer, contentType, fileName }
 }
 
-async function downloadFileByKey(fileKey) {
+async function downloadFileByKey(fileKey, options = {}) {
   if (!fileKey || !String(fileKey).trim()) throw new Error('downloadFileByKey: missing fileKey')
-  const token = await getTenantAccessToken()
   const key = String(fileKey).trim()
-  const pathWithQuery = `/open-apis/im/v1/files/${encodeURIComponent(key)}`
-  const { buffer, headers } = await httpsGetBuffer(AUTH_URL, pathWithQuery, token)
+  const messageId = options && options.messageId ? String(options.messageId).trim() : ''
+  let result = null
+  const errs = []
+  if (messageId) {
+    try {
+      result = await downloadMessageResourceByKey(messageId, key, 'file')
+    } catch (e) {
+      errs.push(new Error(`message_resource(file): ${e.message}`))
+    }
+  }
+  if (!result) {
+    try {
+      const token = await getTenantAccessToken()
+      const pathWithQuery = `/open-apis/im/v1/files/${encodeURIComponent(key)}`
+      result = await httpsGetBuffer(AUTH_URL, pathWithQuery, token)
+    } catch (e) {
+      errs.push(new Error(`files_api: ${e.message}`))
+    }
+  }
+  if (!result) throw new Error(combineErrors(errs) || 'download file failed')
+  const { buffer, headers } = result
   const contentType = String(headers['content-type'] || 'application/octet-stream').split(';')[0]
   const fileName = parseFilenameFromDisposition(headers['content-disposition'], `file-${Date.now()}.bin`)
   return { buffer, contentType, fileName }
