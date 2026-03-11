@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "description": "OpenUltron - AI-first desktop app, enhanced OpenClaw with memory import",
   "author": "OpenUltron",
+  "license": "MIT",
   "main": "electron/main.js",
   "homepage": "./",
   "scripts": {
