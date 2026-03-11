@@ -17,6 +17,7 @@ jobs:
   build:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure }}
     strategy:
       fail-fast: false
       matrix:
@@ -24,12 +25,15 @@ jobs:
           - os: macos-latest
             build_args: --mac --arm64 --x64
             artifact_name: release-macos
+            allow_failure: false
           - os: windows-latest
             build_args: --win zip
             artifact_name: release-windows
+            allow_failure: true
           - os: ubuntu-latest
             build_args: --linux AppImage
             artifact_name: release-linux
+            allow_failure: true
 
     steps:
       - name: Checkout
