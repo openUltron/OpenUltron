@@ -22,8 +22,14 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            build_args: --mac
+            build_args: --mac --arm64 --x64
             artifact_name: release-macos
+          - os: windows-latest
+            build_args: --win zip
+            artifact_name: release-windows
+          - os: ubuntu-latest
+            build_args: --linux AppImage
+            artifact_name: release-linux
 
     steps:
       - name: Checkout
