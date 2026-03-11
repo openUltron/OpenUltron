@@ -11,6 +11,7 @@ const feishuSessionState = require('../../ai/feishu-session-state')
 const conversationFile = require('../../ai/conversation-file')
 const feishuNotify = require('../../ai/feishu-notify')
 const memoryStore = require('../../ai/memory-store')
+const { ingestRoundAttachments } = require('../../ai/attachment-ingest')
 const { createInboundMessage, createSessionBinding } = require('../../core/message-model')
 
 const FEISHU_PROJECT = '__feishu__'
@@ -20,6 +21,43 @@ const HISTORY_CMD_RE = /^\s*\/(history|memory)\s*$/i
 
 function compactText(s) {
   return String(s || '').replace(/\s+/g, ' ').trim()
+}
+
+function compactError(err) {
+  if (!err) return 'unknown'
+  if (err instanceof Error) return compactText(err.message || String(err))
+  return compactText(String(err))
+}
+
+function buildInboundDisplayText(text, attachments = []) {
+  const base = compactText(text || '')
+  if (!Array.isArray(attachments) || attachments.length === 0) return base
+  const lines = []
+  for (const a of attachments) {
+    if (!a) continue
+    if (a.type === 'image') lines.push(`[图片] ${a.name || ''}`.trim())
+    else if (a.type === 'file') lines.push(`[文件] ${a.name || path.basename(a.path || '') || ''}`.trim())
+    if (a.path) lines.push(`local_path: ${a.path}`)
+  }
+  const att = lines.filter(Boolean).join('\n')
+  if (!base) return att || '[附件]'
+  if (!att) return base
+  return `${base}\n${att}`
+}
+
+function buildAttachmentPathContext(attachments = []) {
+  if (!Array.isArray(attachments) || attachments.length === 0) return ''
+  const lines = ['[Inbound Attachment Paths]']
+  let idx = 1
+  for (const a of attachments) {
+    if (!a || !a.path) continue
+    const type = a.type === 'image' ? 'image' : 'file'
+    const name = a.name || path.basename(a.path || '')
+    lines.push(`${idx}. [${type}] ${name}`)
+    lines.push(`   local_path: ${a.path}`)
+    idx++
+  }
+  return idx > 1 ? lines.join('\n') : ''
 }
 
 function extractMessageText(msg) {
@@ -97,7 +135,17 @@ function isAllowed(allowFrom, remoteId) {
  * @returns {{ id: string; configKey: string; start: Function; stop: Function; isRunning: Function; send: Function }}
  */
 function createFeishuAdapter(eventBus, getChannelConfig) {
-  async function handleIncomingMessage(chatId, text, messageId) {
+  async function handleIncomingMessage(inbound) {
+    const chatId = inbound && inbound.chatId
+    const text = (inbound && inbound.text) || ''
+    const messageId = inbound && inbound.messageId
+    const inboundAttachments = Array.isArray(inbound && inbound.attachments) ? inbound.attachments : []
+    appLogger?.info?.('[Feishu] 入站消息', {
+      chatId: chatId || '',
+      messageId: messageId || '',
+      textLen: String(text || '').length,
+      inboundAttachmentCount: inboundAttachments.length
+    })
     if (messageId) {
       const sizeBefore = feishuRepliedMessageIds.size
       feishuRepliedMessageIds.add(messageId)
@@ -184,7 +232,96 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
         messageCount: 0
       })
     }
-    const message = createInboundMessage('feishu', chatId, text, messageId)
+    let attachmentContextText = ''
+    let normalizedAttachments = []
+    if (inboundAttachments.length > 0) {
+      appLogger?.info?.('[Feishu] 开始处理入站附件', {
+        messageId: messageId || '',
+        count: inboundAttachments.length,
+        kinds: inboundAttachments.map(a => a?.type).filter(Boolean)
+      })
+      const rawAttachments = []
+      for (const a of inboundAttachments) {
+        try {
+          if (a.type === 'image' && a.image_key) {
+            const dl = await feishuNotify.downloadImageByKey(a.image_key, { messageId })
+            appLogger?.info?.('[Feishu] 图片下载成功', {
+              messageId: messageId || '',
+              image_key: a.image_key,
+              fileName: dl.fileName || '',
+              bytes: dl.buffer?.length || 0
+            })
+            rawAttachments.push({
+              name: dl.fileName || `image-${Date.now()}.png`,
+              mime: dl.contentType || 'image/png',
+              size: dl.buffer.length,
+              buffer: dl.buffer
+            })
+          } else if (a.type === 'file' && a.file_key) {
+            const dl = await feishuNotify.downloadFileByKey(a.file_key, { messageId })
+            appLogger?.info?.('[Feishu] 文件下载成功', {
+              messageId: messageId || '',
+              file_key: a.file_key,
+              fileName: a.file_name || dl.fileName || '',
+              bytes: dl.buffer?.length || 0
+            })
+            rawAttachments.push({
+              name: a.file_name || dl.fileName || `file-${Date.now()}.bin`,
+              mime: dl.contentType || 'application/octet-stream',
+              size: dl.buffer.length,
+              buffer: dl.buffer
+            })
+          }
+        } catch (e) {
+          const detail = {
+            type: a?.type || '',
+            image_key: a?.image_key || '',
+            file_key: a?.file_key || '',
+            message_id: messageId || '',
+            error: compactError(e)
+          }
+          appLogger?.warn?.(`[Feishu] 下载入站附件失败 ${JSON.stringify(detail)}`)
+        }
+      }
+      if (rawAttachments.length > 0) {
+        const ingestRes = await ingestRoundAttachments({
+          sessionId,
+          source: 'feishu',
+          attachments: rawAttachments
+        })
+        appLogger?.info?.('[Feishu] 入站附件摄取结果', {
+          messageId: messageId || '',
+          accepted: ingestRes?.accepted?.length || 0,
+          rejected: ingestRes?.rejected?.length || 0
+        })
+        normalizedAttachments = (ingestRes.accepted || []).map(item => ({
+          type: item.kind === 'image' ? 'image' : 'file',
+          path: item.localPath,
+          name: item.name || ''
+        }))
+        if (normalizedAttachments.length > 0) {
+          appLogger?.info?.('[Feishu] 入站附件本地路径', {
+            messageId: messageId || '',
+            paths: normalizedAttachments.map(a => a.path)
+          })
+        }
+        attachmentContextText = ingestRes.contextText || ''
+      } else {
+        appLogger?.warn?.('[Feishu] 入站附件下载后为空，未进入摄取', {
+          messageId: messageId || ''
+        })
+      }
+    }
+
+    // 给 AI 的入站文本：无论 OCR 成功与否，只要附件已落地，就强制注入 local_path，避免去 Downloads 盲搜
+    const attachmentPathContext = buildAttachmentPathContext(normalizedAttachments)
+    const inboundText = [text, attachmentPathContext, attachmentContextText].filter(Boolean).join('\n\n').trim()
+    const message = createInboundMessage('feishu', chatId, inboundText, messageId, normalizedAttachments)
+    const displayText = buildInboundDisplayText(text, normalizedAttachments)
+    message.metadata = {
+      displayText,
+      attachments: normalizedAttachments
+    }
     const binding = createSessionBinding(sessionId, FEISHU_PROJECT, 'feishu', chatId, chatId)
     eventBus.emit('chat.message.received', { message, binding })
   }

@@ -18,15 +18,16 @@ const definition = {
 async function execute(args, context) {
   const { message, severity = 'warning', input_default, allow_push } = args
   const { sender, sessionId } = context || {}
+  const canSend = !!(sender && typeof sender.send === 'function' && !(typeof sender.isDestroyed === 'function' && sender.isDestroyed()))
 
-  if (!sender) {
-    return { confirmed: true, user_input: input_default || '', message: '自动确认（无 UI 通道）' }
+  if (!canSend) {
+    return { confirmed: false, user_input: '', push_after_commit: false, message: '无可用 UI 通道，已拒绝操作' }
   }
 
   return new Promise((resolve) => {
     const confirmId = `confirm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
 
-    if (sender && !sender.isDestroyed()) {
+    try {
       sender.send('ai-chat-confirm-request', {
         sessionId,
         confirmId,
@@ -35,13 +36,23 @@ async function execute(args, context) {
         inputDefault: input_default || null,
         allowPush: allow_push || false
       })
+    } catch (e) {
+      resolve({ confirmed: false, user_input: '', push_after_commit: false, message: `确认请求发送失败：${e.message}` })
+      return
     }
 
     const { ipcMain } = require('electron')
+    let settled = false
+    const finish = (payload) => {
+      if (settled) return
+      settled = true
+      try { ipcMain.removeHandler('ai-chat-confirm-response') } catch {}
+      resolve(payload)
+    }
+
     const handler = (event, data) => {
       if (data.confirmId !== confirmId) return
-      ipcMain.removeHandler('ai-chat-confirm-response')
-      resolve({
+      finish({
         confirmed: data.confirmed,
         user_input: data.userInput || '',
         push_after_commit: data.pushAfterCommit || false,
@@ -53,8 +64,7 @@ async function execute(args, context) {
     ipcMain.handle('ai-chat-confirm-response', handler)
 
     setTimeout(() => {
-      try { ipcMain.removeHandler('ai-chat-confirm-response') } catch {}
-      resolve({ confirmed: false, user_input: '', push_after_commit: false, message: '确认超时，操作已取消' })
+      finish({ confirmed: false, user_input: '', push_after_commit: false, message: '确认超时，操作已取消' })
     }, 5 * 60 * 1000)
   })
 }

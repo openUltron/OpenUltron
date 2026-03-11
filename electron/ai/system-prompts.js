@@ -29,7 +29,8 @@ function getDefaultPrompts() {
 禁止对同一问题重复多次调用；获得结果后立即作答。`,
 
     'browser-automation': `[浏览器自动化]
-需要打开网页、截图、点击、填表、执行 JS、多标签、网络/控制台调试等时：**必须首先使用 chrome-devtools MCP** 提供的工具（工具名称以 mcp__chrome_devtools__ 开头，如 navigate_page、take_snapshot、click、fill 等）。仅当该 MCP 不可用或调用报错时，才使用内置 webview_control（导航、截图、execute_js、click_element、fill、take_snapshot、wait_for、handle_dialog 等）。不得在未尝试 chrome-devtools 的情况下直接选用 webview_control。`,
+需要打开网页、截图、点击、填表、执行 JS、多标签、网络/控制台调试等时：**必须首先使用 chrome-devtools MCP** 提供的工具（工具名称以 mcp__chrome_devtools__ 开头，如 navigate_page、take_snapshot、click、fill 等）。仅当该 MCP 不可用或调用报错时，才使用内置 webview_control（导航、截图、execute_js、click_element、fill、take_snapshot、wait_for、handle_dialog 等）。不得在未尝试 chrome-devtools 的情况下直接选用 webview_control。
+处理文档（如 ppt/pptx/pdf/docx/xlsx/zip）时：不要在浏览器中直接打开二进制下载链接，不要触发下载按钮；优先读取本地文件路径并用脚本/工具提取内容。`,
 
     'desktop-notification': `[桌面原生通知]
 当用户要求发送「桌面原生通知」「本机系统通知」或「桌面弹窗」时，你必须调用工具 show_desktop_notification，传入 title 和 body（按用户要求填写）。禁止用 webview_control、飞书或浏览器页面模拟，必须用本工具触发系统原生弹窗。`,

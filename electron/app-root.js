@@ -45,7 +45,8 @@ function ensureWorkspaceDirs() {
   const dirs = [
     getWorkspaceRoot(),
     getWorkspacePath('scripts'),
-    getWorkspacePath('projects')
+    getWorkspacePath('projects'),
+    getWorkspacePath('attachments')
   ]
   for (const dir of dirs) {
     fs.mkdirSync(dir, { recursive: true })

@@ -31,7 +31,10 @@
           <span v-else class="tc-summary-text">{{ toolSummary(tc) }}</span>
         </div>
         <div class="tc-right">
-          <span v-if="!tc.result" class="tc-spinner"></span>
+          <span v-if="tc.name === 'execute_command'" class="tc-metrics-compact">
+            {{ elapsedSecondsOf(tc) }}s / {{ timeoutSecondsOf(tc) }}s
+          </span>
+          <span v-if="isToolRunning(tc)" class="tc-spinner"></span>
           <template v-else>
             <span class="tc-result-badge" :class="tcResultClass(tc)">{{ tcResultText(tc) }}</span>
             <ChevronRight :size="11" class="tc-chevron" :class="{ rotated: tc._expanded }" />
@@ -62,6 +65,14 @@
           <div class="tc-command-line" v-if="cwdOf(tc)">
             <span class="tc-command-label">{{ t('chatMessage.cwd') }}</span>
             <code class="tc-command-code">{{ cwdOf(tc) }}</code>
+          </div>
+          <div class="tc-command-line">
+            <span class="tc-command-label">{{ t('chatMessage.timeout') }}</span>
+            <code class="tc-command-code">{{ timeoutSecondsOf(tc) }}s</code>
+          </div>
+          <div class="tc-command-line">
+            <span class="tc-command-label">{{ t('chatMessage.elapsed') }}</span>
+            <code class="tc-command-code">{{ elapsedSecondsOf(tc) }}s</code>
           </div>
         </div>
         <template v-if="tc.name === 'execute_command'">
@@ -109,7 +120,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { User, Wrench, ChevronRight, Terminal, GitBranch, FileText, Shield, Search, CheckCircle, XCircle, Copy, Check } from 'lucide-vue-next'
 import { useLogoUrl } from '../../composables/useLogoUrl.js'
 import { useI18n } from '../../composables/useI18n'
@@ -124,6 +135,17 @@ const props = defineProps({
 
 const copied = ref(false)
 const thinkExpanded = ref(false)
+const nowMs = ref(Date.now())
+let nowTimer = null
+
+onMounted(() => {
+  nowTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
+})
+
+onUnmounted(() => {
+  if (nowTimer) clearInterval(nowTimer)
+  nowTimer = null
+})
 
 const copyContent = async () => {
   try {
@@ -246,17 +268,22 @@ const tcStatus = (tc) => {
   if (!tc.result) return 'running'
   try {
     const r = JSON.parse(tc.result)
+    if (r && (r.partial === true || r.running === true)) return 'running'
     if (r.success === false || (r.exitCode !== undefined && r.exitCode !== 0)) return 'failed'
   } catch { /* ignore */ }
   return 'done'
 }
+
+const isToolRunning = (tc) => tcStatus(tc) === 'running'
 
 const tcResultClass = (tc) => {
   return tcStatus(tc) === 'failed' ? 'badge-fail' : 'badge-ok'
 }
 
 const tcResultText = (tc) => {
-  return tcStatus(tc) === 'failed' ? t('chatMessage.failed') : t('chatMessage.done')
+  const s = tcStatus(tc)
+  if (s === 'running') return t('chatMessage.running')
+  return s === 'failed' ? t('chatMessage.failed') : t('chatMessage.done')
 }
 
 const commandOf = (tc) => {
@@ -276,6 +303,29 @@ const cwdOf = (tc) => {
     return ''
   }
 }
+
+const timeoutMsOf = (tc) => {
+  try {
+    const obj = tc.result ? JSON.parse(tc.result) : null
+    const t = Number(obj?.timeout)
+    if (Number.isFinite(t) && t > 0) return t
+  } catch { /* ignore */ }
+  try {
+    const args = JSON.parse(tc.arguments)
+    const t = Number(args?.timeout)
+    if (Number.isFinite(t) && t > 0) return t
+  } catch { /* ignore */ }
+  return 600000
+}
+
+const elapsedSecondsOf = (tc) => {
+  const start = Number(tc?._startedAt || 0)
+  if (!start) return 0
+  const end = Number(tc?._endedAt || nowMs.value)
+  return Math.max(0, Math.floor((end - start) / 1000))
+}
+
+const timeoutSecondsOf = (tc) => Math.max(1, Math.floor(timeoutMsOf(tc) / 1000))
 
 const formatResult = (resultStr, toolName) => {
   try {
@@ -591,6 +641,11 @@ const renderThink = (text) => renderMarkdown(text)
 }
 .tc-command-inline .tc-cmd-inline { color: var(--ou-text); }
 .tc-command-inline .tc-cwd-inline { color: var(--ou-text-muted); font-size: 10px; }
+.tc-metrics-compact {
+  font-size: 10px;
+  color: var(--ou-text-muted);
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+}
 
 .tc-spinner {
   width: 10px;
@@ -620,6 +675,33 @@ const renderThink = (text) => renderMarkdown(text)
 .tc-screenshot { max-width: 100%; height: auto; border-radius: 6px; display: block; margin-bottom: 8px; }
 .message-screenshots { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
 .message-screenshot-img { max-width: 100%; max-height: 320px; width: auto; height: auto; border-radius: 8px; object-fit: contain; cursor: pointer; }
+.tc-command-meta {
+  margin: 0 0 6px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--ou-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ou-bg-hover) 70%, transparent);
+}
+.tc-command-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 2px 0;
+}
+.tc-command-label {
+  font-size: 10px;
+  color: var(--ou-text-muted);
+  min-width: 40px;
+}
+.tc-command-code {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--ou-text);
+  background: transparent;
+  padding: 0;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  word-break: break-all;
+}
 .tc-pre {
   margin: 0;
   padding: 8px 12px;

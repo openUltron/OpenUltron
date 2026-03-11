@@ -95,7 +95,8 @@ class Orchestrator {
         if (channel === 'ai-chat-tool-call' && data.sessionId === sessionId) {
           sessionRegistry.updateToolCall(registryId, data.toolCall || {})
         }
-      }
+      },
+      isDestroyed: () => !canSend(sender)
     }
 
     const useModel = model || config.defaultModel || 'deepseek-v3'
@@ -127,6 +128,7 @@ class Orchestrator {
         '[当前应用]\n' +
         '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
         '当用户要求修改或配置**本机其他项目**、某仓库或用户提到的任意名称时：自行决定用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不得未执行就称找不到或向用户索要路径。可先调用 query_command_log 查看当前项目下已执行命令的成功/失败与已查看路径，再决定本次命令，实现自我进化。具体项目名称、常见路径与配置文件名由你自行检索或根据用户表述判断，提示词中不预设。\n' +
+        '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：不要只给安装建议。应先用 user_confirmation 简短征求用户同意（说明将安装什么），同意后立即用 execute_command 执行安装并继续原任务；若用户拒绝，再给降级方案。\n' +
         `默认工作空间：${getWorkspaceRoot()}。\n` +
         `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
         '**回复风格**：不要写「我来帮你…」「让我执行…」等固定话术；不要输出「可能的原因和建议」「请提供以下任一信息」等模板式列表。直接执行、根据结果继续或简短说明已尝试与下一步。未明确要求修改外部项目时，默认在 OpenUltron 内完成。'
@@ -141,6 +143,13 @@ class Orchestrator {
       if (session && session.feishuChatId) {
         const feishuText = loadPrompt('feishu-session')
         if (feishuText) memParts.push(feishuText)
+        memParts.push(
+          '[飞书附件处理规则]\n' +
+          '当用户消息中已包含附件的 local_path（例如 [Inbound Attachment Paths] 或 local_path: /...）时：\n' +
+          '1) 必须优先使用这些路径读取/分析；\n' +
+          '2) 不要在 ~/Downloads 或其他目录盲目搜索同名文件；\n' +
+          '3) 若路径读取失败，再明确说明失败原因并给出下一步。'
+        )
       }
 
       // 0.6 联网与实时信息（prompts/realtime-info.md）
@@ -457,7 +466,7 @@ class Orchestrator {
                     argsPreview: JSON.stringify(args).slice(0, 300)
                   })
                 } catch (_) { /* ignore */ }
-                result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId)
+                result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId, toolCall.id)
               } catch (e) {
                 result = { error: e.message }
               }
@@ -1113,6 +1122,34 @@ class Orchestrator {
 
   // ---------- 格式转换 ----------
 
+  _openAIUserContentToAnthropic(content) {
+    if (typeof content === 'string') return content
+    if (!Array.isArray(content)) return String(content || '')
+    const out = []
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue
+      if (part.type === 'text') {
+        out.push({ type: 'text', text: String(part.text || '') })
+        continue
+      }
+      if (part.type === 'image_url') {
+        const url = part.image_url?.url || ''
+        const m = String(url).match(/^data:([^;]+);base64,(.+)$/)
+        if (m) {
+          out.push({
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: m[1] || 'image/png',
+              data: m[2] || ''
+            }
+          })
+        }
+      }
+    }
+    return out.length > 0 ? out : ''
+  }
+
   // OpenAI messages → Anthropic { system, messages }
   _toAnthropicMessages(openaiMessages) {
     let system = ''
@@ -1125,7 +1162,7 @@ class Orchestrator {
       }
 
       if (msg.role === 'user') {
-        messages.push({ role: 'user', content: msg.content })
+        messages.push({ role: 'user', content: this._openAIUserContentToAnthropic(msg.content) })
         continue
       }
 
@@ -1303,7 +1340,7 @@ class Orchestrator {
     })
   }
 
-  async _executeTool(name, args, sender, sessionId) {
+  async _executeTool(name, args, sender, sessionId, toolCallId = '') {
     if (!this.toolRegistry) {
       return { error: `工具系统未初始化` }
     }
@@ -1361,7 +1398,7 @@ class Orchestrator {
       args = { ...args, chat_id: session.feishuChatId }
     }
 
-    return await tool.execute(args, { sender, sessionId, projectPath })
+    return await tool.execute(args, { sender, sessionId, projectPath, toolCallId })
   }
 }
 

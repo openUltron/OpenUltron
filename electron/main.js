@@ -13,6 +13,7 @@ const invokeRegistry = require('./api/invokeRegistry')
 const { registerConfigHandlers } = require('./api/registerConfigHandlers')
 const { createApiServer, DEFAULT_PORT: API_DEFAULT_PORT } = require('./api/server')
 const { getAppRoot, getAppRootPath, getWorkspaceRoot, getWorkspacePath, ensureWorkspaceDirs } = require('./app-root')
+const { ingestRoundAttachments } = require('./ai/attachment-ingest')
 const { getLogPath, readTail, getForAi, logger: appLogger, patchConsole } = require('./app-logger')
 const { filterSessionsList, isRunSessionId } = require('./ai/sessions-list-filter')
 
@@ -3747,6 +3748,7 @@ registerChannel('ai-fetch-models', async (event, options) => {
             id: m.id,
             name: m.id,
             owned_by: m.owned_by || '',
+            input_modalities: m.input_modalities || m.modalities || [],
             source: 'provider'
           }))
         } catch { /* ignore */ }
@@ -3859,7 +3861,7 @@ registerChannel('ai-fetch-models', async (event, options) => {
                     if (r.status === 200) {
                       const authType = auth['x-api-key'] ? 'x-api-key' : 'Bearer'
                       console.log(`[AI] Claude ✓ ${tryId} (${authType})`)
-                      return { id: tryId, name: cm.name || tryId, owned_by: cm.owned_by, source: 'anthropic' }
+                      return { id: tryId, name: cm.name || tryId, owned_by: cm.owned_by, input_modalities: ['text', 'image'], source: 'anthropic' }
                     }
                     if (diagErrors.length < 3) {
                       const authType = auth['x-api-key'] ? 'x-api-key' : 'Bearer'
@@ -3990,6 +3992,61 @@ function getToolsForChat() {
 }
 registerChannel('ai-get-tools', async () => {
   return { success: true, tools: getToolsForChat() }
+})
+
+function isVisionModelId(modelId = '') {
+  const m = String(modelId || '').toLowerCase()
+  if (!m) return false
+  const hits = [
+    /gpt-4o/, /gpt-4\.1/, /gpt-4\.5/, /o1/, /o3/, /omni/,
+    /claude-3/, /claude-4/,
+    /gemini/, /qwen-?vl/, /qvq/, /vision/, /vl-/, /pixtral/, /llava/
+  ]
+  return hits.some((re) => re.test(m))
+}
+
+function modelSupportsVision({ model, providerBaseUrl } = {}) {
+  const legacy = getAIConfigLegacy()
+  const baseUrl = providerBaseUrl || legacy.config.apiBaseUrl || 'https://api.qnaigc.com/v1'
+  const byProvider = store.get('aiModelsByProvider', {})
+  const models = byProvider[baseUrl] || []
+  const modelId = String(model || legacy.config.defaultModel || '').trim()
+  const found = models.find((m) => String(m.id || '').trim() === modelId)
+  if (found) {
+    const inputModalities = found.input_modalities || found.inputModalities || found.modalities || []
+    if (Array.isArray(inputModalities)) {
+      const modalSet = new Set(inputModalities.map((x) => String(x).toLowerCase()))
+      if (modalSet.has('image') || modalSet.has('vision') || modalSet.has('input_image')) return true
+    }
+  }
+  return isVisionModelId(modelId)
+}
+
+registerChannel('ai-model-supports-vision', async (event, { model, providerBaseUrl } = {}) => {
+  try {
+    const supportsVision = modelSupportsVision({ model, providerBaseUrl })
+    return { success: true, supportsVision }
+  } catch (e) {
+    return { success: false, supportsVision: false, message: e.message || 'detect failed' }
+  }
+})
+
+// 上传并摄取附件（主会话输入框 / 其他渠道复用）
+registerChannel('ai-upload-attachments', async (event, { sessionId, source, attachments, imageMode }) => {
+  try {
+    if (!sessionId || String(sessionId).trim() === '') {
+      return { success: false, message: 'missing sessionId' }
+    }
+    const result = await ingestRoundAttachments({
+      sessionId: String(sessionId).trim(),
+      source: source || 'main',
+      attachments: Array.isArray(attachments) ? attachments : [],
+      imageMode: imageMode === 'vision' ? 'vision' : 'ocr'
+    })
+    return result
+  } catch (e) {
+    return { success: false, message: e.message || 'attachment ingest failed' }
+  }
 })
 
 // 启动 AI 对话（HTTP/浏览器 无 sender 时等待完整响应后返回，应用内则立即返回、流式走 sender）
@@ -4655,7 +4712,16 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
   const nowIso = new Date().toISOString()
   conversationFile.updateConversationMeta(projectKey, mainSessionId, { updatedAt: nowIso })
   if (binding.channel === 'feishu' && mainWindow && mainWindow.webContents) {
-    mainWindow.webContents.send('feishu-session-user-message', { sessionId: mainSessionId, text: message.text })
+    const displayText = message?.metadata?.displayText || message.text
+    const attachments = Array.isArray(message?.metadata?.attachments)
+      ? message.metadata.attachments
+      : (Array.isArray(message?.attachments) ? message.attachments : [])
+    mainWindow.webContents.send('feishu-session-user-message', {
+      sessionId: mainSessionId,
+      text: displayText,
+      attachments,
+      messageId: userMessageId || ''
+    })
   }
   const legacy = getAIConfigLegacy()
   const resolvedKey = legacy && legacy.providerKeys && legacy.config && legacy.providerKeys[legacy.config.apiBaseUrl]
@@ -4679,7 +4745,13 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
         if (channel === 'ai-chat-tool-result' && data) {
           const raw = data.result != null ? (typeof data.result === 'string' ? data.result : JSON.stringify(data.result)) : ''
           if (raw) {
-            const items = parseScreenshotFromToolResult(raw)
+            // execute_command 的流式增量（partial/running）不做截图解析，避免高频 JSON 解析拖慢主线程
+            let skipParse = false
+            try {
+              const obj = JSON.parse(raw)
+              if (obj && typeof obj === 'object' && (obj.partial === true || obj.running === true)) skipParse = true
+            } catch (_) { /* ignore */ }
+            const items = skipParse ? [] : parseScreenshotFromToolResult(raw)
             if (items.length > 0) {
               appLogger?.info?.('[Feishu] 从 tool 结果收集到截图', { name: data.name, count: items.length })
             }

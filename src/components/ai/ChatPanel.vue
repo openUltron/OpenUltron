@@ -88,7 +88,7 @@
           @close="clearMention"
         />
         <!-- 已选中的 @ 文件标签 + 输入行（指令标签 + textarea） -->
-        <div class="textarea-wrap">
+        <div class="textarea-wrap" @dragover="onInputDragOver" @drop="onInputDrop">
           <div v-if="mentionedFiles.length > 0" class="mention-tags">
             <span
               v-for="f in mentionedFiles"
@@ -100,6 +100,22 @@
               <FileCode v-else :size="10" />
               <span>{{ f.type === 'snippet' ? `${f.name}:${f.lineStart}-${f.lineEnd}` : f.name }}</span>
               <button class="mention-tag-remove" @click="removeMentionedFile(f)">×</button>
+            </span>
+          </div>
+          <div v-if="pendingAttachments.length > 0" class="attachment-tags">
+            <span
+              v-for="a in pendingAttachments"
+              :key="a.id"
+              class="attachment-tag"
+              :class="{
+                'attachment-tag-rejected': a.status === 'rejected',
+                'attachment-tag-degraded': a.status === 'degraded'
+              }"
+            >
+              <Paperclip :size="10" />
+              <span>{{ a.name }}</span>
+              <em>{{ formatAttachmentSize(a.size) }}</em>
+              <button class="attachment-tag-remove" @click="removePendingAttachment(a.id)">×</button>
             </span>
           </div>
           <!-- 输入行：左侧技能标签 + 右侧输入框 -->
@@ -123,6 +139,7 @@
                 :disabled="isStreaming"
                 @keydown="onKeyDown"
                 @input="onInput"
+                @paste="onInputPaste"
                 @compositionstart="isComposing = true"
                 @compositionend="isComposing = false"
                 rows="1"
@@ -133,6 +150,21 @@
             </div>
           </div>
         </div>
+        <input
+          ref="fileInputRef"
+          type="file"
+          multiple
+          class="file-input-hidden"
+          @change="onFileInputChange"
+        />
+        <button
+          v-if="!isStreaming"
+          class="attach-btn"
+          :title="t('chat.attach')"
+          @click="openFilePicker"
+        >
+          <Paperclip :size="14" />
+        </button>
         <button
           v-if="isStreaming"
           class="send-btn stop"
@@ -144,7 +176,7 @@
         <button
           v-else
           class="send-btn"
-          :disabled="!inputText.trim() && !hasActiveSlash"
+          :disabled="!inputText.trim() && !hasActiveSlash && pendingAttachments.length === 0"
           @click="handleSend"
           :title="t('chat.send')"
         >
@@ -165,7 +197,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onActivated, onUnmounted } from 'vue'
-import { Loader, AlertCircle, AlertTriangle, Info, Send, Square, Zap, FileCode, Code } from 'lucide-vue-next'
+import { Loader, AlertCircle, AlertTriangle, Info, Send, Square, Zap, FileCode, Code, Paperclip } from 'lucide-vue-next'
 import ChatMessage from './ChatMessage.vue'
 import SlashPalette from './SlashPalette.vue'
 import MentionPalette from './MentionPalette.vue'
@@ -188,6 +220,8 @@ const emit = defineEmits(['first-message', 'model-change', 'provider-change', 's
 
 const useAIChatInstance = useAIChat()
 const { messages, isStreaming, error, pendingConfirm, sendMessage, stopChat, loadMessages, respondConfirm } = useAIChatInstance
+const seenFeishuMessageIds = new Set()
+const seenFeishuContentMap = new Map() // key=sessionId|content -> timestamp
 
 // 带输入框的确认弹框
 const confirmInputText = ref('')
@@ -471,6 +505,7 @@ const buildSystemPrompt = () => {
     '## 当前应用\n' +
     '你正在运行的应用是 **OpenUltron**（本应用）。' +
     '当用户要求修改或配置本机其他项目、某仓库或用户提到的任意名称时，你应当直接操作：用 execute_command 查找路径，用 file_operation 读取与修改配置文件；不要推脱或仅请用户提供路径。具体是什么项目、配置文件名与目录结构由你通过检索或用户表述自行判断。\n' +
+    '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：不要只给安装建议。应先用 user_confirmation 简短征求用户同意（说明将安装什么），同意后立即用 execute_command 执行安装并继续原任务；若用户拒绝，再给降级方案。\n' +
     '**名字与身份**：当用户说「改名字」「改身份」「修改角色」等且未指明外部项目时，指本应用（OpenUltron）的 IDENTITY.md、SOUL.md。两文件在**应用根目录**（与 prompts 同级），如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md；文件名为**大写** IDENTITY.md、SOUL.md，勿写入 prompts/ 或 identity.md（小写）。可引导用户点「编辑我的名字与角色」打开，或用 file_operation 写上述路径；勿误解为改 OpenClaw 等。'
   )
   const todayStr = currentDateLabel()
@@ -726,9 +761,93 @@ const detectMention = () => {
 // ---- 输入 ----
 const inputText = ref('')
 const inputRef = ref(null)
+const fileInputRef = ref(null)
 const messagesRef = ref(null)
 const panelRef = ref(null)
 const isComposing = ref(false)  // 中文输入法合成中
+const pendingAttachments = ref([])
+let pendingAttachmentSeed = 0
+
+const formatAttachmentSize = (n) => {
+  const size = Number(n || 0)
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(2)}MB`
+  if (size >= 1024) return `${(size / 1024).toFixed(1)}KB`
+  return `${size}B`
+}
+
+const removePendingAttachment = (id) => {
+  pendingAttachments.value = pendingAttachments.value.filter(a => a.id !== id)
+}
+
+const addPendingFiles = (files) => {
+  const list = Array.from(files || [])
+  for (const f of list) {
+    const id = `att-${Date.now()}-${++pendingAttachmentSeed}`
+    pendingAttachments.value.push({
+      id,
+      file: f,
+      name: f.name || `file-${pendingAttachmentSeed}`,
+      size: Number(f.size || 0),
+      mime: f.type || 'application/octet-stream',
+      status: 'pending',
+      error: ''
+    })
+  }
+}
+
+const openFilePicker = () => {
+  if (isStreaming.value) return
+  fileInputRef.value?.click()
+}
+
+const onFileInputChange = (e) => {
+  const files = e?.target?.files
+  if (files && files.length > 0) addPendingFiles(files)
+  if (e?.target) e.target.value = ''
+}
+
+const readFileAsBase64 = (file) => new Promise((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onerror = () => reject(new Error('read file failed'))
+  reader.onload = () => {
+    const raw = String(reader.result || '')
+    const i = raw.indexOf(',')
+    resolve(i >= 0 ? raw.slice(i + 1) : raw)
+  }
+  reader.readAsDataURL(file)
+})
+
+const extractImageFilesFromClipboard = (e) => {
+  const items = e?.clipboardData?.items || []
+  const files = []
+  for (const item of items) {
+    if (!item || item.kind !== 'file') continue
+    const f = item.getAsFile ? item.getAsFile() : null
+    if (!f) continue
+    if ((f.type || '').startsWith('image/')) files.push(f)
+  }
+  return files
+}
+
+const onInputPaste = (e) => {
+  if (isStreaming.value) return
+  const imageFiles = extractImageFilesFromClipboard(e)
+  if (imageFiles.length > 0) {
+    addPendingFiles(imageFiles)
+  }
+}
+
+const onInputDragOver = (e) => {
+  if (isStreaming.value) return
+  e.preventDefault()
+}
+
+const onInputDrop = (e) => {
+  if (isStreaming.value) return
+  e.preventDefault()
+  const files = e?.dataTransfer?.files
+  if (files && files.length > 0) addPendingFiles(files)
+}
 
 // ---- 图片预览 ----
 const showImageViewer = ref(false)
@@ -1091,7 +1210,7 @@ const buildSlashSystemPrompt = async (item) => {
 
 const handleSend = async () => {
   const text = inputText.value.trim()
-  if (!text && !hasActiveSlash.value) return
+  if (!text && !hasActiveSlash.value && pendingAttachments.value.length === 0) return
   if (isStreaming.value) return
 
   if (HISTORY_CMD_RE.test(text)) {
@@ -1145,6 +1264,7 @@ const handleSend = async () => {
 
   let finalText = text
   let slashSystemPrompt = null
+  let visionImageParts = []
 
   if (activeSlashSkills.value.length > 0) {
     const prompts = await Promise.all(activeSlashSkills.value.map(s => buildSlashSystemPrompt(s)))
@@ -1156,10 +1276,80 @@ const handleSend = async () => {
     }
     clearSlash()
   }
+  let displayText = finalText  // 展示给用户看的消息（不含文件内容）
+
+  // 上传本轮附件并注入上下文（与飞书入站共用同一主进程 ingest 管道）
+  if (pendingAttachments.value.length > 0) {
+    const filesForUpload = [...pendingAttachments.value]
+    for (const a of filesForUpload) {
+      a.status = 'pending'
+      a.error = ''
+    }
+    try {
+      const visionRes = await window.electronAPI.ai.modelSupportsVision({
+        model: currentModel.value || undefined
+      })
+      const supportsVision = !!visionRes?.supportsVision
+      const sessionForAttachments = currentSessionId.value || `pending-${Date.now()}`
+      const payload = []
+      const base64ByClientId = new Map()
+      for (const a of filesForUpload) {
+        const dataBase64 = await readFileAsBase64(a.file)
+        base64ByClientId.set(a.id, dataBase64)
+        payload.push({
+          clientId: a.id,
+          name: a.name,
+          mime: a.mime,
+          size: a.size,
+          dataBase64
+        })
+      }
+      const res = await window.electronAPI.ai.uploadAttachments({
+        sessionId: sessionForAttachments,
+        source: 'main',
+        attachments: payload,
+        imageMode: supportsVision ? 'vision' : 'ocr'
+      })
+      if (res?.success) {
+        const rejectedNames = new Set((res.rejected || []).map(r => r.name))
+        for (const a of filesForUpload) {
+          a.status = rejectedNames.has(a.name) ? 'rejected' : 'ok'
+        }
+        if (supportsVision) {
+          const imageAccepted = (res.accepted || []).filter(a => a.kind === 'image')
+          visionImageParts = imageAccepted.map((a) => {
+            const b64 = base64ByClientId.get(a.clientId || '')
+            if (!b64) return null
+            const mime = a.mime || 'image/png'
+            return {
+              type: 'image_url',
+              image_url: { url: `data:${mime};base64,${b64}` }
+            }
+          }).filter(Boolean)
+        }
+        const acceptedNames = (res.accepted || []).map(a => `@${a.name}`)
+        if (res.contextText) {
+          finalText = finalText ? `${finalText}\n\n${res.contextText}` : res.contextText
+          if (acceptedNames.length > 0) {
+            displayText = (displayText ? `${displayText}\n` : '') + acceptedNames.join(' ')
+          }
+        }
+        const remaining = filesForUpload.filter(a => a.status !== 'ok')
+        pendingAttachments.value = remaining
+        if ((res.rejected || []).length > 0) {
+          const firstErr = res.rejected[0]?.error || t('chat.attachRejected')
+          error.value = firstErr
+        }
+      } else {
+        error.value = res?.message || t('chat.attachUploadFailed')
+      }
+    } catch (e) {
+      error.value = e?.message || t('chat.attachUploadFailed')
+    }
+  }
 
   // 如果有 @ 的文件，读取内容拼到消息末尾
   // 小文件（< 200 行）直接内联；大文件只传路径，让 AI 用 file_operation 工具自己读
-  let displayText = finalText  // 展示给用户看的消息（不含文件内容）
   if (mentionedFiles.value.length > 0) {
     const snippetParts = []
     const newMentionedFiles = []
@@ -1201,6 +1391,11 @@ const handleSend = async () => {
     mentionedFiles.value = []
   }
 
+  if (!String(finalText || '').trim()) {
+    error.value = error.value || t('chat.attachNothingToSend')
+    return
+  }
+
   if (isFirstMessage) emit('first-message', { text, sessionId: currentSessionId.value })
 
   // 斜杠命令的 systemPrompt 优先级最高，覆盖 buildSystemPrompt
@@ -1212,10 +1407,15 @@ const handleSend = async () => {
     ? slashSystemPrompt + '\n\n---\n' + (basePrompt || '')
     : basePrompt
 
+  const userContentParts = visionImageParts.length > 0
+    ? [{ type: 'text', text: finalText }, ...visionImageParts]
+    : null
+
   sendMessage(finalText, {
     model: currentModel.value || undefined,
     systemPrompt,
     projectPath: props.projectPath || undefined,
+    userContentParts,
     displayContent: finalText !== displayText ? displayText : undefined,
     panelId,
     sessionId: currentSessionId.value || undefined
@@ -1304,6 +1504,16 @@ onMounted(async () => {
   // 飞书会话：收到新消息时切到对应会话并展示，/new 后新消息会进新 sessionId，必须切过去才能看到
   window.electronAPI?.ai?.onFeishuSessionUserMessage?.(async (data) => {
     if (!data?.sessionId || props.projectPath !== '__feishu__') return
+    const incomingMsgId = String(data?.messageId || '').trim()
+    if (incomingMsgId) {
+      if (seenFeishuMessageIds.has(incomingMsgId)) return
+      seenFeishuMessageIds.add(incomingMsgId)
+      if (seenFeishuMessageIds.size > 500) {
+        const keep = Array.from(seenFeishuMessageIds).slice(-250)
+        seenFeishuMessageIds.clear()
+        keep.forEach((id) => seenFeishuMessageIds.add(id))
+      }
+    }
     const incomingSessionId = data.sessionId
     const needSwitch = currentSessionId.value !== incomingSessionId
     if (needSwitch) {
@@ -1321,7 +1531,30 @@ onMounted(async () => {
         useAIChatInstance.clearMessages()
       }
     }
-    messages.value.push({ role: 'user', content: data.text || '' })
+    const text = String(data?.text || '').trim()
+    let attachmentText = ''
+    if (Array.isArray(data?.attachments) && data.attachments.length > 0) {
+      const lines = []
+      for (const a of data.attachments) {
+        if (!a) continue
+        if (a.type === 'image') lines.push(`[图片] ${a.name || ''}`.trim())
+        else if (a.type === 'file') lines.push(`[文件] ${a.name || ''}`.trim())
+        if (a.path) lines.push(`local_path: ${a.path}`)
+      }
+      attachmentText = lines.join('\n')
+    }
+    const userContent = [text, attachmentText].filter(Boolean).join('\n')
+    const dedupeKey = `${incomingSessionId}|${userContent || '[附件]'}`
+    const now = Date.now()
+    const lastTs = seenFeishuContentMap.get(dedupeKey) || 0
+    if (!incomingMsgId && now - lastTs < 8000) return
+    seenFeishuContentMap.set(dedupeKey, now)
+    if (seenFeishuContentMap.size > 500) {
+      const entries = Array.from(seenFeishuContentMap.entries()).slice(-250)
+      seenFeishuContentMap.clear()
+      entries.forEach(([k, v]) => seenFeishuContentMap.set(k, v))
+    }
+    messages.value.push({ role: 'user', content: userContent || '[附件]' })
     useAIChatInstance.setCurrentSessionId(incomingSessionId)
     useAIChatInstance.startStreamingPlaceholder()
     nextTick(() => forceScrollToBottom())
@@ -1741,6 +1974,76 @@ defineExpose({ clearMessages, loadMessages, messages, handleExternalSend, isStre
   flex-shrink: 0;
 }
 .mention-tag-remove:hover { opacity: 1; }
+
+.attachment-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px 4px;
+  background: var(--ou-bg-main);
+  border-bottom: 1px solid var(--ou-border);
+}
+.attachment-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 6px;
+  background: color-mix(in srgb, var(--ou-success) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ou-success) 30%, transparent);
+  border-radius: 10px;
+  font-size: 11px;
+  color: var(--ou-text);
+  max-width: 230px;
+}
+.attachment-tag span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-tag em {
+  font-style: normal;
+  opacity: 0.7;
+}
+.attachment-tag-rejected {
+  background: color-mix(in srgb, var(--ou-error) 14%, transparent);
+  border-color: color-mix(in srgb, var(--ou-error) 30%, transparent);
+}
+.attachment-tag-degraded {
+  background: color-mix(in srgb, var(--ou-warning) 14%, transparent);
+  border-color: color-mix(in srgb, var(--ou-warning) 30%, transparent);
+}
+.attachment-tag-remove {
+  background: none;
+  border: none;
+  color: inherit;
+  opacity: 0.55;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+}
+.attachment-tag-remove:hover { opacity: 1; }
+
+.file-input-hidden { display: none; }
+.attach-btn {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--ou-border);
+  background: var(--ou-bg-main);
+  color: var(--ou-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.attach-btn:hover {
+  border-color: var(--ou-primary);
+  color: var(--ou-primary);
+}
 
 .send-btn {
   flex-shrink: 0;
