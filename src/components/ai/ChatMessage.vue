@@ -22,13 +22,18 @@
         <div class="tc-left">
           <div class="tc-status-dot"></div>
           <component :is="toolIcon(tc.name)" :size="12" class="tc-type-icon" />
-          <span class="tc-name">{{ toolLabel(tc.name) }}</span>
-          <!-- 执行命令时始终在标题行显示命令内容，执行过程中也能看到 -->
-          <span v-if="tc.name === 'execute_command' && (commandOf(tc) || cwdOf(tc))" class="tc-summary-text tc-command-inline">
-            <code v-if="commandOf(tc)" class="tc-cmd-inline">{{ commandOf(tc) }}</code>
-            <span v-if="cwdOf(tc)" class="tc-cwd-inline"> ({{ cwdOf(tc) }})</span>
-          </span>
-          <span v-else class="tc-summary-text">{{ toolSummary(tc) }}</span>
+          <div class="tc-texts">
+            <div class="tc-topline">
+              <span class="tc-name">{{ toolLabel(tc.name) }}</span>
+              <!-- 执行命令时始终在标题行显示命令内容，执行过程中也能看到 -->
+              <span v-if="tc.name === 'execute_command' && (commandOf(tc) || cwdOf(tc))" class="tc-summary-text tc-command-inline">
+                <code v-if="commandOf(tc)" class="tc-cmd-inline">{{ commandOf(tc) }}</code>
+                <span v-if="cwdOf(tc)" class="tc-cwd-inline"> ({{ cwdOf(tc) }})</span>
+              </span>
+              <span v-else class="tc-summary-text">{{ toolSummary(tc) }}</span>
+            </div>
+            <div v-if="runningSubtitle(tc)" class="tc-subtitle">{{ runningSubtitle(tc) }}</div>
+          </div>
         </div>
         <div class="tc-right">
           <span v-if="tc.name === 'execute_command'" class="tc-metrics-compact">
@@ -364,6 +369,59 @@ const elapsedSecondsOf = (tc) => {
 }
 
 const timeoutSecondsOf = (tc) => Math.max(1, Math.floor(timeoutMsOf(tc) / 1000))
+
+const parseJsonSafe = (raw) => {
+  try { return JSON.parse(raw) } catch { return null }
+}
+
+const shortenLine = (s, max = 120) => {
+  const t = String(s || '').replace(/\s+/g, ' ').trim()
+  if (!t) return ''
+  return t.length > max ? `${t.slice(0, max)}…` : t
+}
+
+const extractCommandFromLogLine = (line) => {
+  const text = String(line || '').trim()
+  if (!text) return ''
+  // [tool_call] execute_command {"command":"..."}
+  if (text.includes('execute_command')) {
+    const m = text.match(/execute_command\s+(\{.*\})$/)
+    if (m && m[1]) {
+      const obj = parseJsonSafe(m[1])
+      if (obj && obj.command) return String(obj.command)
+    }
+    const after = text.split('execute_command').slice(1).join('execute_command').trim()
+    if (after) return after
+  }
+  // [codex][meta] cmd=/path/codex exec ...
+  const cmdIdx = text.indexOf('cmd=')
+  if (cmdIdx >= 0) {
+    return text.slice(cmdIdx + 4).trim()
+  }
+  return ''
+}
+
+const runningSubtitle = (tc) => {
+  if (!isToolRunning(tc)) return ''
+  if (tc.name === 'execute_command') {
+    const cmd = shortenLine(commandOf(tc))
+    return cmd ? `正在执行：${cmd}` : ''
+  }
+  if (tc.name !== 'sessions_spawn') return ''
+  const obj = parseJsonSafe(tc.result || '')
+  if (!obj || typeof obj !== 'object') return ''
+  const lines = []
+  if (Array.isArray(obj.log_lines)) lines.push(...obj.log_lines.map(x => String(x || '')))
+  if (typeof obj.stdout === 'string' && obj.stdout.trim()) lines.push(...obj.stdout.split('\n'))
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const ln = String(lines[i] || '').trim()
+    if (!ln) continue
+    const cmd = shortenLine(extractCommandFromLogLine(ln))
+    if (cmd) return `正在执行：${cmd}`
+    if (!ln.startsWith('[token]')) return `进行中：${shortenLine(ln)}`
+  }
+  return ''
+}
 
 const formatResult = (resultStr, toolName) => {
   try {
