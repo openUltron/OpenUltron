@@ -864,6 +864,19 @@ async function sendMessage(options = {}) {
       return { success: true, message_id: res.data && res.data.message_id, message: '图片发送成功' }
     }
     if (file_key || file_path) {
+      const imageExts = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
+      const lowerPath = String(file_path || '').trim().toLowerCase()
+      const ext = lowerPath ? path.extname(lowerPath) : ''
+      // 兜底：调用方把图片误传到 file_path 时，强制按图片上传发送，避免 file 模式报 Invalid request param
+      if (!file_key && file_path && ext && imageExts.has(ext) && fs.existsSync(file_path)) {
+        const buf = fs.readFileSync(file_path)
+        if (!buf || buf.length === 0) return { success: false, message: '图片文件为空' }
+        const res = await sendImage(receiveId, {
+          image_base64: buf.toString('base64'),
+          filename: file_name || path.basename(file_path)
+        }, receiveIdType)
+        return { success: true, message_id: res.data && res.data.message_id, message: '图片发送成功' }
+      }
       let key = file_key
       let name = file_name
       if (file_path && fs.existsSync(file_path)) {

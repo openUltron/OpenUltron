@@ -190,6 +190,9 @@ class StdioMcpConnection {
     this.tools = []
     this.ready = false
     this._restarting = false
+    this._chromeLastNavigatedUrl = ''
+    this._chromeRecoverAttempted = false
+    this._chromeFallbackNavigateAttempted = false
   }
 
   async start() {
@@ -333,6 +336,18 @@ class StdioMcpConnection {
   }
 
   async callTool(originalName, args) {
+    if (this.name === 'chrome-devtools') {
+      if ((originalName === 'navigate_page' || originalName === 'new_page') && args && typeof args.url === 'string') {
+        const nextUrl = String(args.url || '').trim()
+        if (nextUrl && nextUrl !== 'about:blank' && !nextUrl.startsWith('chrome-error://')) {
+          this._chromeLastNavigatedUrl = nextUrl
+        }
+      }
+      if (originalName !== 'take_screenshot') {
+        this._chromeRecoverAttempted = false
+        this._chromeFallbackNavigateAttempted = false
+      }
+    }
     if (this.name === 'chrome-devtools' && originalName === 'take_screenshot') {
       await this._ensureChromePageReadyForScreenshot()
     }
@@ -390,8 +405,10 @@ class StdioMcpConnection {
   }
 
   async _ensureChromePageReadyForScreenshot() {
-    const maxWaitMs = 8000
+    const maxWaitMs = 20000
     const start = Date.now()
+    // 导航后给页面一个最小稳定窗口，避免刚完成导航就截图导致空白
+    await new Promise((r) => setTimeout(r, 900))
     while (Date.now() - start < maxWaitMs) {
       let state = null
       try {
@@ -406,22 +423,45 @@ class StdioMcpConnection {
       const textLen = Number((state && state.textLen) || 0)
       const childCount = Number((state && state.childCount) || 0)
       const invalidPage = !href || href === 'about:blank' || href.startsWith('chrome-error://')
+      if (!invalidPage && href && href !== 'about:blank' && !href.startsWith('chrome-error://')) {
+        this._chromeLastNavigatedUrl = href
+      }
       if (invalidPage) {
+        if (!this._chromeRecoverAttempted) {
+          this._chromeRecoverAttempted = true
+          try {
+            const switched = await this._trySelectNonBlankPage()
+            if (switched) {
+              await new Promise((r) => setTimeout(r, 700))
+              continue
+            }
+          } catch (_) {}
+        }
+        const fallbackUrl = String(this._chromeLastNavigatedUrl || '').trim()
+        if (!this._chromeFallbackNavigateAttempted && fallbackUrl && fallbackUrl !== 'about:blank' && !fallbackUrl.startsWith('chrome-error://')) {
+          this._chromeFallbackNavigateAttempted = true
+          try {
+            await this._callToolAndParse('navigate_page', { type: 'url', url: fallbackUrl, timeout: 15000 })
+            await new Promise((r) => setTimeout(r, 900))
+            continue
+          } catch (e) {
+            console.warn(`[MCP:${this.name}] 无法从 about:blank 恢复到最近页面:`, e.message || String(e))
+          }
+        }
         await this._restartChromeSession('invalid_page_before_screenshot')
         const err = new Error(`chrome-devtools 当前页不可截图: ${href || 'about:blank'}。请先导航到目标页面后再截图。`)
         err.code = 'SCREENSHOT_INVALID_PAGE'
         err.nonRetryable = true
         throw err
       }
-      const looksReady = (ready === 'complete' || ready === 'interactive') && (textLen > 0 || childCount > 0)
+      const hasDomSignal = textLen > 0 || childCount > 0
+      const looksReady = (ready === 'complete' || ready === 'interactive') && (hasDomSignal || ready === 'complete')
       if (looksReady) return
       await new Promise((r) => setTimeout(r, 300))
     }
-    await this._restartChromeSession('page_not_ready_before_screenshot')
-    const err = new Error('chrome-devtools 页面渲染未就绪，截图已中止。请先等待页面加载完成后重试。')
-    err.code = 'SCREENSHOT_NOT_READY'
-    err.nonRetryable = true
-    throw err
+    // 页面可能是重前端应用（canvas/异步渲染），就绪信号不稳定；此时不重启会话，放行一次截图尝试
+    console.warn(`[MCP:${this.name}] 页面就绪检查超时，放行截图尝试（不重启会话）`)
+    return
   }
 
   async _restartChromeSession(reason = 'unknown') {
@@ -436,6 +476,30 @@ class StdioMcpConnection {
     } finally {
       this._restarting = false
     }
+  }
+
+  async _trySelectNonBlankPage() {
+    const pages = await this._callToolAndParse('list_pages', {})
+    const raw = String((pages && (pages.result || pages.text || pages.content)) || '')
+    if (!raw) return false
+    const lines = raw.split('\n')
+    for (const line of lines) {
+      const m = line.match(/^\s*(\d+):\s*(.+)$/)
+      if (!m) continue
+      const pageId = Number(m[1])
+      const desc = String(m[2] || '').trim()
+      if (!Number.isFinite(pageId)) continue
+      const lower = desc.toLowerCase()
+      if (lower.startsWith('about:blank') || lower.startsWith('chrome-error://')) continue
+      await this._callToolAndParse('select_page', { pageId, bringToFront: true })
+      const url = desc.split(' ')[0].trim()
+      if (url && url !== 'about:blank' && !url.startsWith('chrome-error://')) {
+        this._chromeLastNavigatedUrl = url
+      }
+      console.warn(`[MCP:${this.name}] 截图前已切换到可用页签: ${desc}`)
+      return true
+    }
+    return false
   }
 
   stop() {
@@ -747,6 +811,35 @@ function clearChromeDevtoolsProfileLock() {
   }
 }
 
+// 清理遗留的 chrome-devtools-mcp 关联 Chrome 进程（仅匹配专用 profile 路径，避免误杀用户浏览器）
+function cleanupChromeDevtoolsOrphans() {
+  if (process.platform === 'win32') return
+  const home = process.env.HOME || os.homedir()
+  if (!home) return
+  const marker = path.join(home, '.cache', 'chrome-devtools-mcp', 'chrome-profile')
+  try {
+    const out = execSync('ps -axo pid=,command=', { encoding: 'utf8', timeout: 2500 })
+    const lines = String(out || '').split('\n')
+    let killed = 0
+    for (const line of lines) {
+      const m = line.match(/^\s*(\d+)\s+(.+)$/)
+      if (!m) continue
+      const pid = Number(m[1])
+      const cmd = String(m[2] || '')
+      if (!Number.isFinite(pid) || pid <= 1 || pid === process.pid) continue
+      if (!cmd.includes(marker)) continue
+      if (!/(chrome|chromium|headless)/i.test(cmd)) continue
+      try {
+        process.kill(pid, 'SIGKILL')
+        killed++
+      } catch (_) {}
+    }
+    if (killed > 0) console.warn(`[MCP] 已清理 chrome-devtools 遗留浏览器进程: ${killed}`)
+  } catch (e) {
+    console.warn('[MCP] cleanupChromeDevtoolsOrphans:', e.message)
+  }
+}
+
 // ──────────────────────────────────────────────
 // McpManager: 统一管理所有 MCP server 实例
 // ──────────────────────────────────────────────
@@ -783,6 +876,7 @@ class McpManager {
     this.errors.delete(cfg.name)
     // chrome-devtools-mcp 常因上次进程未正常退出留下 Singleton 锁，导致「被占用」无法启动；启动前清除锁
     if (cfg.name === 'chrome-devtools') {
+      cleanupChromeDevtoolsOrphans()
       clearChromeDevtoolsProfileLock()
     }
     const conn = cfg.type === 'sse'

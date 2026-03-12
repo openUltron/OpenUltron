@@ -3005,7 +3005,7 @@ const aiMcpManager = new McpManager()
 const BUILTIN_CHROME_DEVTOOLS_MCP = {
   'chrome-devtools': {
     command: 'npx',
-    args: ['-y', 'chrome-devtools-mcp@latest', '--headless=true', '--isolated=true']
+    args: ['-y', 'chrome-devtools-mcp@latest', '--headless=false', '--isolated=true']
   }
 }
 
@@ -3021,8 +3021,9 @@ function parseMcpJsonConfig(jsonStr, disabledServers = []) {
       let args = rawArgs
       if (name === 'chrome-devtools') {
         const strArgs = rawArgs.map((x) => String(x))
-        if (!strArgs.some((x) => x.startsWith('--headless'))) args.push('--headless=true')
-        if (!strArgs.some((x) => x.startsWith('--isolated'))) args.push('--isolated=true')
+        args = strArgs.filter((x) => !x.startsWith('--headless'))
+        args.push('--headless=false')
+        if (!args.some((x) => x.startsWith('--isolated'))) args.push('--isolated=true')
       }
       return ({
       name,
@@ -3683,6 +3684,41 @@ function inferPreferredExternalRuntimeFromText(text = '') {
   return ''
 }
 
+function buildDelegatedTaskWithParentContext(task = '', { projectPath = '', parentSessionId = '' } = {}) {
+  const rawTask = String(task || '').trim()
+  if (!rawTask || !parentSessionId || !projectPath) return rawTask
+  try {
+    const lines = []
+    const target = findRecentPageTarget(projectPath, parentSessionId)
+    if (target && target.kind === 'file' && target.value) {
+      lines.push(`最近网页文件: ${target.value}`)
+    } else if (target && target.kind === 'url' && target.value) {
+      lines.push(`最近网页URL: ${target.value}`)
+    }
+    const projectKey = conversationFile.hashProjectPath(projectPath)
+    const conv = conversationFile.loadConversation(projectKey, parentSessionId)
+    const msgs = Array.isArray(conv?.messages) ? conv.messages : []
+    const recent = msgs
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+      .slice(-6)
+      .map((m) => {
+        const txt = m.role === 'assistant' ? getAssistantText(m) : String(m.content || '')
+        const oneLine = String(txt || '').replace(/\s+/g, ' ').trim()
+        if (!oneLine) return ''
+        return `${m.role === 'user' ? '用户' : '助手'}: ${oneLine.slice(0, 180)}`
+      })
+      .filter(Boolean)
+    if (recent.length > 0) {
+      lines.push('最近对话:')
+      lines.push(...recent)
+    }
+    if (lines.length === 0) return rawTask
+    return `${rawTask}\n\n[主会话上下文]\n${lines.map((x) => `- ${x}`).join('\n')}`
+  } catch (_) {
+    return rawTask
+  }
+}
+
 async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider, eventSink, feishuChatId }, subSessionId) {
   const messages = []
   const rolePrompt = roleName && String(roleName).trim()
@@ -3745,6 +3781,10 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
 async function runSubChat(opts) {
   const { task, systemPrompt, roleName, model, projectPath, provider, runtime, parentSessionId, feishuChatId, stream } = opts || {}
   const subSessionId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const delegatedTask = buildDelegatedTaskWithParentContext(task, {
+    projectPath: projectPath || '__main_chat__',
+    parentSessionId: parentSessionId || ''
+  })
   const commandLogLines = []
   const pushCommandLog = (line) => {
     const text = String(line || '').replace(/\r/g, '').trim()
@@ -3786,7 +3826,7 @@ async function runSubChat(opts) {
   const userRuntime = String(runtime || '').trim()
   let effectiveRuntime = userRuntime
   if (!effectiveRuntime || effectiveRuntime.toLowerCase() === 'auto') {
-    const inferred = inferPreferredExternalRuntimeFromText([task, systemPrompt, roleName].filter(Boolean).join('\n'))
+    const inferred = inferPreferredExternalRuntimeFromText([delegatedTask, systemPrompt, roleName].filter(Boolean).join('\n'))
     effectiveRuntime = inferred || 'internal'
   }
   pushCommandLog(`[meta] effective_runtime=${effectiveRuntime || 'internal'}`)
@@ -3874,7 +3914,7 @@ async function runSubChat(opts) {
           }
         }
         const out = await runByInternalSubAgent({
-          task,
+          task: delegatedTask,
           systemPrompt,
           roleName,
           model,
@@ -3906,7 +3946,14 @@ async function runSubChat(opts) {
           })
         } catch (_) {}
         attemptErrors.push(`[internal] ${out.error || '执行失败'}`)
-        try { sessionRegistry.markError(subSessionId, out.error || 'internal执行失败') } catch (_) {}
+        try {
+          sessionRegistry.updateProgress(subSessionId, {
+            phase: 'tool_running',
+            progress: 24,
+            last_action: `internal失败，准备重试: ${String(out.error || '执行失败').slice(0, 120)}`,
+            eta: null
+          })
+        } catch (_) {}
         continue
       }
       const spec = EXTERNAL_SUBAGENT_SPECS.find(s => s.id === rt)
@@ -3954,7 +4001,7 @@ async function runSubChat(opts) {
       try {
         out = await runByExternalSubAgent(
           spec,
-          { task, systemPrompt, roleName, projectPath },
+          { task: delegatedTask, systemPrompt, roleName, projectPath },
           resolvedCommand,
           heartbeat,
           (evt = {}) => {
@@ -4029,7 +4076,14 @@ async function runSubChat(opts) {
         })
       } catch (_) {}
       attemptErrors.push(`[${rt}] ${e.message || String(e)}`)
-      try { sessionRegistry.markError(subSessionId, e.message || String(e)) } catch (_) {}
+      try {
+        sessionRegistry.updateProgress(subSessionId, {
+          phase: 'tool_running',
+          progress: 24,
+          last_action: `子Agent(${rt})异常，准备回退: ${String(e.message || String(e)).slice(0, 120)}`,
+          eta: null
+        })
+      } catch (_) {}
     }
   }
 
@@ -4166,12 +4220,12 @@ const aiGateway = createGateway({
       m.tool_calls.some(tc => tc && tc.function && delegatedToolNames.has(tc.function.name))
     )
     if (aiAlreadySentFeishu && !cleanedFeishu && !cleanedSpawn && imageItems.length === 0 && fileItems.length === 0) return
-    const rawTextToSend = cleanedFeishu || cleanedSpawn || (imageItems.length > 0 ? '截图已发至当前会话。' : '（无回复内容）')
+    const rawTextToSend = cleanedFeishu || cleanedSpawn || (imageItems.length > 0 ? '截图已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
     const textToSend = stripFalseDeliveredClaims(rawTextToSend, {
       hasImages: imageItems.length > 0,
       hasFiles: fileItems.length > 0,
       channel: 'feishu'
-    }) || (imageItems.length > 0 ? '截图已发至当前会话。' : '（无回复内容）')
+    }) || (imageItems.length > 0 ? '截图已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
     const outBinding = { sessionId, projectPath: '__feishu__', channel: 'feishu', remoteId: chatId, feishuChatId: chatId }
     const outPayload = { text: textToSend, images: imageItems, files: fileItems }
     appLogger?.info?.('[Feishu] 回发载荷', {
@@ -5807,7 +5861,9 @@ const channelCurrentRun = new Map() // key -> Array<{ runId, runSessionId, promi
 const channelKeyByRunSessionId = new Map() // runSessionId -> key（供 stop_previous_task / wait_for_previous_run 用）
 const runStartTimeBySessionId = new Map() // runSessionId -> startTime
 const abortedRunSessionIds = new Set() // 被 stop_previous_task 停掉的 run，完成时不合并、不回发
-const LONG_RUN_NOTIFY_STEPS_SEC = [30, 90, 180, 300]
+const LONG_RUN_NOTIFY_START_SEC = 60
+const LONG_RUN_NOTIFY_INTERVAL_SEC = 60
+const LONG_RUN_NOTIFY_MAX_TIMES = 5
 const recentArtifactsBySession = new Map() // sessionId -> Array<{ path: string, kind: 'image'|'file', ts: number }>
 
 function rememberSessionArtifacts(sessionId, payload = {}) {
@@ -6373,32 +6429,43 @@ function buildSingleRunProgressSummary(key, runSessionId) {
 function createLongRunNotifier({ binding, mainSessionId, projectPath, chatId, key, runSessionId }) {
   let stopped = false
   const timers = []
+  let sentCount = 0
   const stopAll = () => {
     stopped = true
     for (const t of timers) clearTimeout(t)
   }
-  const schedule = () => {
-    for (let i = 0; i < LONG_RUN_NOTIFY_STEPS_SEC.length; i++) {
-      const sec = LONG_RUN_NOTIFY_STEPS_SEC[i]
-      const t = setTimeout(() => {
-        if (stopped) return
-        const snapshot = sessionRegistry.getSnapshot()
-        const s = snapshot.find(x => x.sessionId === runSessionId)
-        const st = String(s?.status || '').toLowerCase()
-        if (st === 'completed' || st === 'idle' || st === 'error' || st === 'failed' || st === 'closed') {
-          stopAll()
-          return
-        }
-        const summary = buildSingleRunProgressSummary(key, runSessionId)
-        if (!summary) return
-        const text = i === 0
-          ? `任务仍在处理中，请耐心等待。\n${summary}`
-          : `任务还在继续执行中，请再稍等一下。\n${summary}`
-        const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
-        eventBus.emit('chat.session.completed', { binding: outBinding, payload: { text } })
-      }, sec * 1000)
-      timers.push(t)
+  const notifyOnce = () => {
+    if (stopped) return
+    if (sentCount >= LONG_RUN_NOTIFY_MAX_TIMES) {
+      stopAll()
+      return
     }
+    const snapshot = sessionRegistry.getSnapshot()
+    const s = snapshot.find(x => x.sessionId === runSessionId)
+    const st = String(s?.status || '').toLowerCase()
+    if (st === 'completed' || st === 'idle' || st === 'error' || st === 'failed' || st === 'closed') {
+      stopAll()
+      return
+    }
+    const summary = buildSingleRunProgressSummary(key, runSessionId)
+    if (!summary) return
+    const text = sentCount === 0
+      ? `任务仍在处理中，请耐心等待。\n${summary}`
+      : `任务还在继续执行中，请再稍等一下。\n${summary}`
+    const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+    eventBus.emit('chat.session.completed', { binding: outBinding, payload: { text } })
+    sentCount++
+  }
+  const schedule = () => {
+    const first = setTimeout(() => {
+      if (stopped) return
+      notifyOnce()
+      const interval = setInterval(() => {
+        notifyOnce()
+      }, LONG_RUN_NOTIFY_INTERVAL_SEC * 1000)
+      timers.push(interval)
+    }, LONG_RUN_NOTIFY_START_SEC * 1000)
+    timers.push(first)
   }
   schedule()
   return stopAll
@@ -6910,18 +6977,23 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
         forcedSpawnText = `子 Agent 执行失败：${e.message || String(e)}`
       }
     }
+    const rawFallbackText = (toSend && String(toSend).trim())
+      ? String(toSend).trim()
+      : ((spawnResultText && String(spawnResultText).trim()) ? String(spawnResultText).trim() : '')
     const baseTextToSend = forcedSpawnText
       ? forcedSpawnText
       : ((cleanedText && cleanedText.trim())
         ? cleanedText.trim()
         : ((cleanedSpawnText && cleanedSpawnText.trim())
             ? cleanedSpawnText.trim()
-            : (imageItems.length > 0 ? '截图已发至当前会话。' : null)))
+            : (rawFallbackText || (imageItems.length > 0 ? '截图已发至当前会话。' : null))))
     const textToSend = stripFalseDeliveredClaims(baseTextToSend, {
       hasImages: imageItems.length > 0,
       hasFiles: fileItems.length > 0,
       channel: binding.channel
-    })
+    }) || (rawFallbackText || (imageItems.length > 0
+      ? '截图已发至当前会话。'
+      : '任务已执行完成，但未生成可展示的文本结果。'))
     if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
       await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
     }
@@ -6944,7 +7016,11 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     // AI 已主动发消息且没有额外文本/图片要补发，跳过自动回复
     if (aiAlreadySent && !textToSend && imageItems.length === 0 && fileItems.length === 0) return
     const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
-    const outPayload = { text: textToSend || '（无回复内容）', images: imageItems, files: fileItems }
+    const outPayload = {
+      text: textToSend || (imageItems.length > 0 ? '截图已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。'),
+      images: imageItems,
+      files: fileItems
+    }
     if (binding.channel === 'telegram') {
       try {
         const tgCfg = require('./openultron-config').getTelegram()

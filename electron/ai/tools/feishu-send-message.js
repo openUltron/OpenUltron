@@ -1,4 +1,5 @@
 // 工具：向飞书会话发送消息（文本 / 图片 / 文件 / 富文本 / 语音 / 图文）
+const fs = require('fs')
 const path = require('path')
 const feishuNotify = require('../feishu-notify')
 const { logger: appLogger } = require('../../app-logger')
@@ -127,6 +128,11 @@ function buildPostPayload(title, content) {
   return { zh_cn: { title: title || '通知', content: paragraphs } }
 }
 
+function isImageExt(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase()
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'].includes(ext)
+}
+
 async function execute(args, context = {}) {
   const {
     chat_id, text, image_key, image_base64, image_filename, file_key, file_name, file_path, post_title, post_content,
@@ -139,12 +145,44 @@ async function execute(args, context = {}) {
     const fallbackChatId = String(context.feishuChatId || '').trim()
     if (fallbackChatId) opts.chat_id = fallbackChatId
   }
+  // 容错：截图场景中模型偶发把图片路径填到 file_path；这里自动转为 image_base64，避免飞书 file 模式参数报错
+  const normalizedFilePath = file_path && String(file_path).trim() ? String(file_path).trim() : ''
+  if (!image_key && !image_base64 && normalizedFilePath && isImageExt(normalizedFilePath) && fs.existsSync(normalizedFilePath)) {
+    try {
+      const buf = fs.readFileSync(normalizedFilePath)
+      if (buf && buf.length > 0) {
+        const inferredName = (file_name && String(file_name).trim()) || path.basename(normalizedFilePath) || 'image.png'
+        args = {
+          ...(args || {}),
+          image_base64: buf.toString('base64'),
+          image_filename: inferredName,
+          file_path: undefined,
+          file_name: undefined
+        }
+      }
+    } catch (e) {
+      appLogger?.warn?.('[FeishuTool] 图片路径自动转 image_base64 失败', {
+        path: normalizedFilePath,
+        error: e.message || String(e)
+      })
+    }
+  }
+  const normalizedImageBase64 = (args && typeof args.image_base64 === 'string' && args.image_base64.length > 0)
+    ? args.image_base64
+    : image_base64
+  const normalizedImageFilename = (args && typeof args.image_filename === 'string' && args.image_filename.length > 0)
+    ? args.image_filename
+    : image_filename
+  const normalizedFilePath2 = (args && typeof args.file_path === 'string' && args.file_path.trim())
+    ? String(args.file_path).trim()
+    : normalizedFilePath
+
   let mode = 'text'
   if (post_title != null || (post_content && post_content.length > 0)) mode = 'post'
   else if (audio_file_key || audio_file_path || audio_text) mode = 'audio'
   else if (media_file_key || media_file_path) mode = 'media'
-  else if (image_key || image_base64) mode = 'image'
-  else if (file_key || file_path) mode = 'file'
+  else if (image_key || normalizedImageBase64) mode = 'image'
+  else if (file_key || normalizedFilePath2) mode = 'file'
 
   if (post_title != null || (post_content && post_content.length > 0)) {
     opts.post = buildPostPayload(post_title, post_content)
@@ -164,14 +202,14 @@ async function execute(args, context = {}) {
     opts.media_file_name = media_file_name && media_file_name.trim() ? media_file_name.trim() : undefined
     opts.media_file_path = media_file_path && media_file_path.trim() ? media_file_path.trim() : undefined
     opts.media_image_key = media_image_key && media_image_key.trim() ? media_image_key.trim() : undefined
-  } else if (image_key || image_base64) {
+  } else if (image_key || normalizedImageBase64) {
     opts.image_key = image_key && image_key.trim() ? image_key.trim() : undefined
-    opts.image_base64 = image_base64 || undefined
-    opts.image_filename = image_filename || 'image.png'
-  } else if (file_key || file_path) {
+    opts.image_base64 = normalizedImageBase64 || undefined
+    opts.image_filename = normalizedImageFilename || 'image.png'
+  } else if (file_key || normalizedFilePath2) {
     opts.file_key = file_key && file_key.trim() ? file_key.trim() : undefined
     opts.file_name = file_name && file_name.trim() ? file_name.trim() : undefined
-    opts.file_path = file_path && file_path.trim() ? file_path.trim() : undefined
+    opts.file_path = normalizedFilePath2 || undefined
   } else if (text != null) {
     opts.text = String(text)
   }
