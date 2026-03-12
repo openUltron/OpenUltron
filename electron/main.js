@@ -3323,8 +3323,7 @@ const EXTERNAL_SUBAGENT_SPECS = [
     command: 'codex',
     versionArgs: ['--version'],
     runArgBuilders: [
-      (prompt) => ['exec', prompt],
-      (prompt) => ['run', prompt]
+      (prompt) => ['exec', '--skip-git-repo-check', prompt]
     ]
   },
   {
@@ -3458,8 +3457,19 @@ async function runByExternalSubAgent(spec, ctx) {
   const prompt = buildExternalPrompt(ctx)
   const cwd = ctx.projectPath || getWorkspaceRoot()
   const attempts = []
-  for (const buildArgs of (spec.runArgBuilders || [])) {
+  const builders = Array.isArray(spec.runArgBuilders) ? spec.runArgBuilders : []
+  for (let idx = 0; idx < builders.length; idx++) {
+    const buildArgs = builders[idx]
     const args = buildArgs(prompt)
+    try {
+      appLogger?.info?.('[SubAgentDispatch] 外部子Agent执行尝试', {
+        runtime: `external:${spec.id}`,
+        attempt: idx + 1,
+        total: builders.length,
+        command: spec.command,
+        argsPreview: args.map((x) => String(x)).slice(0, 4)
+      })
+    } catch (_) {}
     const r = await runCliCommand(spec.command, args, { cwd, timeoutMs: 10 * 60 * 1000 })
     const output = String(r.stdout || r.stderr || '').trim()
     const errout = String(r.stderr || '').trim()
@@ -3657,11 +3667,23 @@ async function runSubChat(opts) {
         }
       }
       try {
+        const attemptSummary = Array.isArray(out.attempts)
+          ? out.attempts.map((x, i) => ({
+            i: i + 1,
+            success: !!x.success,
+            exitCode: x.exitCode,
+            error: x.error || '',
+            stderr: x.stderr || '',
+            args: Array.isArray(x.args) ? x.args.slice(0, 4).map(v => String(v)) : []
+          }))
+          : []
         appLogger?.warn?.('[SubAgentDispatch] 外部子Agent执行失败，将尝试回退', {
           subSessionId,
           runtime: out.runtime || `external:${rt}`,
-          error: out.error || '执行失败'
+          error: out.error || '执行失败',
+          attempts: attemptSummary
         })
+        console.warn('[SubAgentDispatch] 外部子Agent失败并回退', out.runtime || `external:${rt}`, out.error || '执行失败', attemptSummary)
       } catch (_) {}
       attemptErrors.push(`[${out.runtime || `external:${rt}`}] ${out.error || '执行失败'}`)
     } catch (e) {
