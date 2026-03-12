@@ -5327,6 +5327,7 @@ const channelCurrentRun = new Map() // key -> Array<{ runId, runSessionId, promi
 const channelKeyByRunSessionId = new Map() // runSessionId -> key（供 stop_previous_task / wait_for_previous_run 用）
 const runStartTimeBySessionId = new Map() // runSessionId -> startTime
 const abortedRunSessionIds = new Set() // 被 stop_previous_task 停掉的 run，完成时不合并、不回发
+const LONG_RUN_NOTIFY_STEPS_SEC = [30, 90, 180, 300]
 
 function isProgressQueryText(text) {
   const t = String(text || '').trim()
@@ -5439,6 +5440,58 @@ function buildChannelProgressSummary(key) {
   return lines.join('\n')
 }
 
+function buildSingleRunProgressSummary(key, runSessionId) {
+  const runs = (channelCurrentRun.get(key) || [])
+  const run = runs.find(r => r.runSessionId === runSessionId)
+  if (!run) return ''
+  const snapshot = sessionRegistry.getSnapshot()
+  const s = snapshot.find(x => x.sessionId === runSessionId)
+  if (!s) return ''
+  const status = statusTextForUser(s?.status || 'running')
+  const progressPct = Number(s?.progress?.progress || 0)
+  const phase = s?.progress?.phase ? phaseTextForUser(String(s.progress.phase)) : ''
+  const lastAction = s?.progress?.last_action ? humanizeLastAction(String(s.progress.last_action)) : ''
+  const eta = s?.progress?.eta ? String(s.progress.eta) : ''
+  const duration = formatRunningDuration(run.startTime)
+  const taskText = summarizeTaskText(run.delegatedTask || run.userTask || '')
+  const parts = [
+    `状态：${status}`,
+    phase ? `阶段：${phase}` : '',
+    `进度：${Math.max(0, Math.min(100, progressPct))}%`,
+    `已运行：${duration}`,
+    eta ? `预计剩余：${eta}` : '',
+    taskText ? `任务：${taskText}` : '',
+    lastAction ? `当前：${lastAction}` : ''
+  ].filter(Boolean)
+  return parts.join('，')
+}
+
+function createLongRunNotifier({ binding, mainSessionId, projectPath, chatId, key, runSessionId }) {
+  let stopped = false
+  const timers = []
+  const schedule = () => {
+    for (let i = 0; i < LONG_RUN_NOTIFY_STEPS_SEC.length; i++) {
+      const sec = LONG_RUN_NOTIFY_STEPS_SEC[i]
+      const t = setTimeout(() => {
+        if (stopped) return
+        const summary = buildSingleRunProgressSummary(key, runSessionId)
+        if (!summary) return
+        const text = i === 0
+          ? `任务仍在处理中，请耐心等待。\n${summary}`
+          : `任务还在继续执行中，请再稍等一下。\n${summary}`
+        const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+        eventBus.emit('chat.session.completed', { binding: outBinding, payload: { text } })
+      }, sec * 1000)
+      timers.push(t)
+    }
+  }
+  schedule()
+  return () => {
+    stopped = true
+    for (const t of timers) clearTimeout(t)
+  }
+}
+
 async function processMessageReplace(payload) {
   const { binding } = payload || {}
   if (!binding || (binding.channel !== 'feishu' && binding.channel !== 'telegram' && binding.channel !== 'dingtalk')) return
@@ -5474,7 +5527,20 @@ async function processMessageReplace(payload) {
     } catch (_) { /* 在用户消息上加「敲键盘」表情失败则忽略 */ }
   }
   if (!channelCurrentRun.has(key)) channelCurrentRun.set(key, [])
+  const projectPath = binding.channel === 'feishu'
+    ? FEISHU_PROJECT
+    : (binding.channel === 'telegram' ? TELEGRAM_PROJECT : DINGTALK_PROJECT)
+  const chatId = binding.remoteId
+  const stopLongRunNotify = createLongRunNotifier({
+    binding,
+    mainSessionId,
+    projectPath,
+    chatId,
+    key,
+    runSessionId
+  })
   const promise = handleChatMessageReceived(payload, runSessionId, mainSessionId, key, runId, startTime).finally(() => {
+    try { stopLongRunNotify() } catch (_) {}
     const arr = channelCurrentRun.get(key)
     if (arr) {
       const i = arr.findIndex(r => r.runSessionId === runSessionId)
@@ -5489,6 +5555,7 @@ async function processMessageReplace(payload) {
     runSessionId,
     promise,
     startTime,
+    stopLongRunNotify,
     userTask: summarizeTaskText(messageText),
     delegatedTask: undefined,
     delegatedRole: undefined
