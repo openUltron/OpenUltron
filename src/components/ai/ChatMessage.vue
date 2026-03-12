@@ -686,6 +686,25 @@ const renderThink = (text) => renderMarkdown(text)
   min-width: 0;
   flex: 1;
 }
+.tc-texts {
+  min-width: 0;
+  flex: 1;
+}
+.tc-topline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tc-subtitle {
+  margin-top: 2px;
+  font-size: 9px;
+  line-height: 1.1;
+  color: color-mix(in srgb, var(--ou-text-muted) 78%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tc-right {
   display: flex;
   align-items: center;
