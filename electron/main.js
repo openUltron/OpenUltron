@@ -5704,6 +5704,41 @@ function isScreenshotFollowupText(text) {
   return false
 }
 
+function isRecaptureRequestText(text) {
+  const t = String(text || '').trim()
+  if (!t) return false
+  return /(再截|重新截|重截|按上次页面|按上次|打开截图后)/i.test(t)
+}
+
+function isScreenshotDirPath(p) {
+  const full = String(p || '').trim()
+  if (!full || !path.isAbsolute(full)) return false
+  const dir = getAppRootPath('screenshots')
+  return full.startsWith(dir + path.sep) || full === dir
+}
+
+function findRecentHtmlArtifact(projectPath, sessionId) {
+  const projectKey = conversationFile.hashProjectPath(projectPath)
+  const conv = conversationFile.loadConversation(projectKey, sessionId)
+  const messages = Array.isArray(conv?.messages) ? conv.messages : []
+  const recentAssistants = [...messages].filter((m) => m && m.role === 'assistant').slice(-40).reverse()
+  for (const m of recentAssistants) {
+    const artifacts = Array.isArray(m?.metadata?.artifacts) ? m.metadata.artifacts : []
+    for (const a of artifacts) {
+      const p = String(a?.path || '').trim()
+      if (!p || !path.isAbsolute(p) || !fs.existsSync(p)) continue
+      const ext = path.extname(p).toLowerCase()
+      if (ext === '.html' || ext === '.htm') return p
+    }
+    const txt = getAssistantText(m)
+    for (const p of extractLocalFilesFromText(txt)) {
+      const ext = path.extname(String(p || '')).toLowerCase()
+      if ((ext === '.html' || ext === '.htm') && fs.existsSync(p)) return p
+    }
+  }
+  return ''
+}
+
 function collectRecentSessionArtifacts(projectPath, sessionId) {
   const projectKey = conversationFile.hashProjectPath(projectPath)
   const conv = conversationFile.loadConversation(projectKey, sessionId)
@@ -5729,7 +5764,12 @@ function collectRecentSessionArtifacts(projectPath, sessionId) {
 
   // 2) 兜底：内存缓存（兼容旧消息）
   const remembered = getRememberedSessionArtifacts(sessionId)
-  if (remembered.images.length > 0 || remembered.files.length > 0) return remembered
+  if (remembered.images.length > 0 || remembered.files.length > 0) {
+    return {
+      images: remembered.images.filter((x) => x && x.path && isScreenshotDirPath(x.path)),
+      files: remembered.files
+    }
+  }
 
   // 3) 最后兜底：历史文本提取
   const assistantTexts = [...messages]
@@ -5743,12 +5783,14 @@ function collectRecentSessionArtifacts(projectPath, sessionId) {
     for (const p of screenshotPaths) {
       if (!p || seen.has(p)) continue
       seen.add(p)
-      images.push({ path: p })
+      if (isScreenshotDirPath(p)) images.push({ path: p })
     }
     for (const p of filePaths) {
       if (!p || seen.has(p)) continue
       seen.add(p)
-      if (isImageFilePath(p)) images.push({ path: p })
+      if (isImageFilePath(p)) {
+        if (isScreenshotDirPath(p)) images.push({ path: p })
+      }
       else files.push({ path: p })
     }
   }
@@ -5987,6 +6029,18 @@ async function processMessageReplace(payload) {
   if (isScreenshotFollowupText(messageText)) {
     const { images, files } = collectRecentSessionArtifacts(projectPath, mainSessionId)
     const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+    const recapture = isRecaptureRequestText(messageText)
+    const latestHtmlPath = findRecentHtmlArtifact(projectPath, mainSessionId)
+    if (recapture && latestHtmlPath) {
+      const shot = await captureLocalHtmlScreenshot(latestHtmlPath)
+      if (shot) {
+        eventBus.emit('chat.session.completed', {
+          binding: outBinding,
+          payload: { text: '已按上次页面重新截图并发送。', images: [{ path: shot }], files: [] }
+        })
+        return
+      }
+    }
     if (images.length > 0) {
       eventBus.emit('chat.session.completed', {
         binding: outBinding,
@@ -5998,12 +6052,12 @@ async function processMessageReplace(payload) {
       })
       return
     }
-    const latestHtml = (files || []).find((f) => {
+    const latestHtml = latestHtmlPath || ((files || []).find((f) => {
       const pp = String(f?.path || '').trim().toLowerCase()
       return pp.endsWith('.html') || pp.endsWith('.htm')
-    })
-    if (latestHtml && latestHtml.path) {
-      const shot = await captureLocalHtmlScreenshot(latestHtml.path)
+    })?.path || '')
+    if (latestHtml) {
+      const shot = await captureLocalHtmlScreenshot(latestHtml)
       if (shot) {
         eventBus.emit('chat.session.completed', {
           binding: outBinding,
