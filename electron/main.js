@@ -5713,11 +5713,22 @@ function buildSingleRunProgressSummary(key, runSessionId) {
 function createLongRunNotifier({ binding, mainSessionId, projectPath, chatId, key, runSessionId }) {
   let stopped = false
   const timers = []
+  const stopAll = () => {
+    stopped = true
+    for (const t of timers) clearTimeout(t)
+  }
   const schedule = () => {
     for (let i = 0; i < LONG_RUN_NOTIFY_STEPS_SEC.length; i++) {
       const sec = LONG_RUN_NOTIFY_STEPS_SEC[i]
       const t = setTimeout(() => {
         if (stopped) return
+        const snapshot = sessionRegistry.getSnapshot()
+        const s = snapshot.find(x => x.sessionId === runSessionId)
+        const st = String(s?.status || '').toLowerCase()
+        if (st === 'completed' || st === 'idle' || st === 'error' || st === 'failed' || st === 'closed') {
+          stopAll()
+          return
+        }
         const summary = buildSingleRunProgressSummary(key, runSessionId)
         if (!summary) return
         const text = i === 0
@@ -5730,10 +5741,7 @@ function createLongRunNotifier({ binding, mainSessionId, projectPath, chatId, ke
     }
   }
   schedule()
-  return () => {
-    stopped = true
-    for (const t of timers) clearTimeout(t)
-  }
+  return stopAll
 }
 
 async function processMessageReplace(payload) {
