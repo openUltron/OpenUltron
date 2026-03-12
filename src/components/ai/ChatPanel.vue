@@ -1550,6 +1550,7 @@ onMounted(async () => {
       attachmentText = lines.join('\n')
     }
     const userContent = [text, attachmentText].filter(Boolean).join('\n')
+    const normalizedUserContent = userContent || '[附件]'
     const dedupeKey = `${incomingSessionId}|${userContent || '[附件]'}`
     const now = Date.now()
     const lastTs = seenFeishuContentMap.get(dedupeKey) || 0
@@ -1560,7 +1561,15 @@ onMounted(async () => {
       seenFeishuContentMap.clear()
       entries.forEach(([k, v]) => seenFeishuContentMap.set(k, v))
     }
-    messages.value.push({ role: 'user', content: userContent || '[附件]' })
+    const lastLoaded = messages.value[messages.value.length - 1]
+    const alreadyInHistory = !!(
+      needSwitch &&
+      lastLoaded?.role === 'user' &&
+      String(lastLoaded.content || '').trim() === String(normalizedUserContent).trim()
+    )
+    if (!alreadyInHistory) {
+      messages.value.push({ role: 'user', content: normalizedUserContent })
+    }
     useAIChatInstance.setCurrentSessionId(incomingSessionId)
     useAIChatInstance.startStreamingPlaceholder()
     nextTick(() => persistSave())

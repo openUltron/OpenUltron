@@ -6212,6 +6212,18 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       messageCount: 0
     })
   }
+  const displayText = message?.metadata?.displayText || message.text
+  const attachments = Array.isArray(message?.metadata?.attachments)
+    ? message.metadata.attachments
+    : (Array.isArray(message?.attachments) ? message.attachments : [])
+  const userDisplayText = String(displayText || '').trim() || (attachments.length > 0 ? '[附件]' : String(message?.text || '').trim())
+  const historyMessages = (conv && conv.messages) ? [...conv.messages] : []
+  historyMessages.push({ role: 'user', content: userDisplayText || '[附件]' })
+  const earlyToSave = stripToolExecutionFromMessages(historyMessages)
+  const earlySavePayload = { id: mainSessionId, messages: earlyToSave, projectPath }
+  if (binding.channel === 'feishu') earlySavePayload.feishuChatId = chatId
+  conversationFile.saveConversation(projectKey, earlySavePayload)
+
   const messages = (conv && conv.messages) ? [...conv.messages] : []
   messages.push({ role: 'system', content: getCoordinatorSystemPrompt(binding.channel) })
   messages.push({ role: 'user', content: message.text })
@@ -6219,10 +6231,6 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
   const nowIso = new Date().toISOString()
   conversationFile.updateConversationMeta(projectKey, mainSessionId, { updatedAt: nowIso })
   if (binding.channel === 'feishu' && mainWindow && mainWindow.webContents) {
-    const displayText = message?.metadata?.displayText || message.text
-    const attachments = Array.isArray(message?.metadata?.attachments)
-      ? message.metadata.attachments
-      : (Array.isArray(message?.attachments) ? message.attachments : [])
     mainWindow.webContents.send('feishu-session-user-message', {
       sessionId: mainSessionId,
       text: displayText,
@@ -6307,7 +6315,20 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       }
       return
     }
-    const delta = finalMessages.slice(originalConvLength)
+    let delta = finalMessages.slice(originalConvLength)
+    const getMsgText = (m) => {
+      if (!m) return ''
+      if (typeof m.content === 'string') return m.content.trim()
+      if (Array.isArray(m.content)) return m.content.map((x) => (x && x.text) || '').join('').trim()
+      return ''
+    }
+    const firstDelta = delta[0]
+    if (firstDelta && firstDelta.role === 'user') {
+      const firstText = getMsgText(firstDelta)
+      if (firstText && firstText === String(message?.text || '').trim()) {
+        delta = delta.slice(1)
+      }
+    }
     const latestAssistant = [...delta]
       .reverse()
       .find((m) => m && m.role === 'assistant' && getAssistantText(m).trim())
