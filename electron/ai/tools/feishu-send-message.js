@@ -135,6 +135,10 @@ async function execute(args, context = {}) {
   } = args || {}
 
   const opts = { chat_id: chat_id && chat_id.trim() ? chat_id.trim() : undefined }
+  if (!opts.chat_id && context && context.feishuChatId) {
+    const fallbackChatId = String(context.feishuChatId || '').trim()
+    if (fallbackChatId) opts.chat_id = fallbackChatId
+  }
   let mode = 'text'
   if (post_title != null || (post_content && post_content.length > 0)) mode = 'post'
   else if (audio_file_key || audio_file_path || audio_text) mode = 'audio'
@@ -243,6 +247,16 @@ async function execute(args, context = {}) {
     message: result && result.message ? String(result.message).slice(0, 160) : '',
     message_id: result && result.message_id ? result.message_id : ''
   })
+  const resultMessage = String((result && result.message) || '')
+  const noChatId = !opts.chat_id || !String(opts.chat_id).trim()
+  const invalidReceiveId = /invalid\s+receive_id/i.test(resultMessage)
+  const missingReceiveId = /请提供\s*chat_id\/receive_id/i.test(resultMessage)
+  if (result && result.success === false && (noChatId || invalidReceiveId || missingReceiveId)) {
+    const fatalErr = new Error(resultMessage || 'feishu_send_message 参数无效（不可重试）')
+    fatalErr.code = 'FEISHU_NON_RETRYABLE'
+    fatalErr.nonRetryable = true
+    throw fatalErr
+  }
   try {
     if (result && result.success && contextSessionId && result.message_id && artifactIds.length > 0) {
       artifactRegistry.bindArtifactsToMessage({

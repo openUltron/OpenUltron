@@ -567,7 +567,11 @@ class Orchestrator {
                 } catch (_) { /* ignore */ }
                 result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId, toolCall.id)
               } catch (e) {
-                result = { error: e.message }
+                result = {
+                  error: e.message,
+                  code: e.code || '',
+                  non_retryable: !!e.nonRetryable
+                }
               }
               const resultStr = typeof result === 'string' ? result : JSON.stringify(result)
               wrappedSender.send('ai-chat-tool-result', {
@@ -581,6 +585,24 @@ class Orchestrator {
           )
 
           if (abortController.signal.aborted) break
+
+          // 不可恢复工具错误：立即终止，避免模型在同一参数错误上无限重试
+          const nonRetryableFailure = toolResults.find((x) => {
+            try {
+              const obj = JSON.parse(String(x.resultStr || '{}'))
+              return !!(obj && obj.non_retryable)
+            } catch (_) {
+              return false
+            }
+          })
+          if (nonRetryableFailure) {
+            let msg = '工具调用失败（不可重试）'
+            try {
+              const obj = JSON.parse(String(nonRetryableFailure.resultStr || '{}'))
+              if (obj && obj.error) msg = String(obj.error)
+            } catch (_) {}
+            throw new Error(msg)
+          }
 
           // ---- 循环检测：不终止会话，注入一条系统提示让 AI 看到后换思路继续 ----
           const loopError = this._detectLoop(loopDetector, normalizedToolCalls, toolResults)
