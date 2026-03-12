@@ -4191,6 +4191,7 @@ const aiGateway = createGateway({
     let fileItems = []
     const seenPath = new Set()
     const seenBase64Head = new Set()
+    const seenFilePath = new Set()
     for (const item of list) {
       if (item.path && !seenPath.has(item.path)) { seenPath.add(item.path); imageItems.push({ path: item.path }) }
       else if (item.base64) { const h = item.base64.slice(0, 80); if (!seenBase64Head.has(h)) { seenBase64Head.add(h); imageItems.push({ base64: item.base64 }) } }
@@ -4202,16 +4203,25 @@ const aiGateway = createGateway({
       if (!seenPath.has(p)) { seenPath.add(p); imageItems.push({ path: p }) }
     }
     for (const p of extractLocalFilesFromText(cleanedRaw)) {
-      if (isImageFilePath(p) && !seenPath.has(p)) {
-        seenPath.add(p)
-        imageItems.push({ path: p })
+      if (isImageFilePath(p)) {
+        if (!seenPath.has(p)) {
+          seenPath.add(p)
+          imageItems.push({ path: p })
+        }
+      } else if (!seenFilePath.has(p)) {
+        seenFilePath.add(p)
+        fileItems.push({ path: p })
       }
-      // 飞书自动回发阶段仅自动发送图片；非图片文件由显式工具调用发送，避免误发本地路径
     }
     for (const p of extractLocalFilesFromText(cleanedSpawn)) {
-      if (isImageFilePath(p) && !seenPath.has(p)) {
-        seenPath.add(p)
-        imageItems.push({ path: p })
+      if (isImageFilePath(p)) {
+        if (!seenPath.has(p)) {
+          seenPath.add(p)
+          imageItems.push({ path: p })
+        }
+      } else if (!seenFilePath.has(p)) {
+        seenFilePath.add(p)
+        fileItems.push({ path: p })
       }
     }
     const delegatedToolNames = new Set(['feishu_send_message'])
@@ -4220,12 +4230,20 @@ const aiGateway = createGateway({
       m.tool_calls.some(tc => tc && tc.function && delegatedToolNames.has(tc.function.name))
     )
     if (aiAlreadySentFeishu && !cleanedFeishu && !cleanedSpawn && imageItems.length === 0 && fileItems.length === 0) return
-    const rawTextToSend = cleanedFeishu || cleanedSpawn || (imageItems.length > 0 ? '截图已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
+    const rawTextToSend = cleanedFeishu || cleanedSpawn || (
+      imageItems.length > 0
+        ? '截图已发至当前会话。'
+        : (fileItems.length > 0 ? '文件已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
+    )
     const textToSend = stripFalseDeliveredClaims(rawTextToSend, {
       hasImages: imageItems.length > 0,
       hasFiles: fileItems.length > 0,
       channel: 'feishu'
-    }) || (imageItems.length > 0 ? '截图已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
+    }) || (
+      imageItems.length > 0
+        ? '截图已发至当前会话。'
+        : (fileItems.length > 0 ? '文件已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
+    )
     const outBinding = { sessionId, projectPath: '__feishu__', channel: 'feishu', remoteId: chatId, feishuChatId: chatId }
     const outPayload = { text: textToSend, images: imageItems, files: fileItems }
     appLogger?.info?.('[Feishu] 回发载荷', {
@@ -6905,17 +6923,23 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     const cleanedText = stripFeishuScreenshotMisfireText(cleanedRaw)
     const cleanedSpawnText = stripFeishuScreenshotMisfireText(spawnCleanedRaw)
     let fileItems = []
+    const seenFilePath = new Set()
     for (const p of extractLocalFilesFromText(cleanedText)) {
       if (isImageFilePath(p)) {
         if (!seenPath.has(p)) { seenPath.add(p); imageItems.push({ path: p }) }
       } else {
-        fileItems.push({ path: p })
+        if (!seenFilePath.has(p)) { seenFilePath.add(p); fileItems.push({ path: p }) }
       }
     }
     for (const p of extractLocalFilesFromText(cleanedSpawnText)) {
-      if (isImageFilePath(p) && !seenPath.has(p)) {
-        seenPath.add(p)
-        imageItems.push({ path: p })
+      if (isImageFilePath(p)) {
+        if (!seenPath.has(p)) {
+          seenPath.add(p)
+          imageItems.push({ path: p })
+        }
+      } else if (!seenFilePath.has(p)) {
+        seenFilePath.add(p)
+        fileItems.push({ path: p })
       }
     }
     const regResult = registerArtifactsFromItems({
