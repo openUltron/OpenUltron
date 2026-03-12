@@ -41,22 +41,41 @@ function createSessionsSpawnTool(runSubChat) {
       ? String(project_path).trim()
       : (context.projectPath || '__main_chat__')
     try {
+      const stream = {
+        sendToolResult: (obj) => {
+          try {
+            if (!context?.sender || !context?.sessionId || !context?.toolCallId) return
+            context.sender.send('ai-chat-tool-result', {
+              sessionId: context.sessionId,
+              toolCallId: context.toolCallId,
+              name: 'sessions_spawn',
+              result: JSON.stringify(obj || {})
+            })
+          } catch (_) { /* ignore */ }
+        }
+      }
       const out = await runSubChat({
         task: String(task).trim(),
         systemPrompt: system_prompt && String(system_prompt).trim() ? String(system_prompt).trim() : undefined,
         roleName: role_name != null && String(role_name).trim() !== '' ? String(role_name).trim() : undefined,
         runtime: runtime != null && String(runtime).trim() !== '' ? String(runtime).trim() : undefined,
         parentSessionId: context.sessionId || '',
+        stream,
         provider: provider != null && String(provider).trim() !== '' ? String(provider).trim() : undefined,
         model: model && String(model).trim() ? String(model).trim() : undefined,
         projectPath
       })
       if (!out.success) {
-        return { success: false, error: out.error || '子 Agent 执行失败' }
+        return {
+          success: false,
+          error: out.error || '子 Agent 执行失败',
+          stdout: Array.isArray(out.commandLogs) ? out.commandLogs.join('\n') : ''
+        }
       }
       return {
         success: true,
         result: out.result ?? '',
+        stdout: Array.isArray(out.commandLogs) ? out.commandLogs.join('\n') : '',
         sub_session_id: out.subSessionId ?? null,
         runtime: out.runtime || 'internal',
         attempted_runtimes: Array.isArray(out.attemptedRuntimes) ? out.attemptedRuntimes : [],

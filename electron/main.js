@@ -3540,7 +3540,7 @@ function getExternalEnvVariants(specId = '') {
   return [{ mode: 'default', env: process.env }]
 }
 
-async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat = null) {
+async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat = null, onLog = null) {
   const rawProjectPath = String(ctx.projectPath || '').trim()
   const cwd = (rawProjectPath && path.isAbsolute(rawProjectPath) && fs.existsSync(rawProjectPath))
     ? rawProjectPath
@@ -3556,6 +3556,7 @@ async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat 
     const args = buildArgs(prompt)
     for (let v = 0; v < envVariants.length; v++) {
       const envVariant = envVariants[v]
+      try { if (typeof onLog === 'function') onLog({ type: 'meta', text: `cmd=${command} ${args.join(' ')}`, mode: envVariant.mode, attempt: `${idx + 1}/${builders.length}` }) } catch (_) {}
       console.log('[SubAgentDispatch] 外部子Agent执行尝试', `external:${spec.id}`, `attempt=${idx + 1}/${builders.length}`, `mode=${envVariant.mode}`, `cmd=${command}`, `cwd=${cwd}`, `timeoutMs=${timeoutMs}`)
       console.log('[SubAgentDispatch] 外部子Agent提示工作目录', `external:${spec.id}`, cwd)
       try {
@@ -3580,18 +3581,21 @@ async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat 
           if (!line) return
           console.log(`[SubAgentExternal][${spec.id}][${envVariant.mode}][stdout] ${line}`)
           try { appLogger?.info?.(`[SubAgentExternal][${spec.id}][${envVariant.mode}][stdout] ${line}`) } catch (_) {}
+          try { if (typeof onLog === 'function') onLog({ type: 'stdout', text: String(chunk || ''), mode: envVariant.mode }) } catch (_) {}
         },
         onStderr: (chunk) => {
           const line = normalizeExternalLogChunk(chunk)
           if (!line) return
           console.warn(`[SubAgentExternal][${spec.id}][${envVariant.mode}][stderr] ${line}`)
           try { appLogger?.warn?.(`[SubAgentExternal][${spec.id}][${envVariant.mode}][stderr] ${line}`) } catch (_) {}
+          try { if (typeof onLog === 'function') onLog({ type: 'stderr', text: String(chunk || ''), mode: envVariant.mode }) } catch (_) {}
         }
       })
       const output = String(r.stdout || r.stderr || '').trim()
       const errout = String(r.stderr || '').trim()
       if (!r.success) {
         console.warn('[SubAgentDispatch] 外部子Agent单次尝试失败', `external:${spec.id}`, `mode=${envVariant.mode}`, `exit=${r.exitCode}`, `error=${r.error || ''}`, `stderr=${errout.slice(-300)}`)
+        try { if (typeof onLog === 'function') onLog({ type: 'meta', text: `attempt failed: mode=${envVariant.mode} exit=${r.exitCode} error=${r.error || ''}` }) } catch (_) {}
       }
       try { if (typeof heartbeat === 'function') heartbeat({ event: 'attempt_done', success: !!r.success, exitCode: r.exitCode, error: r.error || '' }) } catch (_) {}
       attempts.push({
@@ -3603,6 +3607,7 @@ async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat 
         stderr: errout.slice(-300)
       })
       if (r.success && output) {
+        try { if (typeof onLog === 'function') onLog({ type: 'meta', text: `attempt success: mode=${envVariant.mode} exit=${r.exitCode}` }) } catch (_) {}
         return {
           success: true,
           result: output,
@@ -3615,6 +3620,7 @@ async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat 
   }
   const last = attempts[attempts.length - 1] || {}
   const msg = last.error || last.stderr || `外部子 Agent ${spec.id} 执行失败`
+  try { if (typeof onLog === 'function') onLog({ type: 'meta', text: `all attempts failed: ${msg}` }) } catch (_) {}
   return { success: false, error: msg, runtime: `external:${spec.id}`, attempts }
 }
 
@@ -3704,8 +3710,27 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
 
 // 多 Agent：派生子 Agent 执行任务并返回结果（sessions_spawn）
 async function runSubChat(opts) {
-  const { task, systemPrompt, roleName, model, projectPath, provider, runtime, parentSessionId } = opts || {}
+  const { task, systemPrompt, roleName, model, projectPath, provider, runtime, parentSessionId, stream } = opts || {}
   const subSessionId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const commandLogLines = []
+  const pushCommandLog = (line) => {
+    const text = String(line || '').replace(/\r/g, '').trim()
+    if (!text) return
+    const rows = text.split('\n').map(x => x.trim()).filter(Boolean)
+    for (const r of rows) commandLogLines.push(r)
+    if (commandLogLines.length > 2000) commandLogLines.splice(0, commandLogLines.length - 2000)
+  }
+  const emitPartial = () => {
+    if (!stream || typeof stream.sendToolResult !== 'function') return
+    const tail = commandLogLines.slice(-240).join('\n')
+    stream.sendToolResult({
+      running: true,
+      partial: true,
+      stdout: tail,
+      log_lines: commandLogLines.slice(-240),
+      line_count: commandLogLines.length
+    })
+  }
   const userRuntime = String(runtime || '').trim()
   let effectiveRuntime = userRuntime
   if (!effectiveRuntime || effectiveRuntime.toLowerCase() === 'auto') {
@@ -3835,7 +3860,19 @@ async function runSubChat(opts) {
       heartbeat({ event: 'tick' })
       let out = null
       try {
-        out = await runByExternalSubAgent(spec, { task, systemPrompt, roleName, projectPath }, resolvedCommand, heartbeat)
+        out = await runByExternalSubAgent(
+          spec,
+          { task, systemPrompt, roleName, projectPath },
+          resolvedCommand,
+          heartbeat,
+          (evt = {}) => {
+            const tp = String(evt.type || 'meta')
+            const mode = evt.mode ? `[${evt.mode}] ` : ''
+            const txt = String(evt.text || '')
+            pushCommandLog(`[${rt}][${tp}] ${mode}${txt}`)
+            emitPartial()
+          }
+        )
       } finally {
         try { if (beatTimer) clearInterval(beatTimer) } catch (_) {}
       }
@@ -3851,6 +3888,7 @@ async function runSubChat(opts) {
         return {
           success: true,
           result: out.result || '',
+          commandLogs: [...commandLogLines],
           subSessionId,
           messages: out.messages || [],
           runtime: out.runtime,
@@ -3909,7 +3947,12 @@ async function runSubChat(opts) {
     })
   } catch (_) {}
   try { sessionRegistry.markError(subSessionId, attemptErrors.join(' | ') || '子 Agent 执行失败') } catch (_) {}
-  return { success: false, error: attemptErrors.join(' | ') || '子 Agent 执行失败', subSessionId }
+  return {
+    success: false,
+    error: attemptErrors.join(' | ') || '子 Agent 执行失败',
+    subSessionId,
+    commandLogs: [...commandLogLines]
+  }
 }
 
 registerChannel('ai-list-external-subagents', async (event, { force } = {}) => {
