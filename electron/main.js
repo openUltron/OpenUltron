@@ -5838,19 +5838,53 @@ function extractLatestSessionsSpawnResult(messages = []) {
     }
   }
   let last = ''
+  const pickTextFromToolContent = (content) => {
+    if (typeof content === 'string') return content.trim()
+    if (Array.isArray(content)) {
+      const txt = content
+        .map((x) => {
+          if (!x) return ''
+          if (typeof x === 'string') return x
+          if (typeof x.text === 'string') return x.text
+          return ''
+        })
+        .join('')
+        .trim()
+      return txt
+    }
+    return ''
+  }
   for (const m of messages) {
     if (!m || m.role !== 'tool') continue
     const tcid = String(m.tool_call_id || '')
     if (!tcid || !spawnCallIds.has(tcid)) continue
-    const raw = String(m.content || '').trim()
+    const raw = pickTextFromToolContent(m.content)
     if (!raw) continue
     try {
       const obj = JSON.parse(raw)
       const r = obj && obj.result != null ? String(obj.result).trim() : ''
+      const s = obj && obj.stdout != null ? String(obj.stdout).trim() : ''
+      const msg = obj && obj.message != null ? String(obj.message).trim() : ''
       if (r) last = r
+      else if (s) last = s
+      else if (msg) last = msg
     } catch (_) {}
   }
   return last
+}
+
+function compactSpawnResultText(text = '') {
+  const raw = String(text || '').trim()
+  if (!raw) return ''
+  const lines = raw
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((x) => x.trim())
+    .filter(Boolean)
+  if (lines.length === 0) return ''
+  const useful = lines.filter((x) => !/^\[(meta|tool_call|token)\]/i.test(x))
+  const picked = useful.length > 0 ? useful[useful.length - 1] : lines[lines.length - 1]
+  return picked.replace(/^\[[^\]]+\]\s*/, '').trim()
 }
 
 // 主 Agent + 子 Agent：新消息到达时派生子 Agent，不直接停前一个；子 Agent 可调 stop_previous_task 停掉前边，或 wait_for_previous_run 等待前边完成再继续
@@ -6830,7 +6864,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     const toSend = latestAssistant ? getAssistantText(latestAssistant) : ''
     const { cleanedText: cleanedRaw, filePaths: pathsFromText } = extractLocalResourceScreenshots(toSend)
     const currentRound = getCurrentRoundMessages(finalMessages)
-    const spawnResultText = extractLatestSessionsSpawnResult(currentRound)
+    const spawnResultText = compactSpawnResultText(extractLatestSessionsSpawnResult(currentRound))
     const { cleanedText: spawnCleanedRaw, filePaths: spawnPathsFromText } = extractLocalResourceScreenshots(spawnResultText || '')
     const screenshotsFromTools = extractScreenshotsFromMessages(currentRound)
     let imageItems = []
