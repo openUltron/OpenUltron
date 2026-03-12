@@ -4166,7 +4166,12 @@ const aiGateway = createGateway({
       m.tool_calls.some(tc => tc && tc.function && delegatedToolNames.has(tc.function.name))
     )
     if (aiAlreadySentFeishu && !cleanedFeishu && !cleanedSpawn && imageItems.length === 0 && fileItems.length === 0) return
-    const textToSend = cleanedFeishu || cleanedSpawn || (imageItems.length > 0 ? '截图已发至当前会话。' : '（无回复内容）')
+    const rawTextToSend = cleanedFeishu || cleanedSpawn || (imageItems.length > 0 ? '截图已发至当前会话。' : '（无回复内容）')
+    const textToSend = stripFalseDeliveredClaims(rawTextToSend, {
+      hasImages: imageItems.length > 0,
+      hasFiles: fileItems.length > 0,
+      channel: 'feishu'
+    }) || (imageItems.length > 0 ? '截图已发至当前会话。' : '（无回复内容）')
     const outBinding = { sessionId, projectPath: '__feishu__', channel: 'feishu', remoteId: chatId, feishuChatId: chatId }
     const outPayload = { text: textToSend, images: imageItems, files: fileItems }
     appLogger?.info?.('[Feishu] 回发载荷', {
@@ -5737,6 +5742,20 @@ function stripFeishuScreenshotMisfireText(text) {
   return s.replace(/\n{3,}/g, '\n\n').trim()
 }
 
+function stripFalseDeliveredClaims(text, { hasImages = false, hasFiles = false, channel = '' } = {}) {
+  if (!text || typeof text !== 'string') return text
+  if (hasImages || hasFiles) return text
+  const ch = String(channel || '').toLowerCase()
+  let s = text
+  if (ch === 'feishu') {
+    s = s.replace(/系统已自动发送到当前飞书会话。?/g, '')
+    s = s.replace(/并通过系统自动发送到当前飞书会话。?/g, '')
+    s = s.replace(/截图已发至当前会话。?/g, '')
+    s = s.replace(/已自动发送到当前飞书会话。?/g, '')
+  }
+  return s.replace(/\n{3,}/g, '\n\n').trim()
+}
+
 // 仅从 assistant 消息内容中提取可发送文本（支持 string / 多段 content）
 function getAssistantText(message) {
   if (!message || message.role !== 'assistant') return ''
@@ -6898,7 +6917,11 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
         : ((cleanedSpawnText && cleanedSpawnText.trim())
             ? cleanedSpawnText.trim()
             : (imageItems.length > 0 ? '截图已发至当前会话。' : null)))
-    const textToSend = baseTextToSend
+    const textToSend = stripFalseDeliveredClaims(baseTextToSend, {
+      hasImages: imageItems.length > 0,
+      hasFiles: fileItems.length > 0,
+      channel: binding.channel
+    })
     if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
       await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
     }
