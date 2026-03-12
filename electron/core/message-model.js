@@ -6,7 +6,7 @@
  * @property {string} sourceChannel - 'app' | 'gateway' | 'feishu' | 'slack' | ...
  * @property {string} remoteId - 渠道内会话/群/用户 ID（如飞书 chat_id）
  * @property {string} text
- * @property {Array<{ type: 'image'|'file'; url?: string; path?: string; base64?: string }>} [attachments]
+ * @property {Array<{ type: 'image'|'file'|'audio'; url?: string; path?: string; base64?: string }>} [attachments]
  * @property {string} [messageId] - 去重用
  * @property {Record<string, unknown>} [metadata]
  *

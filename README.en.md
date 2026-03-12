@@ -14,12 +14,13 @@ The project combines conversational AI, Skills, MCP, cron tasks, notification ch
 - Skills management (local skills, remote sources, install and validation)
 - Cron task scheduling
 - Notification channels (Feishu, Telegram, DingTalk, Webhook)
+- Feishu voice messages (built-in TTS with voice list, aliases, and default voice memory)
 - Local backup and restore (config, sessions, skills, memories)
 - Built-in logs and diagnostics pages
 
 ## Tech Stack
 
-- Frontend: Vue 3, Vue Router, Vite, Monaco Editor
+- Frontend: Vue 3, Vue Router, Vite
 - Desktop: Electron
 - Backend capability (main process): Node.js, Express, IPC, custom protocols
 - Terminal capability: node-pty
@@ -111,5 +112,4 @@ npm run electron:clean-cache
 
 ## Notes
 
-- Some legacy names such as `GitManager` may still appear in code/scripts.
 - If packaging cache is corrupted, run `npm run electron:clean-cache` and retry.

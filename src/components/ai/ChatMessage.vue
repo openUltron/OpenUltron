@@ -305,15 +305,20 @@ const cwdOf = (tc) => {
 }
 
 const timeoutMsOf = (tc) => {
+  const normalize = (val) => {
+    const n = Number(val)
+    if (!Number.isFinite(n) || n <= 0) return null
+    return Math.min(600000, Math.max(1000, Math.floor(n)))
+  }
   try {
     const obj = tc.result ? JSON.parse(tc.result) : null
-    const t = Number(obj?.timeout)
-    if (Number.isFinite(t) && t > 0) return t
+    const t = normalize(obj?.timeout)
+    if (t != null) return t
   } catch { /* ignore */ }
   try {
     const args = JSON.parse(tc.arguments)
-    const t = Number(args?.timeout)
-    if (Number.isFinite(t) && t > 0) return t
+    const t = normalize(args?.timeout)
+    if (t != null) return t
   } catch { /* ignore */ }
   return 600000
 }

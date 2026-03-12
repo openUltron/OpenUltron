@@ -1,8 +1,8 @@
-// 工具：向飞书会话发送消息（文本 / 图片 / 富文本）
+// 工具：向飞书会话发送消息（文本 / 图片 / 文件 / 富文本 / 语音 / 图文）
 const feishuNotify = require('../feishu-notify')
 
 const definition = {
-  description: '向飞书群或会话发送消息。支持四种类型：text 纯文本、image 图片（可传 image_key 或 image_base64）、file 文件（可传 file_key+file_name 或 file_path 本地路径自动上传）、post 富文本。当用户是在飞书里与机器人对话时，不传 chat_id 会自动发往当前会话。用户要求「截图发给我」时，只需调用 webview_control 的 take_screenshot，系统会自动把截图发到当前飞书会话，无需再调本工具发图。需先配置 app_id、app_secret，机器人需加入目标群。',
+  description: '向飞书群或会话发送消息。支持 text、image、file、post（富文本）、audio（语音）、media（图文）。语音支持三种方式：audio_file_key、audio_file_path（本地 opus）、audio_text（内置 node-edge-tts 生成 mp3 再转 opus 上传；无需额外安装依赖）。音色建议先用 tts_voice_manager 配置别名与默认值。当用户是在飞书里与机器人对话时，不传 chat_id 会自动发往当前会话。',
   parameters: {
     type: 'object',
     properties: {
@@ -46,6 +46,62 @@ const definition = {
         type: 'array',
         description: '富文本内容。每项为一段，段内为元素数组。元素：{ tag: "text", text: "..." } 或 { tag: "a", href: "url", text: "链接文字" }。例：[ [{ tag: "text", text: "第一段" }], [{ tag: "a", href: "https://example.com", text: "链接" }] ]',
         items: { type: 'array', items: { type: 'object', properties: { tag: { type: 'string' }, text: { type: 'string' }, href: { type: 'string' } } } }
+      },
+      audio_file_key: {
+        type: 'string',
+        description: '发送语音：已上传好的语音 file_key（opus）'
+      },
+      audio_file_name: {
+        type: 'string',
+        description: '发送语音：文件名（使用 audio_file_path 或 audio_text 时可选）'
+      },
+      audio_file_path: {
+        type: 'string',
+        description: '发送语音：本地语音文件路径（建议 .opus）'
+      },
+      audio_duration: {
+        type: 'number',
+        description: '发送语音：可选时长（秒）'
+      },
+      audio_text: {
+        type: 'string',
+        description: '发送语音：待合成文本。传入后会使用 node-edge-tts 生成 mp3，再转 opus 上传发送；未传 audio_voice 时自动使用默认音色（若已配置）'
+      },
+      audio_voice: {
+        type: 'string',
+        description: '发送语音：TTS 音色，可传真实 shortName（如 zh-CN-XiaoyiNeural）或已配置别名（如 女声）'
+      },
+      audio_lang: {
+        type: 'string',
+        description: '发送语音：TTS 语言（如 zh-CN）'
+      },
+      audio_rate: {
+        type: 'string',
+        description: '发送语音：语速（如 +10% / -10% / default）'
+      },
+      audio_volume: {
+        type: 'string',
+        description: '发送语音：音量（如 +10% / -10% / default）'
+      },
+      audio_pitch: {
+        type: 'string',
+        description: '发送语音：音调（如 +0Hz / -50Hz / default）'
+      },
+      media_file_key: {
+        type: 'string',
+        description: '发送图文（media）：媒体文件 file_key（通常为 mp4）'
+      },
+      media_file_name: {
+        type: 'string',
+        description: '发送图文（media）：媒体文件名'
+      },
+      media_file_path: {
+        type: 'string',
+        description: '发送图文（media）：本地媒体文件路径（会自动上传）'
+      },
+      media_image_key: {
+        type: 'string',
+        description: '发送图文（media）：封面图 image_key（可选）'
       }
     },
     required: []
@@ -69,12 +125,32 @@ function buildPostPayload(title, content) {
 }
 
 async function execute(args) {
-  const { chat_id, text, image_key, image_base64, image_filename, file_key, file_name, file_path, post_title, post_content } = args || {}
+  const {
+    chat_id, text, image_key, image_base64, image_filename, file_key, file_name, file_path, post_title, post_content,
+    audio_file_key, audio_file_name, audio_file_path, audio_duration, audio_text, audio_voice, audio_lang, audio_rate, audio_volume, audio_pitch,
+    media_file_key, media_file_name, media_file_path, media_image_key
+  } = args || {}
 
   const opts = { chat_id: chat_id && chat_id.trim() ? chat_id.trim() : undefined }
 
   if (post_title != null || (post_content && post_content.length > 0)) {
     opts.post = buildPostPayload(post_title, post_content)
+  } else if (audio_file_key || audio_file_path || audio_text) {
+    opts.audio_file_key = audio_file_key && audio_file_key.trim() ? audio_file_key.trim() : undefined
+    opts.audio_file_name = audio_file_name && audio_file_name.trim() ? audio_file_name.trim() : undefined
+    opts.audio_file_path = audio_file_path && audio_file_path.trim() ? audio_file_path.trim() : undefined
+    opts.audio_duration = Number.isFinite(Number(audio_duration)) ? Number(audio_duration) : undefined
+    opts.audio_text = audio_text != null ? String(audio_text) : undefined
+    opts.audio_voice = audio_voice && audio_voice.trim() ? audio_voice.trim() : undefined
+    opts.audio_lang = audio_lang && audio_lang.trim() ? audio_lang.trim() : undefined
+    opts.audio_rate = audio_rate && audio_rate.trim() ? audio_rate.trim() : undefined
+    opts.audio_volume = audio_volume && audio_volume.trim() ? audio_volume.trim() : undefined
+    opts.audio_pitch = audio_pitch && audio_pitch.trim() ? audio_pitch.trim() : undefined
+  } else if (media_file_key || media_file_path) {
+    opts.media_file_key = media_file_key && media_file_key.trim() ? media_file_key.trim() : undefined
+    opts.media_file_name = media_file_name && media_file_name.trim() ? media_file_name.trim() : undefined
+    opts.media_file_path = media_file_path && media_file_path.trim() ? media_file_path.trim() : undefined
+    opts.media_image_key = media_image_key && media_image_key.trim() ? media_image_key.trim() : undefined
   } else if (image_key || image_base64) {
     opts.image_key = image_key && image_key.trim() ? image_key.trim() : undefined
     opts.image_base64 = image_base64 || undefined

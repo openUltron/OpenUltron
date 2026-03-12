@@ -264,6 +264,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     restoreConfigFromBackup: (payload) => ipcRenderer.invoke('ai-restore-config-from-backup', payload),
     fetchModels: (options) => ipcRenderer.invoke('ai-fetch-models', options),
     getModels: (providerBaseUrl) => ipcRenderer.invoke('ai-get-models', providerBaseUrl),
+    verifyModel: (data) => ipcRenderer.invoke('ai-verify-model', data),
     modelSupportsVision: (data) => ipcRenderer.invoke('ai-model-supports-vision', data),
     getTools: () => ipcRenderer.invoke('ai-get-tools'),
     chatStart: (data) => ipcRenderer.invoke('ai-chat-start', data),
@@ -386,6 +387,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dingtalk: {
     getConfig: () => ipcRenderer.invoke('get-dingtalk-config'),
     setConfig: (payload) => ipcRenderer.invoke('set-dingtalk-config', payload),
+    receiveStatus: () => ipcRenderer.invoke('dingtalk-receive-status'),
   },
 
   // ==================== 定时任务 Cron ====================

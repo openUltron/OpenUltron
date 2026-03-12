@@ -59,8 +59,8 @@ function getDefaultPrompts() {
 配置文件：\`~/.openultron/openultron.json\`。可通过设置页或 ai_config_control 工具（需用户确认）读写。以下为各模块配置项及**如何引导用户注册/创建并填入参数**。
 
 **1. ai（AI 与模型）**
-- 键：defaultProvider, defaultModel, temperature, maxTokens, providers[]（每项：name, baseUrl, apiKey, defaultModel）
-- 引导用户：到各厂商开放平台申请 API Key（如 OpenAI：platform.openai.com；DeepSeek/智谱/硅基流动等：各自控制台），复制 baseUrl 与 apiKey 填入 providers；再在 defaultProvider/defaultModel 中指定默认使用的供应商与模型。
+- 键：defaultProvider, defaultModel, modelPool[], modelBindings{}, temperature, maxTokens, providers[]（每项：name, baseUrl, apiKey）
+- 引导用户：到各厂商开放平台申请 API Key（如 OpenAI：platform.openai.com；DeepSeek/智谱/硅基流动等：各自控制台），复制 baseUrl 与 apiKey 填入 providers；再设置 defaultProvider/defaultModel，并在 modelPool/modelBindings 中维护模型池与模型-供应商绑定关系。
 
 **2. feishu（飞书消息与接收）**
 - 键：app_id, app_secret, default_chat_id, notify_on_complete, receive_enabled, allowFrom（"*" 或 chat_id/用户 ID 数组）

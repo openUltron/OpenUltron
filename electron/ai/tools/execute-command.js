@@ -21,10 +21,10 @@ const definition = {
 
 const DEFAULT_TIMEOUT_MS = 600000
 const MIN_TIMEOUT_MS = 1000
-const MAX_TIMEOUT_MS = 1800000
+const MAX_TIMEOUT_MS = 600000
 const MAX_STREAM_PREVIEW_LEN = 4000
 const STREAM_PUSH_INTERVAL_MS = 700
-const INSTALL_TIMEOUT_MS = 1800000
+const INSTALL_TIMEOUT_MS = 600000
 const PROTECTED_DIRS = ['Desktop', 'Documents', 'Downloads', 'Music', 'Pictures', 'Movies']
 
 function clampTimeout(timeout) {
@@ -252,7 +252,8 @@ async function execute(args, context = {}) {
       retried = true
       stderrStream += `\n[auto-retry] 检测到安装命令失败，改用兜底参数重试一次...\n`
       emitProgress(true)
-      const second = await runOnce(retriedCommand, INSTALL_TIMEOUT_MS)
+      const retryTimeoutMs = hasExplicitTimeout ? effectiveTimeout : INSTALL_TIMEOUT_MS
+      const second = await runOnce(retriedCommand, retryTimeoutMs)
       result = {
         ...second,
         stdout: `${result.stdout || ''}\n\n[auto-retry command]\n${retriedCommand}\n\n${second.stdout || ''}`.trim(),

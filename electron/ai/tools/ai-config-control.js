@@ -39,6 +39,14 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
       return { success: false, error: '无法读取当前 AI 配置' }
     }
     const data = { ...legacy.raw }
+    const normalizePool = (pool, defaultModel) => {
+      const list = Array.isArray(pool) ? pool.map(x => String(x || '').trim()).filter(Boolean) : []
+      const uniq = [...new Set(list)]
+      const dm = String(defaultModel || '').trim()
+      if (dm && !uniq.includes(dm)) uniq.unshift(dm)
+      return uniq
+    }
+    data.modelPool = normalizePool(data.modelPool, data.defaultModel)
     const providers = data.providers.slice()
 
     const resolveProvider = (nameOrUrl) => {
@@ -52,22 +60,25 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
       const p = resolveProvider(provider.trim())
       if (!p) return { success: false, error: `未找到供应商: ${provider}，可选: ${providers.map(x => x.name).join(', ')}` }
       data.defaultProvider = p.baseUrl
-      data.defaultModel = p.defaultModel || data.defaultModel || 'deepseek-v3'
+      data.modelPool = normalizePool(data.modelPool, data.defaultModel)
       writeAIConfig(data)
-      return { success: true, message: `已切换到 ${p.name}，当前模型: ${data.defaultModel}` }
+      return { success: true, message: `已切换到 ${p.name}，主模型保持为: ${data.defaultModel}` }
     }
 
     if (action === 'switch_model') {
       if (!model || !model.trim()) return { success: false, error: '请指定模型 ID' }
       const modelId = model.trim()
+      const pool = normalizePool(data.modelPool, data.defaultModel)
+      if (pool.length > 0 && !pool.includes(modelId)) {
+        return { success: false, error: `模型 "${modelId}" 不在全局模型池中，请先在设置页加入模型池` }
+      }
       const baseUrl = data.defaultProvider || (legacy.config && legacy.config.apiBaseUrl) || 'https://api.qnaigc.com/v1'
       if (provider != null && String(provider).trim() !== '') {
         const p = resolveProvider(String(provider).trim())
         if (!p) return { success: false, error: `未找到供应商: ${provider}` }
         data.defaultProvider = p.baseUrl
         data.defaultModel = modelId
-        const cur = providers.find(x => x.baseUrl === p.baseUrl)
-        if (cur) cur.defaultModel = modelId
+        data.modelPool = normalizePool(data.modelPool, data.defaultModel)
         data.providers = providers
         writeAIConfig(data)
         return { success: true, message: `已切换到 ${p.name}，模型: ${modelId}` }
@@ -81,8 +92,7 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
         }
       }
       data.defaultModel = modelId
-      const cur = providers.find(p => p.baseUrl === baseUrl)
-      if (cur) cur.defaultModel = modelId
+      data.modelPool = normalizePool(data.modelPool, data.defaultModel)
       data.providers = providers
       writeAIConfig(data)
       return { success: true, message: `已切换当前模型为: ${modelId}` }

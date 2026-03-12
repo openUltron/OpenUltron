@@ -118,9 +118,9 @@ function parseMessageEvent(data) {
   if (attachments.length === 0 && contentObj && typeof contentObj === 'object') {
     if (messageType === 'image' && typeof contentObj.image_key === 'string' && contentObj.image_key.trim()) {
       attachments.push({ type: 'image', image_key: contentObj.image_key.trim() })
-    } else if (messageType === 'file' && typeof contentObj.file_key === 'string' && contentObj.file_key.trim()) {
+    } else if ((messageType === 'file' || messageType === 'audio') && typeof contentObj.file_key === 'string' && contentObj.file_key.trim()) {
       attachments.push({
-        type: 'file',
+        type: messageType === 'audio' ? 'audio' : 'file',
         file_key: contentObj.file_key.trim(),
         file_name: (typeof contentObj.file_name === 'string' && contentObj.file_name.trim()) ? contentObj.file_name.trim() : ''
       })
@@ -128,7 +128,8 @@ function parseMessageEvent(data) {
   }
 
   // 最后兜底：直接从原始 content 字符串抓取 key（兼容飞书结构变化/解析失败）
-  if (attachments.length === 0 && rawContentStr) {
+  // 仅对非 text 消息启用，避免从普通文本中误抓历史 file_key/image_key 造成串文件
+  if (attachments.length === 0 && rawContentStr && messageType !== 'text') {
     const imgMatches = [...rawContentStr.matchAll(/"image_key"\s*:\s*"([^"]+)"/g)]
     for (const m of imgMatches) {
       const key = (m && m[1]) ? m[1].trim() : ''
@@ -140,7 +141,7 @@ function parseMessageEvent(data) {
       if (!key) continue
       const fileNameMatch = rawContentStr.match(/"file_name"\s*:\s*"([^"]+)"/)
       const fileName = fileNameMatch && fileNameMatch[1] ? fileNameMatch[1].trim() : ''
-      attachments.push({ type: 'file', file_key: key, file_name: fileName })
+      attachments.push({ type: messageType === 'audio' ? 'audio' : 'file', file_key: key, file_name: fileName })
     }
   }
 

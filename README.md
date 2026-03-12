@@ -14,12 +14,13 @@ OpenUltron 是一个基于 **Electron + Vue 3 + Vite** 的 AI 桌面应用，定
 - Skills 管理（本地技能、远程技能源、安装与校验）
 - 定时任务（Cron）
 - 通知与消息通道（飞书、Telegram、钉钉、Webhook）
+- 飞书语音消息（内置 TTS，支持音色列表、别名、默认音色记忆）
 - 本地数据备份与恢复（配置、会话、技能、记忆）
 - 内置日志与诊断页面
 
 ## 技术栈
 
-- 前端：Vue 3、Vue Router、Vite、Monaco Editor
+- 前端：Vue 3、Vue Router、Vite
 - 桌面：Electron
 - 后端能力（主进程）：Node.js、Express、IPC、自定义协议
 - 终端能力：node-pty
@@ -111,5 +112,4 @@ npm run electron:clean-cache
 
 ## 备注
 
-- 历史代码中仍可见部分 `GitManager` 命名（如旧脚本/文案），但当前项目主名称为 **OpenUltron**。
 - 若遇到打包缓存损坏，可先执行：`npm run electron:clean-cache` 再重试。

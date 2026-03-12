@@ -27,7 +27,7 @@ function toLegacyConfig(data) {
   const baseUrl = data.defaultProvider || 'https://api.qnaigc.com/v1'
   const provider = data.providers?.find(p => p.baseUrl === baseUrl)
   const apiKey = provider?.apiKey || ''
-  const defaultModel = provider?.defaultModel || data.defaultModel || 'deepseek-v3'
+  const defaultModel = data.defaultModel || 'deepseek-v3'
   const providerKeys = {}
   for (const p of data.providers || []) {
     if (p.baseUrl && p.apiKey) providerKeys[p.baseUrl] = p.apiKey
@@ -54,11 +54,12 @@ function fromLegacyBackup(legacy) {
   for (const p of providers) {
     if (providerKeys[p.baseUrl] !== undefined) p.apiKey = providerKeys[p.baseUrl] || ''
     else if (p.baseUrl === baseUrl && config.apiKey) p.apiKey = config.apiKey
-    if (p.baseUrl === baseUrl && config.defaultModel) p.defaultModel = config.defaultModel
   }
   return {
     defaultProvider: baseUrl,
     defaultModel: config.defaultModel || 'deepseek-v3',
+    modelPool: [config.defaultModel || 'deepseek-v3'],
+    modelBindings: {},
     temperature: config.temperature ?? 0,
     maxTokens: config.maxTokens ?? 0,
     maxToolIterations: config.maxToolIterations ?? 0,

@@ -5,15 +5,23 @@
 const https = require('https')
 const path = require('path')
 const fs = require('fs')
+const os = require('os')
+const crypto = require('crypto')
+const { execFile } = require('child_process')
+const { promisify } = require('util')
 const openultronConfig = require('../openultron-config')
 
 const CONFIG_PATH = openultronConfig.getPath()
 
 const AUTH_URL = 'open.feishu.cn'
+const EDGE_TTS_VOICE_HOST = 'speech.platform.bing.com'
+const EDGE_TTS_VOICE_PATH = '/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4'
 const AUTH_PATH = '/open-apis/auth/v3/tenant_access_token/internal'
 const MESSAGE_PATH = '/open-apis/im/v1/messages'
 const IMAGE_UPLOAD_PATH = '/open-apis/im/v1/images'
 const FILE_UPLOAD_PATH = '/open-apis/im/v1/files'
+const execFileAsync = promisify(execFile)
+const VOICE_CACHE_PATH = path.join(path.dirname(CONFIG_PATH), 'edge-tts-voices-cache.json')
 
 let cachedToken = null
 let tokenExpireAt = 0
@@ -131,6 +139,36 @@ function httpsGetBuffer(host, pathName, token) {
   })
 }
 
+function httpsGetJson(host, pathName, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const opts = {
+      host,
+      path: pathName,
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json,text/plain,*/*',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        ...headers
+      }
+    }
+    const req = https.request(opts, (res) => {
+      let buf = ''
+      res.on('data', (ch) => { buf += ch })
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(buf || '[]')
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve(json)
+          else reject(new Error(`HTTP ${res.statusCode}: ${buf.slice(0, 300)}`))
+        } catch (e) {
+          reject(new Error(`解析 JSON 失败: ${e.message}`))
+        }
+      })
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
 function combineErrors(errors = []) {
   return errors
     .filter(Boolean)
@@ -160,6 +198,209 @@ function parseFilenameFromDisposition(disposition, fallback = 'download.bin') {
   const m2 = text.match(/filename=\"?([^\";]+)\"?/i)
   if (m2 && m2[1]) return m2[1]
   return fallback
+}
+
+function ensureDir(dir) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+}
+
+function normalizeVoiceAliasKey(alias) {
+  return String(alias || '').trim().toLowerCase()
+}
+
+function getTtsAliasMap() {
+  const cfg = getConfig()
+  const raw = (cfg && cfg.tts_voice_aliases && typeof cfg.tts_voice_aliases === 'object') ? cfg.tts_voice_aliases : {}
+  const out = {}
+  for (const [k, v] of Object.entries(raw)) {
+    const nk = normalizeVoiceAliasKey(k)
+    const nv = String(v || '').trim()
+    if (nk && nv) out[nk] = nv
+  }
+  return out
+}
+
+function getTtsDefaultVoice() {
+  const cfg = getConfig()
+  return String((cfg && cfg.tts_default_voice) || '').trim()
+}
+
+function readVoiceCache() {
+  try {
+    if (!fs.existsSync(VOICE_CACHE_PATH)) return []
+    const raw = JSON.parse(fs.readFileSync(VOICE_CACHE_PATH, 'utf-8'))
+    if (!raw || !Array.isArray(raw.voices)) return []
+    return raw.voices
+  } catch (_) {
+    return []
+  }
+}
+
+function writeVoiceCache(voices) {
+  try {
+    const dir = path.dirname(VOICE_CACHE_PATH)
+    ensureDir(dir)
+    fs.writeFileSync(VOICE_CACHE_PATH, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      voices: Array.isArray(voices) ? voices : []
+    }, null, 2), 'utf-8')
+  } catch (_) {}
+}
+
+function normalizeVoiceItem(v) {
+  return {
+    shortName: String(v.ShortName || v.shortName || '').trim(),
+    locale: String(v.Locale || v.locale || '').trim(),
+    gender: String(v.Gender || v.gender || '').trim(),
+    friendlyName: String(v.FriendlyName || v.friendlyName || '').trim(),
+    name: String(v.Name || v.name || '').trim(),
+    voiceTag: v.VoiceTag || v.voiceTag || {},
+    status: String(v.Status || v.status || '').trim()
+  }
+}
+
+async function listEdgeTtsVoices(options = {}) {
+  const localeFilter = String(options.locale || '').trim().toLowerCase()
+  let voices = []
+  if (!options.forceRefresh) voices = readVoiceCache()
+  if (!Array.isArray(voices) || voices.length === 0) {
+    try {
+      const online = await httpsGetJson(EDGE_TTS_VOICE_HOST, EDGE_TTS_VOICE_PATH)
+      voices = Array.isArray(online) ? online.map(normalizeVoiceItem).filter(v => v.shortName) : []
+      if (voices.length > 0) writeVoiceCache(voices)
+    } catch (e) {
+      voices = readVoiceCache()
+      if (!Array.isArray(voices) || voices.length === 0) throw e
+    }
+  }
+  if (localeFilter) {
+    voices = voices.filter(v => String(v.locale || '').toLowerCase().startsWith(localeFilter))
+  }
+  return voices
+}
+
+function resolveTtsVoice(inputVoice) {
+  const aliasMap = getTtsAliasMap()
+  const input = String(inputVoice || '').trim()
+  const normalized = normalizeVoiceAliasKey(input)
+  if (normalized && aliasMap[normalized]) return aliasMap[normalized]
+  if (input) return input
+  const def = getTtsDefaultVoice()
+  if (def) {
+    const nd = normalizeVoiceAliasKey(def)
+    return aliasMap[nd] || def
+  }
+  return ''
+}
+
+async function setTtsVoiceAlias(alias, voice) {
+  const a = normalizeVoiceAliasKey(alias)
+  const v = String(voice || '').trim()
+  if (!a) throw new Error('alias 不能为空')
+  if (!v) throw new Error('voice 不能为空')
+  const cfg = getConfig()
+  const aliases = getTtsAliasMap()
+  aliases[a] = v
+  setConfig({
+    ...cfg,
+    tts_voice_aliases: aliases
+  })
+  return { alias: a, voice: v }
+}
+
+async function removeTtsVoiceAlias(alias) {
+  const a = normalizeVoiceAliasKey(alias)
+  if (!a) throw new Error('alias 不能为空')
+  const cfg = getConfig()
+  const aliases = getTtsAliasMap()
+  delete aliases[a]
+  setConfig({
+    ...cfg,
+    tts_voice_aliases: aliases
+  })
+  return { alias: a }
+}
+
+async function setTtsDefaultVoice(voiceOrAlias) {
+  const raw = String(voiceOrAlias || '').trim()
+  if (!raw) throw new Error('voice_or_alias 不能为空')
+  const cfg = getConfig()
+  setConfig({
+    ...cfg,
+    tts_default_voice: raw
+  })
+  const resolved = resolveTtsVoice(raw)
+  return { defaultVoice: raw, resolvedVoice: resolved || raw }
+}
+
+function makeTmpFile(ext = '.tmp') {
+  const tmpRoot = path.join(os.tmpdir(), 'openultron-feishu-tts')
+  ensureDir(tmpRoot)
+  const name = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${ext}`
+  return path.join(tmpRoot, name)
+}
+
+async function ffprobeDurationSec(filePath) {
+  try {
+    const { stdout } = await execFileAsync('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=nokey=1:noprint_wrappers=1',
+      filePath
+    ], { timeout: 10000, maxBuffer: 1024 * 1024 })
+    const s = Number(String(stdout || '').trim())
+    if (!Number.isFinite(s) || s <= 0) return undefined
+    return s
+  } catch (_) {
+    return undefined
+  }
+}
+
+async function convertMp3ToOpus(inputMp3, outputOpus) {
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i', inputMp3,
+      '-ac', '1',
+      '-ar', '16000',
+      '-c:a', 'libopus',
+      '-b:a', '24k',
+      outputOpus
+    ], {
+      timeout: 120000,
+      maxBuffer: 4 * 1024 * 1024
+    })
+  } catch (e) {
+    const msg = String(e?.stderr || e?.message || 'ffmpeg 转码失败').trim()
+    if (/not found|enoent/i.test(msg)) {
+      throw new Error('未检测到 ffmpeg。请先安装 ffmpeg（macOS: brew install ffmpeg）')
+    }
+    throw new Error(`ffmpeg 转码失败: ${msg.slice(0, 300)}`)
+  }
+}
+
+async function synthesizeEdgeTtsToMp3(text, outputPath, options = {}) {
+  let EdgeTTS
+  try {
+    ({ EdgeTTS } = require('node-edge-tts'))
+  } catch (_) {
+    throw new Error('内置 TTS 引擎初始化失败：node-edge-tts 未加载。请检查当前安装包是否完整（不要在运行时安装依赖）。')
+  }
+  if (!text || !String(text).trim()) throw new Error('TTS 文本为空')
+  const cfg = {
+    voice: resolveTtsVoice(options.voice) || 'zh-CN-XiaoyiNeural',
+    lang: options.lang || 'zh-CN',
+    outputFormat: options.outputFormat || 'audio-24khz-48kbitrate-mono-mp3',
+    pitch: options.pitch || 'default',
+    rate: options.rate || 'default',
+    volume: options.volume || 'default',
+    timeout: Number(options.timeout) > 0 ? Number(options.timeout) : 20000
+  }
+  const tts = new EdgeTTS(cfg)
+  await tts.ttsPromise(String(text), outputPath)
+  if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) {
+    throw new Error('TTS 生成音频失败（空文件）')
+  }
 }
 
 /** DELETE 请求（用于撤回消息等） */
@@ -333,7 +574,7 @@ async function sendImage(receiveId, imageKeyOrOptions, receiveIdType = 'chat_id'
  * @param {string} [fileName] - 显示文件名（Buffer 时必填）
  * @param {string} [fileType] - 如 pdf、doc、mp4；不传则根据文件名推断
  */
-async function uploadFile(filePathOrBuffer, fileName, fileType) {
+async function uploadFile(filePathOrBuffer, fileName, fileType, durationSec) {
   const token = await getTenantAccessToken()
   let body
   let name = fileName
@@ -359,6 +600,9 @@ async function uploadFile(filePathOrBuffer, fileName, fileType) {
     { name: 'file_name', body: name },
     { name: 'file', body, filename: name, contentType: mime }
   ]
+  if (Number.isFinite(Number(durationSec)) && Number(durationSec) > 0) {
+    formParts.push({ name: 'duration', body: String(Math.round(Number(durationSec))) })
+  }
   const res = await httpsPostMultipart(AUTH_URL, FILE_UPLOAD_PATH, formParts, token)
   const key = res.data && res.data.file_key
   if (!key) throw new Error(res.msg || '上传文件未返回 file_key')
@@ -379,6 +623,59 @@ async function sendFile(receiveId, fileKey, fileName, receiveIdType = 'chat_id')
   const pathWithQuery = `${MESSAGE_PATH}?receive_id_type=${encodeURIComponent(receiveIdType)}`
   const res = await httpsPost(AUTH_URL, pathWithQuery, body, token)
   return res
+}
+
+async function sendAudio(receiveId, fileKey, durationSec, receiveIdType = 'chat_id') {
+  if (!fileKey) throw new Error('发送语音消息需提供 file_key')
+  const token = await getTenantAccessToken()
+  const content = { file_key: fileKey }
+  if (Number.isFinite(Number(durationSec)) && Number(durationSec) > 0) content.duration = Math.round(Number(durationSec))
+  const body = {
+    receive_id: receiveId,
+    msg_type: 'audio',
+    content: JSON.stringify(content)
+  }
+  const pathWithQuery = `${MESSAGE_PATH}?receive_id_type=${encodeURIComponent(receiveIdType)}`
+  const res = await httpsPost(AUTH_URL, pathWithQuery, body, token)
+  return res
+}
+
+async function sendMedia(receiveId, fileKey, imageKey, fileName, receiveIdType = 'chat_id') {
+  if (!fileKey) throw new Error('发送图文消息需提供 file_key')
+  const token = await getTenantAccessToken()
+  const content = { file_key: fileKey }
+  if (imageKey && String(imageKey).trim()) content.image_key = String(imageKey).trim()
+  if (fileName && String(fileName).trim()) content.file_name = String(fileName).trim()
+  const body = {
+    receive_id: receiveId,
+    msg_type: 'media',
+    content: JSON.stringify(content)
+  }
+  const pathWithQuery = `${MESSAGE_PATH}?receive_id_type=${encodeURIComponent(receiveIdType)}`
+  const res = await httpsPost(AUTH_URL, pathWithQuery, body, token)
+  return res
+}
+
+async function synthesizeAndUploadAudioByTts(text, options = {}) {
+  const mp3Path = makeTmpFile('.mp3')
+  const opusPath = makeTmpFile('.opus')
+  try {
+    await synthesizeEdgeTtsToMp3(text, mp3Path, {
+      voice: options.voice,
+      lang: options.lang,
+      rate: options.rate,
+      volume: options.volume,
+      pitch: options.pitch,
+      timeout: options.timeout
+    })
+    await convertMp3ToOpus(mp3Path, opusPath)
+    const durationSec = await ffprobeDurationSec(opusPath)
+    const fileKey = await uploadFile(opusPath, options.file_name || 'tts.opus', 'opus', durationSec)
+    return { fileKey, durationSec, localPath: opusPath }
+  } finally {
+    try { if (fs.existsSync(mp3Path)) fs.unlinkSync(mp3Path) } catch (_) {}
+    try { if (fs.existsSync(opusPath)) fs.unlinkSync(opusPath) } catch (_) {}
+  }
 }
 
 /**
@@ -409,6 +706,8 @@ async function downloadImageByKey(imageKey, options = {}) {
       result = await downloadMessageResourceByKey(messageId, key, 'image')
     } catch (e) {
       errs.push(new Error(`message_resource(image): ${e.message}`))
+      // 安全优先：携带 message_id 时必须命中该消息资源，避免误下到其他历史资源
+      throw new Error(combineErrors(errs) || 'download image failed by message resource')
     }
   }
   if (!result) {
@@ -438,6 +737,8 @@ async function downloadFileByKey(fileKey, options = {}) {
       result = await downloadMessageResourceByKey(messageId, key, 'file')
     } catch (e) {
       errs.push(new Error(`message_resource(file): ${e.message}`))
+      // 安全优先：携带 message_id 时必须命中该消息资源，避免误下到其他历史资源
+      throw new Error(combineErrors(errs) || 'download file failed by message resource')
     }
   }
   if (!result) {
@@ -457,11 +758,15 @@ async function downloadFileByKey(fileKey, options = {}) {
 }
 
 /**
- * 统一发送：支持 text / image / file / post。使用 default_chat_id 若未传 chat_id。
+ * 统一发送：支持 text / image / file / post / audio / media。使用 default_chat_id 若未传 chat_id。
  * 文件：可传 file_key + file_name；或 file_path（本地路径）由本方法先上传再发送。
  */
 async function sendMessage(options = {}) {
-  const { chat_id, receive_id, text, image_key, image_base64, post, file_key, file_name, file_path } = options
+  const {
+    chat_id, receive_id, text, image_key, image_base64, post, file_key, file_name, file_path,
+    audio_file_key, audio_file_name, audio_file_path, audio_duration, audio_text, audio_voice, audio_lang, audio_rate, audio_volume, audio_pitch,
+    media_file_key, media_file_name, media_file_path, media_image_key
+  } = options
   const id = chat_id || receive_id
   const config = getConfig()
   const receiveId = id && id.trim() ? id.trim() : (config.default_chat_id && config.default_chat_id.trim())
@@ -474,6 +779,41 @@ async function sendMessage(options = {}) {
     if (post != null && typeof post === 'object') {
       const res = await sendPost(receiveId, post, receiveIdType)
       return { success: true, message_id: res.data && res.data.message_id, message: '富文本发送成功' }
+    }
+    if (audio_file_key || audio_file_path || audio_text) {
+      let key = audio_file_key
+      let durationSec = Number.isFinite(Number(audio_duration)) ? Number(audio_duration) : undefined
+      if (!key && audio_file_path && fs.existsSync(audio_file_path)) {
+        key = await uploadFile(audio_file_path, audio_file_name || path.basename(audio_file_path), 'opus', durationSec)
+        if (!durationSec) durationSec = await ffprobeDurationSec(audio_file_path)
+      }
+      if (!key && audio_text && String(audio_text).trim()) {
+        const resolvedVoice = resolveTtsVoice(audio_voice)
+        const tts = await synthesizeAndUploadAudioByTts(String(audio_text), {
+          voice: resolvedVoice || audio_voice,
+          lang: audio_lang,
+          rate: audio_rate,
+          volume: audio_volume,
+          pitch: audio_pitch,
+          file_name: audio_file_name || 'tts.opus'
+        })
+        key = tts.fileKey
+        durationSec = tts.durationSec
+      }
+      if (!key) return { success: false, message: '发送语音需提供 audio_file_key / audio_file_path / audio_text 之一' }
+      const res = await sendAudio(receiveId, key, durationSec, receiveIdType)
+      return { success: true, message_id: res.data && res.data.message_id, message: '语音发送成功' }
+    }
+    if (media_file_key || media_file_path) {
+      let key = media_file_key
+      let name = media_file_name
+      if (!key && media_file_path && fs.existsSync(media_file_path)) {
+        key = await uploadFile(media_file_path, media_file_name || path.basename(media_file_path), 'mp4')
+        name = name || path.basename(media_file_path)
+      }
+      if (!key) return { success: false, message: '发送图文需提供 media_file_key 或 media_file_path' }
+      const res = await sendMedia(receiveId, key, media_image_key, name, receiveIdType)
+      return { success: true, message_id: res.data && res.data.message_id, message: '图文发送成功' }
     }
     const hasImageKey = image_key && String(image_key).trim()
     const hasImageBase64 = image_base64 && (typeof image_base64 === 'string' && image_base64.length > 0)
@@ -500,7 +840,7 @@ async function sendMessage(options = {}) {
     }
     const content = text != null ? String(text) : ''
     if (!content) {
-      return { success: false, message: '请提供 text、image_key/image_base64、file_key/file_path 或 post 之一' }
+      return { success: false, message: '请提供 text、image_key/image_base64、file_key/file_path、post、audio_* 或 media_* 之一' }
     }
     const res = await sendText(receiveId, content, receiveIdType)
     return { success: true, message_id: res.data && res.data.message_id, message: '发送成功' }
@@ -580,6 +920,16 @@ module.exports = {
   sendText,
   sendImage,
   sendPost,
+  sendAudio,
+  sendMedia,
+  synthesizeAndUploadAudioByTts,
+  listEdgeTtsVoices,
+  resolveTtsVoice,
+  getTtsAliasMap,
+  getTtsDefaultVoice,
+  setTtsVoiceAlias,
+  removeTtsVoiceAlias,
+  setTtsDefaultVoice,
   uploadImage,
   uploadFile,
   downloadImageByKey,

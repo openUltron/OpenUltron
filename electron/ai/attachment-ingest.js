@@ -4,6 +4,7 @@ const crypto = require('crypto')
 const { execFileSync } = require('child_process')
 const { getWorkspacePath } = require('../app-root')
 const { runImageOcr } = require('./image-ocr')
+const { transcribeAudioFile } = require('./audio-transcribe')
 
 const MAX_SINGLE_FILE_BYTES = 20 * 1024 * 1024
 const MAX_ROUND_TOTAL_BYTES = 100 * 1024 * 1024
@@ -14,6 +15,9 @@ const TEXT_EXTS = new Set([
   '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.java', '.go', '.rs',
   '.c', '.h', '.cpp', '.hpp', '.sh', '.bash', '.zsh', '.ps1', '.sql', '.log',
   '.ini', '.toml', '.conf', '.env', '.gitignore', '.dockerfile'
+])
+const AUDIO_EXTS = new Set([
+  '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.opus', '.flac', '.webm', '.mp4', '.mpeg', '.mpga'
 ])
 
 function ensureDir(dir) {
@@ -47,6 +51,8 @@ function classifyKind(name, mime) {
   const m = String(mime || '').toLowerCase()
   if (m.startsWith('image/')) return 'image'
   if (m.startsWith('text/')) return 'text'
+  if (m.startsWith('audio/')) return 'audio'
+  if (AUDIO_EXTS.has(ext)) return 'audio'
   if (TEXT_EXTS.has(ext)) return 'text'
   return 'file'
 }
@@ -126,6 +132,11 @@ function buildAttachmentContext(accepted = []) {
       out.push('```text')
       out.push(item.extractedText)
       out.push('```')
+      if (item.kind === 'audio' && (item.asrSource || item.asrEngine)) {
+        const src = item.asrSource || 'unknown'
+        const eng = item.asrEngine ? `/${item.asrEngine}` : ''
+        out.push(`   asr: ${src}${eng}`)
+      }
     } else if (item.kind === 'image') {
       if (item.visionText) {
         out.push('   vision:')
@@ -199,7 +210,9 @@ async function ingestRoundAttachments({
       status: 'ok',
       extractedText: '',
       visionText: '',
-      visionInput: false
+      visionInput: false,
+      asrSource: '',
+      asrEngine: ''
     }
 
     if (kind === 'text') {
@@ -216,6 +229,17 @@ async function ingestRoundAttachments({
           item.status = 'degraded'
           item.visionText = ''
         }
+      }
+    } else if (kind === 'audio') {
+      const asr = await transcribeAudioFile(dataPath, { timeoutMs: 180000 })
+      if (asr.ok && asr.text) {
+        item.extractedText = asr.text
+        item.asrSource = String(asr.source || '')
+        item.asrEngine = String(asr.engine || asr.model || '')
+        item.status = 'ok'
+      } else {
+        item.status = 'degraded'
+        item.asrSource = String(asr.source || '')
       }
     } else if (path.extname(name).toLowerCase() === '.pdf') {
       const pdfText = extractPdfTextBestEffort(dataPath)

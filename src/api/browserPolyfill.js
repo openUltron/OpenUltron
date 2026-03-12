@@ -212,6 +212,7 @@ export function installBrowserPolyfill(baseUrl = DEFAULT_API_BASE) {
       restoreConfigFromBackup: (payload) => invoke('ai-restore-config-from-backup', [payload]),
       fetchModels: (options) => invoke('ai-fetch-models', [options]),
       getModels: (providerBaseUrl) => invoke('ai-get-models', [providerBaseUrl]),
+      verifyModel: (data) => invoke('ai-verify-model', [data]),
       modelSupportsVision: (data) => invoke('ai-model-supports-vision', [data]),
       getTools: () => invoke('ai-get-tools', []),
       // 浏览器模式下 chatStart 由 useAIChat 走 Gateway WebSocket，此处仅作兜底（会阻塞到完整响应）

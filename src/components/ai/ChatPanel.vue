@@ -1243,10 +1243,11 @@ const handleSend = async () => {
       const assistantMsg = { role: 'assistant', content: '已归档当前会话并开启新会话。历史记忆将自动继承。' }
       messages.value = [...messages.value, userMsg, assistantMsg]
       if (summary) {
+        const summaryMessages = stripToolExecutionForSave(JSON.parse(JSON.stringify(messages.value)))
         await window.electronAPI.ai.saveSessionSummary({
           projectPath: historyProjectPath(),
           sessionId: currentSessionId.value,
-          messages: messages.value
+          messages: summaryMessages
         }).catch(() => {})
       }
       await persistSave()
@@ -1396,7 +1397,12 @@ const handleSend = async () => {
     return
   }
 
-  if (isFirstMessage) emit('first-message', { text, sessionId: currentSessionId.value })
+  const ensuredSessionId = useAIChatInstance.ensureSessionId(currentSessionId.value || undefined)
+  if (currentSessionId.value !== ensuredSessionId) {
+    currentSessionId.value = ensuredSessionId
+    emit('session-created', ensuredSessionId)
+  }
+  if (isFirstMessage) emit('first-message', { text, sessionId: ensuredSessionId })
 
   // 斜杠命令的 systemPrompt 优先级最高，覆盖 buildSystemPrompt
   const carryPrompt = carrySummaryForNextSession.value
@@ -1418,7 +1424,7 @@ const handleSend = async () => {
     userContentParts,
     displayContent: finalText !== displayText ? displayText : undefined,
     panelId,
-    sessionId: currentSessionId.value || undefined
+    sessionId: ensuredSessionId || undefined
   })
   if (carrySummaryForNextSession.value) carrySummaryForNextSession.value = ''
   nextTick(() => forceScrollToBottom())
@@ -1557,6 +1563,7 @@ onMounted(async () => {
     messages.value.push({ role: 'user', content: userContent || '[附件]' })
     useAIChatInstance.setCurrentSessionId(incomingSessionId)
     useAIChatInstance.startStreamingPlaceholder()
+    nextTick(() => persistSave())
     nextTick(() => forceScrollToBottom())
   })
   window.electronAPI?.ai?.onFeishuSessionUpdated?.((data) => {
@@ -1582,6 +1589,7 @@ onMounted(async () => {
     messages.value.push({ role: 'user', content: data.userContent || '' })
     useAIChatInstance.setCurrentSessionId(data.sessionId)
     useAIChatInstance.startStreamingPlaceholder()
+    nextTick(() => persistSave())
     nextTick(() => forceScrollToBottom())
   })
 
@@ -1669,12 +1677,17 @@ watch(isStreaming, (streaming) => {
 
 const handleExternalSend = (text) => {
   if (!text || isStreaming.value) return
+  const ensuredSessionId = useAIChatInstance.ensureSessionId(currentSessionId.value || undefined)
+  if (currentSessionId.value !== ensuredSessionId) {
+    currentSessionId.value = ensuredSessionId
+    emit('session-created', ensuredSessionId)
+  }
   sendMessage(text, {
     model: currentModel.value || undefined,
     systemPrompt: buildSystemPrompt(),
     projectPath: props.projectPath || undefined,
     panelId,
-    sessionId: currentSessionId.value || undefined
+    sessionId: ensuredSessionId || undefined
   })
   nextTick(() => forceScrollToBottom())
 }

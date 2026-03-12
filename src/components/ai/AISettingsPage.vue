@@ -53,7 +53,6 @@
           </div>
           <div class="form-row">
             <input v-model="customApiKey" type="password" placeholder="API Key" class="custom-input" />
-            <input v-model="customDefaultModel" :placeholder="t('aiSettings.customDefaultModelPh')" class="custom-input" />
           </div>
           <div class="form-actions">
             <button type="button" class="btn primary" @click="addCustomProvider">{{ t('aiSettings.add') }}</button>
@@ -106,30 +105,42 @@
       <div class="top-right">
         <h3>{{ t('aiSettings.advanced') }}</h3>
         <div class="form-group">
-          <label>{{ t('aiSettings.currentModel') }}</label>
-          <input
-            type="text"
-            v-model="config.defaultModel"
-            :placeholder="t('aiSettings.modelPh')"
-          />
-          <span class="hint">{{ t('aiSettings.modelHint') }}</span>
-        </div>
-        <div class="params-row">
-          <div class="form-group">
-            <label>Temperature</label>
-            <input type="number" v-model.number="config.temperature" min="0" max="2" step="0.1" />
-            <span class="hint">{{ t('aiSettings.tempHint') }}</span>
-          </div>
-          <div class="form-group">
-            <label>Max Tokens</label>
-            <input type="number" v-model.number="config.maxTokens" min="0" max="131072" step="256" />
-            <span class="hint">{{ t('aiSettings.maxTokenHint') }}</span>
+          <label>主模型</label>
+          <div class="primary-model-input">
+            <template v-if="config.defaultModel">
+              <button type="button" class="pool-chip primary" @click="setPrimaryFromPool(config.defaultModel)">
+                <span>{{ config.defaultModel }}</span>
+                <em>主</em>
+                <i class="chip-del" @click.stop="removeModelFromPool(config.defaultModel)">×</i>
+              </button>
+            </template>
+            <button type="button" class="custom-model-btn" @click="openManualModelDialog('primary')">
+              <Plus :size="12" />
+              <span>设置自定义主模型</span>
+            </button>
           </div>
         </div>
         <div class="form-group">
-          <label>{{ t('aiSettings.maxToolIterations') }}</label>
-          <input type="number" v-model.number="config.maxToolIterations" min="0" max="500" />
-          <span class="hint">{{ t('aiSettings.maxToolHint') }}</span>
+          <label>模型池</label>
+          <div class="model-pool-input">
+            <template v-for="id in normalizePool(config.modelPool)" :key="id">
+              <button
+                v-if="id !== config.defaultModel"
+                type="button"
+                class="pool-chip"
+                @click="setPrimaryFromPool(id)"
+                :title="'点击设为主模型'"
+              >
+                <span>{{ id }}</span>
+                <i class="chip-del" @click.stop="removeModelFromPool(id)">×</i>
+              </button>
+            </template>
+            <button type="button" class="custom-model-btn" @click="openManualModelDialog('pool')">
+              <Plus :size="12" />
+              <span>添加自定义模型</span>
+            </button>
+          </div>
+          <span class="hint">列表首选模型会成为主模型，后续点击加入模型池；已选模型可在标签中删除。</span>
         </div>
       </div>
     </div>
@@ -168,8 +179,8 @@
           v-for="m in filteredModels"
           :key="m.id"
           class="model-card"
-          :class="{ selected: config.defaultModel === m.id }"
-          @click="config.defaultModel = m.id"
+          :class="{ selected: isInModelPool(m.id), primary: config.defaultModel === m.id }"
+          @click="onModelCardClick(m.id)"
         >
           <div class="model-card-radio">
             <div class="radio-dot" v-if="config.defaultModel === m.id"></div>
@@ -199,6 +210,27 @@
       </div>
     </div>
   </div>
+  <div v-if="showManualModelDialog" class="manual-model-mask">
+    <div class="manual-model-dialog">
+      <h4>{{ manualDialog.mode === 'primary' ? '设置自定义主模型' : '添加自定义模型' }}</h4>
+      <div class="form-group">
+        <label>模型 ID</label>
+        <input v-model="manualDialog.modelId" type="text" />
+      </div>
+      <div class="form-group">
+        <label>API Base URL</label>
+        <input v-model="manualDialog.baseUrl" type="text" placeholder="https://api.openai.com/v1" />
+      </div>
+      <div class="form-group">
+        <label>API Key</label>
+        <input v-model="manualDialog.apiKey" type="password" placeholder="sk-..." />
+      </div>
+      <div class="manual-actions">
+        <button class="btn" @click="cancelManualDialog">取消</button>
+        <button class="btn primary" @click="confirmManualDialog">确认</button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup>
@@ -210,30 +242,32 @@ const { t } = useI18n()
 
 // 与 electron/openultron-config.js DEFAULT_AI.providers 保持一致（国内 + 国外主流）
 const DEFAULT_PROVIDERS = [
-  { name: '七牛 AI', baseUrl: 'https://api.qnaigc.com/v1', apiKey: '', defaultModel: 'deepseek-v3' },
-  { name: '智谱 AI', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiKey: '', defaultModel: 'glm-4-flash' },
-  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: '', defaultModel: 'qwen-turbo' },
-  { name: '百度千帆', baseUrl: 'https://qianfan.baidubce.com/v2', apiKey: '', defaultModel: 'ernie-4.0-turbo-8k' },
-  { name: '腾讯混元', baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', apiKey: '', defaultModel: 'hunyuan-lite' },
-  { name: '月之暗面 Kimi', baseUrl: 'https://api.moonshot.ai/v1', apiKey: '', defaultModel: 'moonshot-v1-8k' },
-  { name: '零一万物 Yi', baseUrl: 'https://api.lingyiwanwu.com/v1', apiKey: '', defaultModel: 'yi-large-turbo' },
-  { name: 'Minimax', baseUrl: 'https://api.minimax.chat/v1', apiKey: '', defaultModel: '' },
-  { name: '火山引擎豆包', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', apiKey: '', defaultModel: '' },
-  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', apiKey: '', defaultModel: '' },
-  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiKey: '', defaultModel: 'deepseek-chat' },
-  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: '', defaultModel: 'gpt-4o-mini' },
-  { name: 'Anthropic Claude', baseUrl: 'https://api.anthropic.com/v1', apiKey: '', defaultModel: 'claude-3-5-sonnet-20241022' },
-  { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: '', defaultModel: '' },
-  { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: '', defaultModel: 'llama-3.1-70b-versatile' },
-  { name: 'Together AI', baseUrl: 'https://api.together.xyz/v1', apiKey: '', defaultModel: '' },
-  { name: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', apiKey: '', defaultModel: 'mistral-small-latest' },
-  { name: 'xAI Grok', baseUrl: 'https://api.x.ai/v1', apiKey: '', defaultModel: 'grok-2-1212' },
+  { name: '七牛 AI', baseUrl: 'https://api.qnaigc.com/v1', apiKey: '' },
+  { name: '智谱 AI', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', apiKey: '' },
+  { name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: '' },
+  { name: '百度千帆', baseUrl: 'https://qianfan.baidubce.com/v2', apiKey: '' },
+  { name: '腾讯混元', baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', apiKey: '' },
+  { name: '月之暗面 Kimi', baseUrl: 'https://api.moonshot.ai/v1', apiKey: '' },
+  { name: '零一万物 Yi', baseUrl: 'https://api.lingyiwanwu.com/v1', apiKey: '' },
+  { name: 'Minimax', baseUrl: 'https://api.minimax.chat/v1', apiKey: '' },
+  { name: '火山引擎豆包', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', apiKey: '' },
+  { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', apiKey: '' },
+  { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiKey: '' },
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: '' },
+  { name: 'Anthropic Claude', baseUrl: 'https://api.anthropic.com/v1', apiKey: '' },
+  { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: '' },
+  { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: '' },
+  { name: 'Together AI', baseUrl: 'https://api.together.xyz/v1', apiKey: '' },
+  { name: 'Mistral', baseUrl: 'https://api.mistral.ai/v1', apiKey: '' },
+  { name: 'xAI Grok', baseUrl: 'https://api.x.ai/v1', apiKey: '' },
 ]
 
 const config = reactive({
   apiKey: '',
   apiBaseUrl: 'https://api.qnaigc.com/v1',
   defaultModel: 'deepseek-v3',
+  modelPool: ['deepseek-v3'],
+  modelBindings: { 'deepseek-v3': 'https://api.qnaigc.com/v1' },
   temperature: 0,
   maxTokens: 0,
   maxToolIterations: 0
@@ -245,6 +279,8 @@ const providerKeys = reactive({})
 const rawData = reactive({
   defaultProvider: 'https://api.qnaigc.com/v1',
   defaultModel: 'deepseek-v3',
+  modelPool: ['deepseek-v3'],
+  modelBindings: { 'deepseek-v3': 'https://api.qnaigc.com/v1' },
   temperature: 0,
   maxTokens: 0,
   maxToolIterations: 0,
@@ -262,7 +298,6 @@ const showCustomForm = ref(false)
 const customName = ref('')
 const customBaseUrl = ref('')
 const customApiKey = ref('')
-const customDefaultModel = ref('')
 
 function addCustomProvider() {
   const name = customName.value.trim()
@@ -274,8 +309,7 @@ function addCustomProvider() {
   const newProvider = {
     name,
     baseUrl,
-    apiKey: customApiKey.value.trim(),
-    defaultModel: customDefaultModel.value.trim() || ''
+    apiKey: customApiKey.value.trim()
   }
   rawData.providers.push(newProvider)
   cancelCustomForm()
@@ -288,7 +322,6 @@ function cancelCustomForm() {
   customName.value = ''
   customBaseUrl.value = ''
   customApiKey.value = ''
-  customDefaultModel.value = ''
 }
 
 function removeProvider(p) {
@@ -307,6 +340,15 @@ const showKey = ref(false)
 const saving = ref(false)
 const saveMsg = ref('')
 const saveType = ref('')
+const verifiedModels = new Set()
+const verifiedModelProvider = new Map()
+const showManualModelDialog = ref(false)
+const manualDialog = reactive({
+  mode: 'pool',
+  modelId: '',
+  baseUrl: '',
+  apiKey: ''
+})
 
 const connectionState = ref('idle')
 const connectionMsg = ref('')
@@ -341,11 +383,11 @@ function mergeProvidersWithSaved(defaultList, savedList) {
     const saved = byUrl.get(p.baseUrl)
     if (saved) {
       byUrl.delete(p.baseUrl)
-      return { name: p.name, baseUrl: p.baseUrl, apiKey: saved.apiKey ?? '', defaultModel: saved.defaultModel ?? p.defaultModel ?? '' }
+      return { name: p.name, baseUrl: p.baseUrl, apiKey: saved.apiKey ?? '' }
     }
     return { ...p }
   })
-  byUrl.forEach((saved) => merged.push({ name: saved.name || saved.baseUrl, baseUrl: saved.baseUrl, apiKey: saved.apiKey ?? '', defaultModel: saved.defaultModel ?? '' }))
+  byUrl.forEach((saved) => merged.push({ name: saved.name || saved.baseUrl, baseUrl: saved.baseUrl, apiKey: saved.apiKey ?? '' }))
   return merged
 }
 
@@ -353,6 +395,8 @@ function applyRawToState(raw) {
   if (!raw || !Array.isArray(raw.providers)) return
   rawData.defaultProvider = raw.defaultProvider ?? rawData.defaultProvider
   rawData.defaultModel = raw.defaultModel ?? rawData.defaultModel
+  rawData.modelPool = Array.isArray(raw.modelPool) ? [...new Set(raw.modelPool.map(x => String(x || '').trim()).filter(Boolean))] : [rawData.defaultModel]
+  rawData.modelBindings = raw.modelBindings && typeof raw.modelBindings === 'object' ? { ...raw.modelBindings } : {}
   rawData.temperature = raw.temperature ?? 0
   rawData.maxTokens = raw.maxTokens ?? 0
   rawData.maxToolIterations = raw.maxToolIterations ?? 0
@@ -360,7 +404,13 @@ function applyRawToState(raw) {
   const cur = rawData.providers.find(p => p.baseUrl === rawData.defaultProvider)
   config.apiBaseUrl = rawData.defaultProvider
   config.apiKey = cur?.apiKey ?? ''
-  config.defaultModel = cur?.defaultModel || rawData.defaultModel || 'deepseek-v3'
+  config.defaultModel = rawData.defaultModel || 'deepseek-v3'
+  config.modelPool = [...new Set((rawData.modelPool || []).filter(Boolean))]
+  if (!config.modelPool.includes(config.defaultModel)) config.modelPool.unshift(config.defaultModel)
+  config.modelBindings = { ...rawData.modelBindings }
+  if (config.defaultModel && config.apiBaseUrl && !config.modelBindings[config.defaultModel]) {
+    config.modelBindings[config.defaultModel] = config.apiBaseUrl
+  }
   config.temperature = rawData.temperature
   config.maxTokens = rawData.maxTokens
   config.maxToolIterations = rawData.maxToolIterations
@@ -427,10 +477,8 @@ const selectProvider = (p) => {
 
   const changed = config.apiBaseUrl !== p.baseUrl
   rawData.defaultProvider = p.baseUrl
-  rawData.defaultModel = p.defaultModel || rawData.defaultModel || 'deepseek-v3'
   config.apiBaseUrl = p.baseUrl
   config.apiKey = p.apiKey || ''
-  config.defaultModel = p.defaultModel || rawData.defaultModel
   modelSearch.value = ''
 
   if (changed) {
@@ -458,6 +506,187 @@ const onBaseUrlBlur = async () => {
   if (!config.apiKey) return
   await doSaveConfig()
   // 不自动拉取模型，仅保存配置；需要时用户点击「刷新模型列表」
+}
+
+const normalizePool = (arr) => {
+  const list = Array.isArray(arr) ? arr.map(x => String(x || '').trim()).filter(Boolean) : []
+  return [...new Set(list)]
+}
+
+const isInModelPool = (modelId) => normalizePool(config.modelPool).includes(String(modelId || '').trim())
+
+const verifyModelAvailability = async (modelId, providerBaseUrl = '') => {
+  const id = String(modelId || '').trim()
+  if (!id) return false
+  const key = `${id}@@${providerBaseUrl || '*'}`
+  if (verifiedModels.has(key)) return true
+  try {
+    const payload = providerBaseUrl ? { model: id, provider: providerBaseUrl } : { model: id }
+    const res = await window.electronAPI.ai.verifyModel(payload)
+    if (res?.success) {
+      verifiedModels.add(key)
+      if (res.provider) verifiedModelProvider.set(id, res.provider)
+      else if (providerBaseUrl) verifiedModelProvider.set(id, providerBaseUrl)
+      return true
+    }
+    saveMsg.value = (res && (res.error || res.message)) || '模型不可用'
+    saveType.value = 'error'
+    setTimeout(() => { saveMsg.value = '' }, 4000)
+    return false
+  } catch (e) {
+    saveMsg.value = e?.message || '模型校验失败'
+    saveType.value = 'error'
+    setTimeout(() => { saveMsg.value = '' }, 4000)
+    return false
+  }
+}
+
+const validatePoolBeforeSave = async () => {
+  const candidates = [...new Set([config.defaultModel, ...normalizePool(config.modelPool)].filter(Boolean))]
+  for (const id of candidates) {
+    const provider = config.modelBindings[id] || ''
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await verifyModelAvailability(id, provider)
+    if (!ok) return false
+  }
+  return true
+}
+
+const setPrimaryFromPool = (modelId) => {
+  const id = String(modelId || '').trim()
+  if (!id) return
+  const pool = normalizePool(config.modelPool)
+  if (!pool.includes(id)) return
+  config.defaultModel = id
+  config.modelPool = pool
+  const bound = config.modelBindings[id]
+  if (bound) {
+    config.apiBaseUrl = bound
+    rawData.defaultProvider = bound
+    const p = rawData.providers.find(x => x.baseUrl === bound)
+    if (p) config.apiKey = p.apiKey || ''
+  }
+  rawData.modelPool = [...pool]
+}
+
+const removeModelFromPool = (modelId) => {
+  const id = String(modelId || '').trim()
+  if (!id) return
+  const pool = normalizePool(config.modelPool).filter(x => x !== id)
+  config.modelPool = pool
+  if (config.modelBindings[id]) delete config.modelBindings[id]
+  if (config.defaultModel === id) {
+    config.defaultModel = pool[0] || ''
+  }
+  rawData.modelPool = [...pool]
+}
+
+const addToPoolWithRule = async (modelId) => {
+  const id = String(modelId || '').trim()
+  if (!id) return
+  if (!(await verifyModelAvailability(id, config.apiBaseUrl))) return
+  const pool = normalizePool(config.modelPool)
+  if (!config.defaultModel || pool.length === 0) {
+    config.defaultModel = id
+    config.modelBindings[id] = config.apiBaseUrl
+    config.modelPool = [id]
+    rawData.modelPool = [id]
+    return
+  }
+  config.modelBindings[id] = config.apiBaseUrl
+  if (!pool.includes(id)) pool.push(id)
+  if (!pool.includes(config.defaultModel)) pool.unshift(config.defaultModel)
+  config.modelPool = pool
+  rawData.modelPool = [...pool]
+}
+
+const onModelCardClick = async (modelId) => {
+  const id = String(modelId || '').trim()
+  if (!id) return
+  const exists = isInModelPool(id)
+  if (!exists) {
+    const prevPool = normalizePool(config.modelPool)
+    const prevPrimary = config.defaultModel
+    const prevBindings = { ...(config.modelBindings || {}) }
+    if (!prevPrimary || prevPool.length === 0) {
+      config.defaultModel = id
+      config.modelBindings[id] = config.apiBaseUrl
+      config.modelPool = [id]
+      rawData.modelPool = [id]
+    } else {
+      const nextPool = [...prevPool, id]
+      config.modelBindings[id] = config.apiBaseUrl
+      config.modelPool = normalizePool(nextPool)
+      rawData.modelPool = [...config.modelPool]
+    }
+    const ok = await verifyModelAvailability(id, config.apiBaseUrl)
+    if (!ok) {
+      config.defaultModel = prevPrimary
+      config.modelBindings = prevBindings
+      config.modelPool = prevPool
+      rawData.modelPool = [...prevPool]
+    }
+    return
+  }
+  if (id !== config.defaultModel) {
+    removeModelFromPool(id)
+  }
+}
+
+const openManualModelDialog = (mode = 'pool') => {
+  manualDialog.mode = mode === 'primary' ? 'primary' : 'pool'
+  manualDialog.modelId = ''
+  manualDialog.baseUrl = config.apiBaseUrl || ''
+  manualDialog.apiKey = String(config.apiKey || providerKeys[config.apiBaseUrl] || '').trim()
+  showManualModelDialog.value = true
+}
+
+const cancelManualDialog = () => {
+  showManualModelDialog.value = false
+  manualDialog.mode = 'pool'
+  manualDialog.modelId = ''
+  manualDialog.baseUrl = ''
+  manualDialog.apiKey = ''
+}
+
+const ensureProviderByBaseUrl = (baseUrl, apiKey = '') => {
+  const b = String(baseUrl || '').trim().replace(/\/$/, '')
+  if (!b) return null
+  let p = rawData.providers.find(x => x.baseUrl === b)
+  if (!p) {
+    let name = b
+    try { name = new URL(b).hostname } catch (_) {}
+    p = { name, baseUrl: b, apiKey: '' }
+    rawData.providers.push(p)
+  }
+  if (apiKey) p.apiKey = apiKey
+  return p
+}
+
+const confirmManualDialog = async () => {
+  const modelId = String(manualDialog.modelId || '').trim()
+  const baseUrl = String(manualDialog.baseUrl || '').trim().replace(/\/$/, '')
+  const apiKey = String(manualDialog.apiKey || '').trim()
+  if (!modelId || !baseUrl || !apiKey) return
+  const provider = ensureProviderByBaseUrl(baseUrl, apiKey)
+  if (!provider) return
+  const ok = await verifyModelAvailability(modelId, baseUrl)
+  if (!ok) return
+  config.modelBindings[modelId] = baseUrl
+  const pool = normalizePool(config.modelPool)
+  if (!pool.includes(modelId)) pool.push(modelId)
+  if (manualDialog.mode === 'primary' || !config.defaultModel) {
+    config.defaultModel = modelId
+    const idx = pool.indexOf(modelId)
+    if (idx > 0) {
+      pool.splice(idx, 1)
+      pool.unshift(modelId)
+    }
+  }
+  if (config.defaultModel && !pool.includes(config.defaultModel)) pool.unshift(config.defaultModel)
+  config.modelPool = pool
+  rawData.modelPool = [...pool]
+  cancelManualDialog()
 }
 
 const onKeyBlur = async () => {
@@ -512,8 +741,7 @@ const testAndFetchModels = async (forceRefresh = false) => {
       }
 
       if (models.value.length > 0) {
-        const ids = models.value.map(m => m.id)
-        if (!ids.includes(config.defaultModel)) {
+        if (!config.defaultModel) {
           config.defaultModel = models.value[0].id
         }
       }
@@ -541,11 +769,19 @@ function buildRawPayload() {
     name: p.name,
     baseUrl: p.baseUrl,
     apiKey: p.baseUrl === config.apiBaseUrl ? (config.apiKey ?? p.apiKey ?? '') : (p.apiKey ?? ''),
-    defaultModel: p.baseUrl === config.apiBaseUrl ? (config.defaultModel || p.defaultModel || '') : (p.defaultModel ?? ''),
   }))
+  const modelPool = normalizePool(config.modelPool)
+  if (config.defaultModel && !modelPool.includes(config.defaultModel)) modelPool.unshift(config.defaultModel)
+  const modelBindings = { ...(config.modelBindings || {}) }
+  if (config.defaultModel && !modelBindings[config.defaultModel] && config.apiBaseUrl) {
+    modelBindings[config.defaultModel] = config.apiBaseUrl
+  }
+  const defaultProvider = modelBindings[config.defaultModel] || config.apiBaseUrl
   return {
-    defaultProvider: config.apiBaseUrl,
+    defaultProvider,
     defaultModel: config.defaultModel,
+    modelPool,
+    modelBindings,
     temperature: config.temperature,
     maxTokens: config.maxTokens,
     maxToolIterations: config.maxToolIterations,
@@ -574,6 +810,11 @@ const saveConfig = async () => {
   saving.value = true
   saveMsg.value = ''
   try {
+    const ok = await validatePoolBeforeSave()
+    if (!ok) {
+      saveType.value = 'error'
+      return
+    }
     const raw = buildRawPayload()
     const res = await window.electronAPI.ai.saveConfig({ raw })
     if (res.success) {
@@ -653,14 +894,6 @@ const saveConfig = async () => {
   padding-bottom: 6px;
   border-bottom: 1px solid var(--ou-border);
 }
-.params-row {
-  display: flex;
-  gap: 10px;
-}
-.params-row .form-group {
-  flex: 1;
-}
-
 .generic-search-section {
   margin-top: 20px;
 }
@@ -945,7 +1178,6 @@ const saveConfig = async () => {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 6px;
-  cursor: pointer;
   transition: all 0.15s;
   min-width: 0;
 }
@@ -956,6 +1188,9 @@ const saveConfig = async () => {
 .model-card.selected {
   background: rgba(0, 122, 204, 0.1);
   border-color: var(--ou-primary);
+}
+.model-card.primary {
+  box-shadow: inset 0 0 0 1px rgba(0, 122, 204, 0.5);
 }
 .model-card-radio {
   width: 14px;
@@ -1009,6 +1244,64 @@ const saveConfig = async () => {
   color: #c9a0dc;
   background: rgba(201, 160, 220, 0.1);
 }
+.primary-model-input,
+.model-pool-input {
+  min-height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: var(--ou-bg-main);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 8px;
+}
+.pool-chip {
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ou-text-muted);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pool-chip em {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.9;
+}
+.chip-del {
+  font-style: normal;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.pool-chip.primary {
+  border-color: var(--ou-primary);
+  color: var(--ou-link);
+  background: rgba(0, 122, 204, 0.14);
+}
+.custom-model-btn {
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ou-text-muted);
+  border-radius: 999px;
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.custom-model-btn:hover {
+  border-color: var(--ou-primary);
+  color: var(--ou-link);
+}
+.model-actions {
+  margin-top: 0;
+}
 .empty-models {
   display: flex;
   align-items: center;
@@ -1016,6 +1309,33 @@ const saveConfig = async () => {
   color: var(--ou-text-muted);
   font-size: 12px;
   padding: 16px 0;
+}
+
+.manual-model-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.manual-model-dialog {
+  width: 420px;
+  max-width: calc(100vw - 32px);
+  background: var(--ou-bg-main);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 14px;
+}
+.manual-model-dialog h4 {
+  margin: 0 0 12px;
+  font-size: 14px;
+}
+.manual-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 /* 按钮 */

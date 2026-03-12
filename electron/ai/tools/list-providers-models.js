@@ -31,17 +31,26 @@ function createListProvidersAndModelsTool(store, getAIConfigLegacy) {
       // 只使用「测试过可用」的模型列表（拉取时做过 chat 验证或逐模型验证的才写入此处）
       const validatedByProvider = (store && typeof store.get === 'function') ? store.get('aiModelsValidatedByProvider', {}) : {}
       const list = []
+      const globalDefaultModel = String(raw?.defaultModel || '').trim()
+      const globalPool = Array.isArray(raw?.modelPool)
+        ? raw.modelPool.map(m => String(m || '').trim()).filter(Boolean)
+        : []
+      const bindings = raw?.modelBindings && typeof raw.modelBindings === 'object' ? raw.modelBindings : {}
       for (const p of providers) {
         if (!p || !p.baseUrl) continue
         const apiKey = providerKeys[p.baseUrl] || p.apiKey || ''
         if (!apiKey || String(apiKey).trim() === '') continue
         const validated = validatedByProvider[p.baseUrl]
-        const models = Array.isArray(validated) ? validated.map(m => m.id || m.name || '').filter(Boolean) : []
+        const validatedModels = Array.isArray(validated) ? validated.map(m => m.id || m.name || '').filter(Boolean) : []
+        const selectedInPool = globalPool.filter(m => (bindings[m] || raw?.defaultProvider || '') === p.baseUrl)
+        const models = [...new Set([...selectedInPool, ...validatedModels])]
         if (models.length === 0) continue
         list.push({
           name: p.name || p.baseUrl,
           base_url: p.baseUrl,
-          default_model: p.defaultModel || '',
+          default_model: globalDefaultModel,
+          global_model_pool: globalPool,
+          selected_in_pool: selectedInPool,
           models
         })
       }

@@ -37,7 +37,7 @@ PRODUCT_NAME="$(node -p "require('./package.json').build?.productName || 'OpenUl
 echo "🚀 Local mac release (ad-hoc): ${ARCHES[*]}"
 echo "📦 Product: ${PRODUCT_NAME}"
 
-if [ ! -d "node_modules/electron/dist" ] || [ ! -d "node_modules/vite" ]; then
+if [ ! -d "node_modules/electron/dist" ] || [ ! -d "node_modules/vite" ] || [ ! -d "node_modules/node-edge-tts" ]; then
   echo "📦 Installing dependencies..."
   npm ci
 fi
@@ -94,4 +94,3 @@ ls -lh "$DIST_DIR"/*.dmg "$DIST_DIR"/*.zip 2>/dev/null || true
 if command -v open >/dev/null 2>&1; then
   open "$DIST_DIR/"
 fi
-

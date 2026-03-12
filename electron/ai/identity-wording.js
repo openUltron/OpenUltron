@@ -13,7 +13,23 @@ function sanitizeAssistantIdentityWording(text, agentName) {
   return out
 }
 
-module.exports = {
-  sanitizeAssistantIdentityWording
+function sanitizeAssistantModelIdentity(text, currentModel) {
+  if (!text || typeof text !== 'string') return text
+  const model = String(currentModel || '').trim()
+  if (!model) return text
+  let out = text
+  const introRegex = /(我是\s*(?:\*\*)?)([^，。\n*]{2,80}?)(?:\*\*)?\s*模型/
+  const m = out.match(introRegex)
+  if (m) {
+    const claimed = String(m[2] || '').trim()
+    if (claimed && claimed !== model) {
+      out = out.replace(introRegex, `$1${model} 模型`)
+    }
+  }
+  return out
 }
 
+module.exports = {
+  sanitizeAssistantIdentityWording,
+  sanitizeAssistantModelIdentity
+}
