@@ -3453,9 +3453,13 @@ function buildExternalPrompt({ task, systemPrompt, roleName, projectPath }) {
   return blocks.join('\n\n')
 }
 
-async function runByExternalSubAgent(spec, ctx) {
+async function runByExternalSubAgent(spec, ctx, resolvedCommand = '') {
   const prompt = buildExternalPrompt(ctx)
-  const cwd = ctx.projectPath || getWorkspaceRoot()
+  const rawProjectPath = String(ctx.projectPath || '').trim()
+  const cwd = (rawProjectPath && path.isAbsolute(rawProjectPath) && fs.existsSync(rawProjectPath))
+    ? rawProjectPath
+    : getWorkspaceRoot()
+  const command = String(resolvedCommand || spec.command || '').trim() || spec.command
   const attempts = []
   const builders = Array.isArray(spec.runArgBuilders) ? spec.runArgBuilders : []
   for (let idx = 0; idx < builders.length; idx++) {
@@ -3466,11 +3470,13 @@ async function runByExternalSubAgent(spec, ctx) {
         runtime: `external:${spec.id}`,
         attempt: idx + 1,
         total: builders.length,
-        command: spec.command,
+        command,
+        cwd,
+        rawProjectPath,
         argsPreview: args.map((x) => String(x)).slice(0, 4)
       })
     } catch (_) {}
-    const r = await runCliCommand(spec.command, args, { cwd, timeoutMs: 10 * 60 * 1000 })
+    const r = await runCliCommand(command, args, { cwd, timeoutMs: 10 * 60 * 1000 })
     const output = String(r.stdout || r.stderr || '').trim()
     const errout = String(r.stderr || '').trim()
     attempts.push({
@@ -3591,7 +3597,9 @@ async function runSubChat(opts) {
     if (inferred) effectiveRuntime = inferred
   }
   const scan = await scanExternalSubAgents(false)
-  const availableExternalIds = scan.filter(a => a.available).map(a => a.id)
+  const availableExternal = scan.filter(a => a.available)
+  const availableExternalIds = availableExternal.map(a => a.id)
+  const availableExternalById = new Map(availableExternal.map(a => [a.id, a]))
   const runtimeChain = resolveRuntimeChain(effectiveRuntime, availableExternalIds)
   const attemptErrors = []
   try {
@@ -3648,7 +3656,9 @@ async function runSubChat(opts) {
         attemptErrors.push(`[external:${rt}] 不可用（未安装或不可执行）`)
         continue
       }
-      const out = await runByExternalSubAgent(spec, { task, systemPrompt, roleName, projectPath })
+      const found = availableExternalById.get(rt)
+      const resolvedCommand = found && found.path ? String(found.path).trim() : ''
+      const out = await runByExternalSubAgent(spec, { task, systemPrompt, roleName, projectPath }, resolvedCommand)
       if (out.success) {
         try {
           appLogger?.info?.('[SubAgentDispatch] 子Agent执行成功', {
