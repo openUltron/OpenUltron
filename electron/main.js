@@ -5602,6 +5602,47 @@ function getRememberedSessionArtifacts(sessionId) {
   return { images, files }
 }
 
+function normalizeArtifactsFromItems(images = [], files = []) {
+  const out = []
+  const pushArtifact = (kind, p) => {
+    const full = String(p || '').trim()
+    if (!full || !path.isAbsolute(full) || !fs.existsSync(full)) return
+    out.push({
+      kind,
+      path: full,
+      name: path.basename(full),
+      ts: new Date().toISOString()
+    })
+  }
+  for (const x of (Array.isArray(images) ? images : [])) {
+    if (x && x.path) pushArtifact('image', x.path)
+  }
+  for (const x of (Array.isArray(files) ? files : [])) {
+    if (x && x.path) pushArtifact('file', x.path)
+  }
+  return out
+}
+
+function attachArtifactsToLatestAssistant(messages = [], artifacts = []) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages
+  if (!Array.isArray(artifacts) || artifacts.length === 0) return messages
+  const idx = [...messages].reverse().findIndex((m) => m && m.role === 'assistant')
+  if (idx < 0) return messages
+  const realIdx = messages.length - 1 - idx
+  const target = messages[realIdx] || {}
+  const meta = target.metadata && typeof target.metadata === 'object' ? { ...target.metadata } : {}
+  const prev = Array.isArray(meta.artifacts) ? meta.artifacts : []
+  const dedup = new Map()
+  for (const a of [...prev, ...artifacts]) {
+    if (!a || !a.path) continue
+    dedup.set(`${a.kind || ''}:${a.path}`, a)
+  }
+  meta.artifacts = [...dedup.values()]
+  const next = [...messages]
+  next[realIdx] = { ...target, metadata: meta }
+  return next
+}
+
 function isProgressQueryText(text) {
   const t = String(text || '').trim()
   if (!t) return false
@@ -5620,19 +5661,38 @@ function isScreenshotFollowupText(text) {
 }
 
 function collectRecentSessionArtifacts(projectPath, sessionId) {
-  const remembered = getRememberedSessionArtifacts(sessionId)
-  if (remembered.images.length > 0 || remembered.files.length > 0) return remembered
   const projectKey = conversationFile.hashProjectPath(projectPath)
   const conv = conversationFile.loadConversation(projectKey, sessionId)
   const messages = Array.isArray(conv?.messages) ? conv.messages : []
+  const images = []
+  const files = []
+  const seen = new Set()
+
+  // 1) 优先使用会话内消息级 artifacts（精准关联）
+  const recentAssistants = [...messages].filter((m) => m && m.role === 'assistant').slice(-30).reverse()
+  for (const m of recentAssistants) {
+    const artifacts = Array.isArray(m?.metadata?.artifacts) ? m.metadata.artifacts : []
+    for (const a of artifacts) {
+      const p = String(a?.path || '').trim()
+      const kind = String(a?.kind || '').trim().toLowerCase()
+      if (!p || seen.has(p) || !path.isAbsolute(p) || !fs.existsSync(p)) continue
+      seen.add(p)
+      if (kind === 'image' || isImageFilePath(p)) images.push({ path: p })
+      else files.push({ path: p })
+    }
+  }
+  if (images.length > 0 || files.length > 0) return { images, files }
+
+  // 2) 兜底：内存缓存（兼容旧消息）
+  const remembered = getRememberedSessionArtifacts(sessionId)
+  if (remembered.images.length > 0 || remembered.files.length > 0) return remembered
+
+  // 3) 最后兜底：历史文本提取
   const assistantTexts = [...messages]
     .filter((m) => m && m.role === 'assistant')
     .map((m) => getAssistantText(m))
     .filter((x) => String(x || '').trim())
     .slice(-20)
-  const images = []
-  const files = []
-  const seen = new Set()
   for (const text of assistantTexts.reverse()) {
     const { filePaths: screenshotPaths } = extractLocalResourceScreenshots(text)
     const filePaths = extractLocalFilesFromText(text)
@@ -6128,7 +6188,9 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     const forcedMsg = forcedSpawnText
       ? [{ role: 'assistant', content: forcedSpawnText + (forcedSpawnRuntime ? `\n\n（执行引擎：${forcedSpawnRuntime}）` : '') }]
       : []
-    const merged = [...baseMessages.slice(0, insertAt), ...delta, ...forcedMsg, ...baseMessages.slice(insertAt)]
+    const artifacts = normalizeArtifactsFromItems(imageItems, fileItems)
+    const mergedRaw = [...baseMessages.slice(0, insertAt), ...delta, ...forcedMsg, ...baseMessages.slice(insertAt)]
+    const merged = attachArtifactsToLatestAssistant(mergedRaw, artifacts)
     const messagesToSave = stripToolExecutionFromMessages(merged)
     const savePayload = { id: mainSessionId, messages: messagesToSave, projectPath }
     if (binding.channel === 'feishu') savePayload.feishuChatId = chatId
