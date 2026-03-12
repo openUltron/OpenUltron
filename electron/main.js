@@ -5714,6 +5714,18 @@ function hasPageEditIntentText(text) {
   return pageNoun.test(t)
 }
 
+function isPureScreenshotRequestText(text) {
+  const t = String(text || '').trim()
+  if (!t) return false
+  if (!isScreenshotFollowupText(t)) return false
+  // 包含页面改动意图时，交给 AI 自主理解上下文，不走快捷补图
+  if (hasPageEditIntentText(t)) return false
+  // 过长或多约束复合指令，不走快捷分支
+  if (t.length > 40) return false
+  const pureRe = /(按上次页面再截|再截一张图|重新截一张图|补发截图|把截图发我|截图发我|打开截图后发我|再来一张截图|重发截图)/i
+  return pureRe.test(t)
+}
+
 function isRecaptureRequestText(text) {
   const t = String(text || '').trim()
   if (!t) return false
@@ -6071,7 +6083,6 @@ async function processMessageReplace(payload) {
   const key = channelSessionKey(binding)
   const mainSessionId = binding.sessionId
   const messageText = String(payload?.message?.text || '').trim()
-  let effectivePayload = payload
   const progressQuery = isProgressQueryText(messageText)
   if (progressQuery) {
     const summary = buildChannelProgressSummary(key)
@@ -6089,31 +6100,7 @@ async function processMessageReplace(payload) {
     ? FEISHU_PROJECT
     : (binding.channel === 'telegram' ? TELEGRAM_PROJECT : DINGTALK_PROJECT)
   const chatId = binding.remoteId
-  const screenshotFollowup = isScreenshotFollowupText(messageText)
-  const pageEditIntent = hasPageEditIntentText(messageText)
-  if (screenshotFollowup && pageEditIntent) {
-    const pageTarget = findRecentPageTarget(projectPath, mainSessionId)
-    if (pageTarget.kind === 'file' && pageTarget.value) {
-      const augmentedText = `${messageText}\n\n【系统补充】上次页面文件：${pageTarget.value}\n请先按用户要求修改该页面，再重新截图发送。禁止仅补发旧截图。`
-      effectivePayload = {
-        ...payload,
-        message: {
-          ...(payload?.message || {}),
-          text: augmentedText
-        }
-      }
-    } else if (pageTarget.kind === 'url' && pageTarget.value) {
-      const augmentedText = `${messageText}\n\n【系统补充】上次页面链接：${pageTarget.value}\n请先按用户要求完成页面优化，再重新截图发送。禁止仅补发旧截图。`
-      effectivePayload = {
-        ...payload,
-        message: {
-          ...(payload?.message || {}),
-          text: augmentedText
-        }
-      }
-    }
-  }
-  if (screenshotFollowup && !pageEditIntent) {
+  if (isPureScreenshotRequestText(messageText)) {
     const { images, files } = collectRecentSessionArtifacts(projectPath, mainSessionId)
     const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
     const recapture = isRecaptureRequestText(messageText)
@@ -6195,7 +6182,7 @@ async function processMessageReplace(payload) {
     key,
     runSessionId
   })
-  const promise = handleChatMessageReceived(effectivePayload, runSessionId, mainSessionId, key, runId, startTime).finally(() => {
+  const promise = handleChatMessageReceived(payload, runSessionId, mainSessionId, key, runId, startTime).finally(() => {
     try { stopLongRunNotify() } catch (_) {}
     const arr = channelCurrentRun.get(key)
     if (arr) {
