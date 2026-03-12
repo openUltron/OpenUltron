@@ -76,6 +76,26 @@ function buildAttachmentPathContext(attachments = []) {
   return idx > 1 ? lines.join('\n') : ''
 }
 
+function extractScreenshotPathsFromText(text) {
+  const src = String(text || '')
+  if (!src) return []
+  const out = []
+  const seen = new Set()
+  const re = /!\[[^\]]*\]\((local-resource:\/\/screenshots\/[^)]+)\)/g
+  let m
+  while ((m = re.exec(src)) !== null) {
+    const u = String(m[1] || '')
+    const filename = u.replace(/^local-resource:\/\/screenshots\//i, '').replace(/^\/+/, '').trim()
+    if (!filename) continue
+    const full = getAppRootPath('screenshots', filename)
+    if (!fs.existsSync(full)) continue
+    if (seen.has(full)) continue
+    seen.add(full)
+    out.push(full)
+  }
+  return out
+}
+
 function hasFileReadIntent(text) {
   const t = compactText(text || '')
   if (!t) return false
@@ -420,22 +440,27 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
     async send(binding, payload) {
       const chatId = binding.remoteId
       const FEISHU_IMAGE_MAX_BYTES = 4 * 1024 * 1024
-      const imageCount = Array.isArray(payload.images) ? payload.images.length : 0
+      const textRaw = (payload.text && payload.text.trim()) ? payload.text.trim() : '（无回复内容）'
+      const screenshotPathsFromText = extractScreenshotPathsFromText(textRaw)
+      const mergedImages = Array.isArray(payload.images) ? [...payload.images] : []
+      for (const p of screenshotPathsFromText) mergedImages.push({ path: p })
+      const imageCount = mergedImages.length
       const fileCount = Array.isArray(payload.files) ? payload.files.length : 0
-      const text = (payload.text && payload.text.trim()) ? payload.text.trim() : '（无回复内容）'
+      const text = textRaw.replace(/!\[[^\]]*\]\(local-resource:\/\/screenshots\/[^)]+\)/g, '【截图】')
       appLogger?.info?.('[Feishu] 出站消息请求', {
         chatId: chatId || '',
         textLen: text.length,
         textPreview: text.slice(0, 200),
         imageCount,
-        fileCount
+        fileCount,
+        imagePathsFromText: screenshotPathsFromText.slice(0, 8)
       })
       let imageSent = 0
       let imageFailed = 0
       let fileSent = 0
       let fileFailed = 0
-      if (payload.images && payload.images.length > 0) {
-        for (const img of payload.images) {
+      if (mergedImages.length > 0) {
+        for (const img of mergedImages) {
           let imageBase64 = null
           let imageFilename = img.filename || 'screenshot.png'
           let imageResolvedPath = ''
