@@ -3359,7 +3359,7 @@ const EXTERNAL_AGENT_SCAN_TTL = 60 * 1000
 let _externalAgentScanCache = { ts: 0, agents: [] }
 
 async function runCliCommand(command, args = [], options = {}) {
-  const { cwd, timeoutMs = 90000, env } = options
+  const { cwd, timeoutMs = 90000, env, onStdout, onStderr } = options
   return await new Promise((resolve) => {
     let stdout = ''
     let stderr = ''
@@ -3374,8 +3374,16 @@ async function runCliCommand(command, args = [], options = {}) {
       timedOut = true
       try { child.kill('SIGKILL') } catch (_) {}
     }, timeoutMs)
-    child.stdout?.on('data', (chunk) => { stdout += String(chunk || '') })
-    child.stderr?.on('data', (chunk) => { stderr += String(chunk || '') })
+    child.stdout?.on('data', (chunk) => {
+      const text = String(chunk || '')
+      stdout += text
+      try { if (typeof onStdout === 'function') onStdout(text) } catch (_) {}
+    })
+    child.stderr?.on('data', (chunk) => {
+      const text = String(chunk || '')
+      stderr += text
+      try { if (typeof onStderr === 'function') onStderr(text) } catch (_) {}
+    })
     child.on('error', (err) => {
       if (done) return
       done = true
@@ -3396,6 +3404,12 @@ async function runCliCommand(command, args = [], options = {}) {
       })
     })
   })
+}
+
+function normalizeExternalLogChunk(text, maxLen = 400) {
+  const s = String(text || '').replace(/\r/g, '').replace(/\n+/g, ' ').trim()
+  if (!s) return ''
+  return s.length > maxLen ? `${s.slice(0, maxLen)}…` : s
 }
 
 async function scanExternalSubAgents(force = false) {
@@ -3478,7 +3492,22 @@ async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat 
         argsPreview: args.map((x) => String(x)).slice(0, 4)
       })
     } catch (_) {}
-    const r = await runCliCommand(command, args, { cwd, timeoutMs })
+    const r = await runCliCommand(command, args, {
+      cwd,
+      timeoutMs,
+      onStdout: (chunk) => {
+        const line = normalizeExternalLogChunk(chunk)
+        if (!line) return
+        console.log(`[SubAgentExternal][${spec.id}][stdout] ${line}`)
+        try { appLogger?.info?.(`[SubAgentExternal][${spec.id}][stdout] ${line}`) } catch (_) {}
+      },
+      onStderr: (chunk) => {
+        const line = normalizeExternalLogChunk(chunk)
+        if (!line) return
+        console.warn(`[SubAgentExternal][${spec.id}][stderr] ${line}`)
+        try { appLogger?.warn?.(`[SubAgentExternal][${spec.id}][stderr] ${line}`) } catch (_) {}
+      }
+    })
     const output = String(r.stdout || r.stderr || '').trim()
     const errout = String(r.stderr || '').trim()
     if (!r.success) {
