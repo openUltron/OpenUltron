@@ -3651,7 +3651,7 @@ function inferPreferredExternalRuntimeFromText(text = '') {
   return ''
 }
 
-async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider }, subSessionId) {
+async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider, eventSink }, subSessionId) {
   const messages = []
   const rolePrompt = roleName && String(roleName).trim()
     ? `你当前扮演的角色是「${String(roleName).trim()}」。请严格按该角色完成任务，并仅输出该角色应给出的结果。`
@@ -3689,7 +3689,7 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
     messages,
     model: model && String(model).trim() ? String(model).trim() : undefined,
     tools: getToolsForChat(),
-    sender: null,
+    sender: eventSink || null,
     config: resolvedConfig,
     projectPath: projectPath || '__main_chat__',
     panelId: undefined,
@@ -3730,6 +3730,23 @@ async function runSubChat(opts) {
       log_lines: commandLogLines.slice(-240),
       line_count: commandLogLines.length
     })
+  }
+  const appendToolResultLine = (name, rawResult) => {
+    const n = String(name || '').trim() || 'tool'
+    const s = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult || {})
+    if (!s) return
+    try {
+      const obj = JSON.parse(s)
+      let out = ''
+      if (obj.stdout != null) out += String(obj.stdout)
+      if (obj.stderr != null) out += (out ? '\n' : '') + String(obj.stderr)
+      if (!out && obj.result != null) out = String(obj.result)
+      if (!out && obj.error != null) out = `ERROR: ${String(obj.error)}`
+      if (!out) out = s
+      pushCommandLog(`[${n}] ${String(out).replace(/\s+/g, ' ').trim()}`)
+      return
+    } catch (_) {}
+    pushCommandLog(`[${n}] ${String(s).replace(/\s+/g, ' ').trim()}`)
   }
   const userRuntime = String(runtime || '').trim()
   let effectiveRuntime = userRuntime
@@ -3796,7 +3813,36 @@ async function runSubChat(opts) {
             })
           }
         } catch (_) {}
-        const out = await runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider }, subSessionId)
+        const internalEventSink = {
+          send: (channel, data) => {
+            try {
+              if (channel === 'ai-chat-tool-call') {
+                const nm = data?.toolCall?.name || ''
+                const argsPreview = String(data?.toolCall?.arguments || '').slice(0, 240)
+                pushCommandLog(`[tool_call] ${nm}${argsPreview ? ` ${argsPreview}` : ''}`)
+                emitPartial()
+              } else if (channel === 'ai-chat-tool-result') {
+                appendToolResultLine(data?.name || '', data?.result)
+                emitPartial()
+              } else if (channel === 'ai-chat-token') {
+                const tok = String(data?.token || '').trim()
+                if (tok) {
+                  pushCommandLog(`[token] ${tok.slice(0, 120)}`)
+                  emitPartial()
+                }
+              }
+            } catch (_) {}
+          }
+        }
+        const out = await runByInternalSubAgent({
+          task,
+          systemPrompt,
+          roleName,
+          model,
+          projectPath,
+          provider,
+          eventSink: internalEventSink
+        }, subSessionId)
         if (out.success) {
           try { sessionRegistry.markComplete(subSessionId) } catch (_) {}
           try {
@@ -3806,7 +3852,7 @@ async function runSubChat(opts) {
               attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1)
             })
           } catch (_) {}
-          return { ...out, attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1) }
+          return { ...out, commandLogs: [...commandLogLines], attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1) }
         }
         try {
           appLogger?.warn?.('[SubAgentDispatch] 子Agent执行失败，将尝试回退', {
