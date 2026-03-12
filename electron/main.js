@@ -5966,7 +5966,7 @@ function isPureScreenshotRequestText(text) {
   if (hasPageEditIntentText(t)) return false
   // 过长或多约束复合指令，不走快捷分支
   if (t.length > 40) return false
-  const pureRe = /(按上次页面再截|再截一张图|重新截一张图|补发截图|把截图发我|截图发我|打开截图后发我|再来一张截图|重发截图)/i
+  const pureRe = /(按上次页面再截|再截一张图|重新截一张图|补发截图|把截图发我|截图发我|打开截图后发我|再来一张截图|重发截图|截个图发给我|打开截个图发给我|打开.*截.*图.*发给我)/i
   return pureRe.test(t)
 }
 
@@ -6807,9 +6807,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
         : (spawnResultText || (imageItems.length > 0 ? '截图已发至当前会话。' : null)))
     const logsToSendRaw = forcedSpawnText ? forcedSpawnLogs : spawnLogText
     const logsToSend = String(logsToSendRaw || '').trim()
-    const textToSend = logsToSend
-      ? `${baseTextToSend || '已执行。'}\n\n执行过程：\n${logsToSend}`
-      : baseTextToSend
+    const textToSend = baseTextToSend
     if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
       await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
     }
@@ -6819,8 +6817,11 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     const forcedMsg = forcedSpawnText
       ? [{ role: 'assistant', content: forcedSpawnText + (forcedSpawnRuntime ? `\n\n（执行引擎：${forcedSpawnRuntime}）` : '') }]
       : []
+    const localLogMsg = logsToSend
+      ? [{ role: 'assistant', content: `执行过程：\n${logsToSend}` }]
+      : []
     const artifacts = normalizeArtifactsFromItems(imageItems, fileItems)
-    const mergedRaw = [...baseMessages.slice(0, insertAt), ...delta, ...forcedMsg, ...baseMessages.slice(insertAt)]
+    const mergedRaw = [...baseMessages.slice(0, insertAt), ...delta, ...forcedMsg, ...localLogMsg, ...baseMessages.slice(insertAt)]
     const merged = attachArtifactsToLatestAssistant(mergedRaw, artifacts)
     const messagesToSave = stripToolExecutionFromMessages(merged)
     const savePayload = { id: mainSessionId, messages: messagesToSave, projectPath }
