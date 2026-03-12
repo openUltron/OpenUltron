@@ -4979,6 +4979,50 @@ function statusTextForUser(status) {
   return status || '未知'
 }
 
+function phaseTextForUser(phase) {
+  const p = String(phase || '').trim()
+  if (!p) return ''
+  if (p === 'tool_running') return '执行步骤中'
+  if (p === 'thinking') return '思考中'
+  if (p === 'executing') return '执行中'
+  if (p === 'paused') return '已暂停'
+  if (p === 'completed') return '已完成'
+  if (p === 'failed') return '失败'
+  return p
+}
+
+function summarizeTaskText(text, maxLen = 44) {
+  const s = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!s) return ''
+  return s.length > maxLen ? `${s.slice(0, maxLen)}...` : s
+}
+
+function parseToolCallArgs(rawArgs) {
+  if (rawArgs == null) return null
+  if (typeof rawArgs === 'object') return rawArgs
+  if (typeof rawArgs !== 'string') return null
+  try {
+    return JSON.parse(rawArgs)
+  } catch (_) {
+    return null
+  }
+}
+
+function updateRunEntry(key, runSessionId, patch = {}) {
+  const runs = channelCurrentRun.get(key) || []
+  const idx = runs.findIndex(r => r.runSessionId === runSessionId)
+  if (idx < 0) return
+  runs[idx] = { ...runs[idx], ...patch }
+}
+
+function humanizeLastAction(action) {
+  const a = String(action || '').trim()
+  if (!a) return ''
+  if (/调用工具:\s*sessions_spawn/i.test(a)) return '已派发给子 Agent 执行'
+  if (/调用工具:\s*/i.test(a)) return a.replace(/^调用工具:\s*/i, '正在执行：')
+  return a
+}
+
 function buildChannelProgressSummary(key) {
   const runs = (channelCurrentRun.get(key) || []).slice().sort((a, b) => a.startTime - b.startTime)
   if (runs.length === 0) return ''
@@ -4990,23 +5034,28 @@ function buildChannelProgressSummary(key) {
     const s = byId.get(r.runSessionId)
     const status = statusTextForUser(s?.status || 'running')
     const progressPct = Number(s?.progress?.progress || 0)
-    const phase = s?.progress?.phase ? String(s.progress.phase) : ''
+    const phase = s?.progress?.phase ? phaseTextForUser(String(s.progress.phase)) : ''
     const lastAction = s?.progress?.last_action ? String(s.progress.last_action) : ''
     const eta = s?.progress?.eta ? String(s.progress.eta) : ''
     const duration = formatRunningDuration(r.startTime)
+    const taskText = summarizeTaskText(r.delegatedTask || r.userTask || '')
     let tail = ''
-    if (lastAction) {
-      tail = `，最近步骤：${lastAction}`
+    if (taskText) {
+      tail = `，任务：${taskText}`
+    }
+    const actionText = humanizeLastAction(lastAction)
+    if (actionText) {
+      tail += `，当前：${actionText}`
     } else if (s?.lastToolCall?.name) {
-      tail = `，最近步骤：${s.lastToolCall.name}`
+      tail += `，当前：${s.lastToolCall.name}`
     } else if (s?.lastContent) {
       const shortContent = String(s.lastContent).replace(/\s+/g, ' ').trim().slice(0, 28)
-      if (shortContent) tail = `，最近输出：${shortContent}`
+      if (shortContent) tail += `，最近输出：${shortContent}`
     }
     const phaseText = phase ? `，阶段：${phase}` : ''
     const progressText = `，进度：${Math.max(0, Math.min(100, progressPct))}%`
     const etaText = eta ? `，预计剩余：${eta}` : ''
-    lines.push(`${i + 1}. ${r.runSessionId}（${status}${phaseText}${progressText}，已运行 ${duration}${etaText}${tail}）`)
+    lines.push(`${i + 1}. （${status}${phaseText}${progressText}，已运行 ${duration}${etaText}${tail}）`)
   }
   return lines.join('\n')
 }
@@ -5056,7 +5105,15 @@ async function processMessageReplace(payload) {
     channelKeyByRunSessionId.delete(runSessionId)
     runStartTimeBySessionId.delete(runSessionId)
   })
-  const runEntry = { runId, runSessionId, promise, startTime }
+  const runEntry = {
+    runId,
+    runSessionId,
+    promise,
+    startTime,
+    userTask: summarizeTaskText(messageText),
+    delegatedTask: undefined,
+    delegatedRole: undefined
+  }
   channelCurrentRun.get(key).push(runEntry)
   channelKeyByRunSessionId.set(runSessionId, key)
   runStartTimeBySessionId.set(runSessionId, startTime)
@@ -5124,6 +5181,20 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
           resolve(data.messages)
         }
         if (channel === 'ai-chat-error') reject(new Error((data && data.error) || 'AI 出错'))
+        if (channel === 'ai-chat-tool-call' && data && data.toolCall) {
+          const tc = data.toolCall
+          if (tc.name === 'sessions_spawn') {
+            const args = parseToolCallArgs(tc.arguments)
+            const delegatedTask = summarizeTaskText(args && args.task ? args.task : '')
+            const delegatedRole = summarizeTaskText(args && args.role_name ? args.role_name : '', 16)
+            if (delegatedTask || delegatedRole) {
+              updateRunEntry(key, runSessionId, {
+                delegatedTask: delegatedTask || undefined,
+                delegatedRole: delegatedRole || undefined
+              })
+            }
+          }
+        }
         if (channel === 'ai-chat-tool-result' && data) {
           const raw = data.result != null ? (typeof data.result === 'string' ? data.result : JSON.stringify(data.result)) : ''
           if (raw) {
