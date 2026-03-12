@@ -5705,6 +5705,15 @@ function isScreenshotFollowupText(text) {
   return false
 }
 
+function hasPageEditIntentText(text) {
+  const t = String(text || '').trim()
+  if (!t) return false
+  const editVerb = /(优化|改版|重写|美化|调整|重做|改进|完善|修复|升级|润色|增强|改下|改一下|重新做|太瘦|太窄|太丑|不好看|不美观)/i
+  if (!editVerb.test(t)) return false
+  const pageNoun = /(网页|页面|html|css|样式|布局|ui|界面|卡片|按钮|上次|这个)/i
+  return pageNoun.test(t)
+}
+
 function isRecaptureRequestText(text) {
   const t = String(text || '').trim()
   if (!t) return false
@@ -6062,6 +6071,7 @@ async function processMessageReplace(payload) {
   const key = channelSessionKey(binding)
   const mainSessionId = binding.sessionId
   const messageText = String(payload?.message?.text || '').trim()
+  let effectivePayload = payload
   const progressQuery = isProgressQueryText(messageText)
   if (progressQuery) {
     const summary = buildChannelProgressSummary(key)
@@ -6079,7 +6089,31 @@ async function processMessageReplace(payload) {
     ? FEISHU_PROJECT
     : (binding.channel === 'telegram' ? TELEGRAM_PROJECT : DINGTALK_PROJECT)
   const chatId = binding.remoteId
-  if (isScreenshotFollowupText(messageText)) {
+  const screenshotFollowup = isScreenshotFollowupText(messageText)
+  const pageEditIntent = hasPageEditIntentText(messageText)
+  if (screenshotFollowup && pageEditIntent) {
+    const pageTarget = findRecentPageTarget(projectPath, mainSessionId)
+    if (pageTarget.kind === 'file' && pageTarget.value) {
+      const augmentedText = `${messageText}\n\n【系统补充】上次页面文件：${pageTarget.value}\n请先按用户要求修改该页面，再重新截图发送。禁止仅补发旧截图。`
+      effectivePayload = {
+        ...payload,
+        message: {
+          ...(payload?.message || {}),
+          text: augmentedText
+        }
+      }
+    } else if (pageTarget.kind === 'url' && pageTarget.value) {
+      const augmentedText = `${messageText}\n\n【系统补充】上次页面链接：${pageTarget.value}\n请先按用户要求完成页面优化，再重新截图发送。禁止仅补发旧截图。`
+      effectivePayload = {
+        ...payload,
+        message: {
+          ...(payload?.message || {}),
+          text: augmentedText
+        }
+      }
+    }
+  }
+  if (screenshotFollowup && !pageEditIntent) {
     const { images, files } = collectRecentSessionArtifacts(projectPath, mainSessionId)
     const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
     const recapture = isRecaptureRequestText(messageText)
@@ -6161,7 +6195,7 @@ async function processMessageReplace(payload) {
     key,
     runSessionId
   })
-  const promise = handleChatMessageReceived(payload, runSessionId, mainSessionId, key, runId, startTime).finally(() => {
+  const promise = handleChatMessageReceived(effectivePayload, runSessionId, mainSessionId, key, runId, startTime).finally(() => {
     try { stopLongRunNotify() } catch (_) {}
     const arr = channelCurrentRun.get(key)
     if (arr) {
