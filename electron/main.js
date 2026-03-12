@@ -3503,6 +3503,16 @@ function resolveRuntimeChain(runtime, availableExternalIds) {
   return ['internal']
 }
 
+function inferPreferredExternalRuntimeFromText(text = '') {
+  const t = String(text || '').toLowerCase()
+  if (!t) return ''
+  if (/\bcodex\b|用codex|走codex|指定codex/.test(t)) return 'external:codex'
+  if (/\bclaude\b|用claude|走claude|指定claude/.test(t)) return 'external:claude'
+  if (/\bopenclaw\b|用openclaw|走openclaw|指定openclaw/.test(t)) return 'external:openclaw'
+  if (/\bopencode\b|用opencode|走opencode|指定opencode/.test(t)) return 'external:opencode'
+  return ''
+}
+
 async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider }, subSessionId) {
   const messages = []
   const rolePrompt = roleName && String(roleName).trim()
@@ -3564,19 +3574,33 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
 async function runSubChat(opts) {
   const { task, systemPrompt, roleName, model, projectPath, provider, runtime } = opts || {}
   const subSessionId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const userRuntime = String(runtime || '').trim()
+  let effectiveRuntime = userRuntime
+  if (!effectiveRuntime || effectiveRuntime.toLowerCase() === 'auto') {
+    const inferred = inferPreferredExternalRuntimeFromText([task, systemPrompt, roleName].filter(Boolean).join('\n'))
+    if (inferred) effectiveRuntime = inferred
+  }
   const scan = await scanExternalSubAgents(false)
   const availableExternalIds = scan.filter(a => a.available).map(a => a.id)
-  const runtimeChain = resolveRuntimeChain(runtime, availableExternalIds)
+  const runtimeChain = resolveRuntimeChain(effectiveRuntime, availableExternalIds)
   const attemptErrors = []
   try {
     appLogger?.info?.('[SubAgentDispatch] 开始派发子Agent', {
       subSessionId,
-      requestedRuntime: runtime || 'internal',
+      requestedRuntime: userRuntime || 'auto',
+      effectiveRuntime: effectiveRuntime || 'auto',
       runtimeChain,
       availableExternalIds,
       taskPreview: String(task || '').slice(0, 120)
     })
-    appLogger?.info?.(`[SubAgentDispatch] runtime=${runtime || 'internal'} chain=${runtimeChain.join('>')} available=${availableExternalIds.join(',') || 'none'}`)
+    appLogger?.info?.(`[SubAgentDispatch] runtime=${effectiveRuntime || 'auto'} chain=${runtimeChain.join('>')} available=${availableExternalIds.join(',') || 'none'}`)
+    console.log('[SubAgentDispatch] runtime=', effectiveRuntime || 'auto', 'chain=', runtimeChain.join('>'), 'available=', availableExternalIds.join(',') || 'none')
+    if ((effectiveRuntime || 'auto') === 'auto' && availableExternalIds.length === 0) {
+      console.warn('[SubAgentDispatch] auto 模式下无可用外部子Agent，将使用 internal')
+    }
+    if (effectiveRuntime.startsWith('external:') && runtimeChain[0] !== effectiveRuntime.slice('external:'.length)) {
+      console.warn('[SubAgentDispatch] 指定外部子Agent不可用，将按回退链执行', effectiveRuntime, runtimeChain.join('>'))
+    }
   } catch (_) {}
 
   for (const rt of runtimeChain) {
@@ -3655,7 +3679,8 @@ async function runSubChat(opts) {
   try {
     appLogger?.error?.('[SubAgentDispatch] 子Agent派发失败', {
       subSessionId,
-      requestedRuntime: runtime || 'internal',
+      requestedRuntime: userRuntime || 'auto',
+      effectiveRuntime: effectiveRuntime || 'auto',
       runtimeChain,
       errors: attemptErrors
     })
@@ -4487,6 +4512,7 @@ function getCoordinatorSystemPrompt(channel = '') {
     `你是 ${channelName} 主 Agent，只负责：接收消息、派发子任务、管理状态、向用户汇报。`,
     '除纯问候或进度询问外，用户的实际任务必须调用 sessions_spawn 交给子 Agent 执行。',
     '优先使用 sessions_spawn(runtime="auto")，系统会先尝试可用外部子 Agent（codex/claude/openclaw/opencode），失败自动回退到其他可用子 Agent 与 internal。',
+    '若用户明确指定某子 Agent（如“用 codex”“用 claude”），必须把 runtime 设为 external:<name>（例如 external:codex）；若不可用再按系统回退链执行，并在回复里说明已回退。',
     '主 Agent 不直接调用业务工具、不直接执行具体任务。',
     '收到子 Agent 结果后，简洁向用户回复结论与必要说明。'
   ].join('\n')
