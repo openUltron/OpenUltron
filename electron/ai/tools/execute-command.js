@@ -1,6 +1,9 @@
 // 工具：执行 Shell 命令（主力工具）；执行结果单独写入 command-execution-log，不写入对话历史
 const commandExecutionLog = require('../command-execution-log')
 const executorRegistry = require('../../extensions/executor-registry')
+const userConfirmationTool = require('./user-confirmation')
+const os = require('os')
+const path = require('path')
 
 const definition = {
   description: '在指定目录执行 shell（Bash）命令。支持：查看文件(cat/head/ls)、搜索(grep/find)、Git(git status/commit/push)、构建(npm/yarn)、执行 Bash 脚本(bash script.sh)、执行 Node.js 脚本(node script.js)等。一条命令可用 && 或 | 组合。',
@@ -22,6 +25,7 @@ const MAX_TIMEOUT_MS = 1800000
 const MAX_STREAM_PREVIEW_LEN = 4000
 const STREAM_PUSH_INTERVAL_MS = 700
 const INSTALL_TIMEOUT_MS = 1800000
+const PROTECTED_DIRS = ['Desktop', 'Documents', 'Downloads', 'Music', 'Pictures', 'Movies']
 
 function clampTimeout(timeout) {
   const n = Number(timeout)
@@ -76,6 +80,61 @@ function buildInstallRetryCommand(command = '') {
   return c
 }
 
+function normalizePathLike(p = '') {
+  const raw = String(p || '').trim()
+  if (!raw) return ''
+  if (raw === '~') return os.homedir()
+  if (raw.startsWith('~/')) return path.join(os.homedir(), raw.slice(2))
+  return raw
+}
+
+function shouldBlockProtectedScan(command = '', cwd = '') {
+  const cmd = String(command || '').trim()
+  const low = cmd.toLowerCase()
+  const home = os.homedir()
+  const normCwd = normalizePathLike(cwd)
+
+  const isRecursiveScan = /\b(find|fd|rg)\b/.test(low)
+  if (isRecursiveScan && normCwd === home) {
+    return '为避免 macOS 权限弹窗，已阻止在 HOME 根目录执行递归扫描。请改到具体项目目录或 ~/.openultron/workspace。'
+  }
+
+  // 显式扫描受保护目录时直接拦截（最常见触发 TCC）
+  for (const dir of PROTECTED_DIRS) {
+    const abs = `${home}/${dir}`.toLowerCase()
+    const pats = [
+      `~/${dir}`.toLowerCase(),
+      abs,
+      `${abs}/`
+    ]
+    if (pats.some(p => low.includes(p))) {
+      return `为避免系统授权弹框，已阻止访问受保护目录 ${home}/${dir}。请改用工作区目录。`
+    }
+  }
+  return ''
+}
+
+function isRiskyCommand(command = '') {
+  const c = String(command || '').trim().toLowerCase()
+  if (!c) return false
+  const riskyRules = [
+    /\brm\s+-rf\b/,
+    /\bmkfs\b/,
+    /\bdd\s+if=/,
+    /\bshutdown\b/,
+    /\breboot\b/,
+    /\bsudo\b/,
+    /\bgit\s+push\b/,
+    /\bgit\s+reset\s+--hard\b/,
+    /\bgit\s+clean\s+-fd/,
+    /\bchmod\s+-r\b/,
+    /\bchown\s+-r\b/,
+    />\s*\/dev\/(sd|disk)/,
+    /\bkill\s+-9\b/
+  ]
+  return riskyRules.some(re => re.test(c))
+}
+
 async function execute(args, context = {}) {
   const { command, cwd, timeout = DEFAULT_TIMEOUT_MS, runtime = 'shell' } = args
   const projectPath = context.projectPath || ''
@@ -88,6 +147,35 @@ async function execute(args, context = {}) {
 
   if (!command || !cwd) {
     return { success: false, error: '缺少 command 或 cwd 参数' }
+  }
+
+  if (isRiskyCommand(command)) {
+    const confirmRes = await userConfirmationTool.execute({
+      message: `将执行高风险命令：${command}\n目录：${cwd}\n确认继续执行吗？`,
+      severity: 'danger'
+    }, context)
+    if (!confirmRes?.confirmed) {
+      return {
+        success: false,
+        error: confirmRes?.message || '用户拒绝执行风险命令',
+        command,
+        cwd,
+        exitCode: 130,
+        timedOut: false
+      }
+    }
+  }
+
+  const blockReason = shouldBlockProtectedScan(command, cwd)
+  if (blockReason) {
+    return {
+      success: false,
+      error: blockReason,
+      command,
+      cwd,
+      exitCode: 126,
+      timedOut: false
+    }
   }
 
   const executor = executorRegistry.get(runtime || 'shell')
