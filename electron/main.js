@@ -15,6 +15,7 @@ const { createApiServer, DEFAULT_PORT: API_DEFAULT_PORT } = require('./api/serve
 const { getAppRoot, getAppRootPath, getWorkspaceRoot, getWorkspacePath, ensureWorkspaceDirs } = require('./app-root')
 const { ingestRoundAttachments } = require('./ai/attachment-ingest')
 const artifactRegistry = require('./ai/artifact-registry')
+const aiBrowserManager = require('./ai/browser-window-manager')
 const { getLogPath, readTail, getForAi, logger: appLogger, patchConsole } = require('./app-logger')
 const { filterSessionsList, isRunSessionId } = require('./ai/sessions-list-filter')
 
@@ -3731,6 +3732,8 @@ async function runSubChat(opts) {
       line_count: commandLogLines.length
     })
   }
+  pushCommandLog(`[meta] sub-agent started runtime=${runtime || 'auto'} effective_pending`)
+  emitPartial()
   const appendToolResultLine = (name, rawResult) => {
     const n = String(name || '').trim() || 'tool'
     const s = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult || {})
@@ -3754,6 +3757,8 @@ async function runSubChat(opts) {
     const inferred = inferPreferredExternalRuntimeFromText([task, systemPrompt, roleName].filter(Boolean).join('\n'))
     effectiveRuntime = inferred || 'internal'
   }
+  pushCommandLog(`[meta] effective_runtime=${effectiveRuntime || 'internal'}`)
+  emitPartial()
   const scan = await scanExternalSubAgents(false)
   const availableExternal = scan.filter(a => a.available)
   const availableExternalIds = availableExternal.map(a => a.id)
@@ -3797,6 +3802,8 @@ async function runSubChat(opts) {
   for (const rt of runtimeChain) {
     try {
       if (rt === 'internal') {
+        pushCommandLog('[meta] attempt internal started')
+        emitPartial()
         try {
           sessionRegistry.updateProgress(subSessionId, {
             phase: 'tool_running',
@@ -3844,6 +3851,8 @@ async function runSubChat(opts) {
           eventSink: internalEventSink
         }, subSessionId)
         if (out.success) {
+          pushCommandLog('[meta] attempt internal success')
+          emitPartial()
           try { sessionRegistry.markComplete(subSessionId) } catch (_) {}
           try {
             appLogger?.info?.('[SubAgentDispatch] 子Agent执行成功', {
@@ -3854,6 +3863,8 @@ async function runSubChat(opts) {
           } catch (_) {}
           return { ...out, commandLogs: [...commandLogLines], attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1) }
         }
+        pushCommandLog(`[meta] attempt internal failed: ${out.error || '执行失败'}`)
+        emitPartial()
         try {
           appLogger?.warn?.('[SubAgentDispatch] 子Agent执行失败，将尝试回退', {
             subSessionId,
@@ -3867,6 +3878,8 @@ async function runSubChat(opts) {
       }
       const spec = EXTERNAL_SUBAGENT_SPECS.find(s => s.id === rt)
       if (!spec || !availableExternalIds.includes(rt)) {
+        pushCommandLog(`[meta] attempt external:${rt} skipped: unavailable`)
+        emitPartial()
         try {
           appLogger?.warn?.('[SubAgentDispatch] 外部子Agent不可用，跳过', {
             subSessionId,
@@ -3923,6 +3936,8 @@ async function runSubChat(opts) {
         try { if (beatTimer) clearInterval(beatTimer) } catch (_) {}
       }
       if (out.success) {
+        pushCommandLog(`[meta] attempt external:${rt} success`)
+        emitPartial()
         try { sessionRegistry.markComplete(subSessionId) } catch (_) {}
         try {
           appLogger?.info?.('[SubAgentDispatch] 子Agent执行成功', {
@@ -3941,6 +3956,8 @@ async function runSubChat(opts) {
           attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1)
         }
       }
+      pushCommandLog(`[meta] attempt external:${rt} failed: ${out.error || '执行失败'}`)
+      emitPartial()
       try {
         const attemptSummary = Array.isArray(out.attempts)
           ? out.attempts.map((x, i) => ({
@@ -3993,6 +4010,8 @@ async function runSubChat(opts) {
     })
   } catch (_) {}
   try { sessionRegistry.markError(subSessionId, attemptErrors.join(' | ') || '子 Agent 执行失败') } catch (_) {}
+  pushCommandLog(`[meta] sub-agent failed: ${attemptErrors.join(' | ') || '子 Agent 执行失败'}`)
+  emitPartial()
   return {
     success: false,
     error: attemptErrors.join(' | ') || '子 Agent 执行失败',
@@ -6118,6 +6137,25 @@ async function captureUrlScreenshot(url) {
   }
 }
 
+async function captureAiBrowserCurrentScreenshot() {
+  let win = null
+  try {
+    win = await aiBrowserManager.getWindow()
+    if (!win || win.isDestroyed()) return null
+    const wc = win.webContents
+    const image = await wc.capturePage()
+    const png = image.toPNG()
+    if (!png || png.length === 0) return null
+    const fileName = `capture-current-${Date.now()}.png`
+    const out = getAppRootPath('screenshots', fileName)
+    fs.writeFileSync(out, png)
+    return out
+  } catch (e) {
+    appLogger?.warn?.('[Feishu] 当前AI浏览器页签截图失败', { error: e.message || String(e) })
+    return null
+  }
+}
+
 function formatRunningDuration(startTime) {
   const ms = Math.max(0, Date.now() - Number(startTime || 0))
   const sec = Math.floor(ms / 1000)
@@ -6365,9 +6403,17 @@ async function processMessageReplace(payload) {
         return
       }
     }
+    const currentShot = await captureAiBrowserCurrentScreenshot()
+    if (currentShot) {
+      eventBus.emit('chat.session.completed', {
+        binding: outBinding,
+        payload: { text: '已按当前浏览器页签截图并发送。', images: [{ path: currentShot }], files: [] }
+      })
+      return
+    }
     eventBus.emit('chat.session.completed', {
       binding: outBinding,
-      payload: { text: '未找到可用截图产物，且无法从上次页面文件生成截图。请提供页面 URL 或文件路径。' }
+      payload: { text: '未找到可用截图产物，且当前浏览器页签无法截图。请提供页面 URL 或文件路径。' }
     })
     return
   }
