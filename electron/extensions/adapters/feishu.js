@@ -438,6 +438,7 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
         for (const img of payload.images) {
           let imageBase64 = null
           let imageFilename = img.filename || 'screenshot.png'
+          let imageResolvedPath = ''
           if (img.base64 && typeof img.base64 === 'string' && img.base64.length > 0) {
             imageBase64 = img.base64
           } else if (img.path) {
@@ -445,6 +446,7 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
             const resolvedPath = path.isAbsolute(img.path)
               ? img.path
               : path.join(getAppRootPath('screenshots'), path.basename(img.path))
+            imageResolvedPath = resolvedPath
             if (!fs.existsSync(resolvedPath)) continue
             const st = fs.statSync(resolvedPath)
             if (!st.isFile()) {
@@ -469,8 +471,21 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
             image_base64: imageBase64,
             image_filename: imageFilename
           })
+          appLogger?.info?.('[Feishu] 图片发送结果', {
+            chatId: chatId || '',
+            filename: imageFilename,
+            path: imageResolvedPath || '',
+            success: !!(result && result.success),
+            message: result && result.message ? String(result.message).slice(0, 200) : ''
+          })
           if (!result || !result.success) {
             imageFailed++
+            appLogger?.warn?.('[Feishu] 图片发送失败', {
+              chatId: chatId || '',
+              filename: imageFilename,
+              path: imageResolvedPath || '',
+              reason: (result && result.message) || '未知'
+            })
             await feishuNotify.sendMessage({ chat_id: chatId, text: `截图发送失败：${(result && result.message) || '未知'}` }).catch(() => {})
           } else {
             imageSent++
@@ -513,8 +528,20 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
             file_path: p,
             file_name: (f && f.name) ? String(f.name) : path.basename(p)
           })
+          appLogger?.info?.('[Feishu] 文件发送结果', {
+            chatId: chatId || '',
+            path: p,
+            fileName: (f && f.name) ? String(f.name) : path.basename(p),
+            success: !!(result && result.success),
+            message: result && result.message ? String(result.message).slice(0, 200) : ''
+          })
           if (!result || !result.success) {
             fileFailed++
+            appLogger?.warn?.('[Feishu] 文件发送失败', {
+              chatId: chatId || '',
+              path: p,
+              reason: (result && result.message) || '未知'
+            })
             await feishuNotify.sendMessage({ chat_id: chatId, text: `文件发送失败：${(result && result.message) || '未知'}` }).catch(() => {})
           } else {
             fileSent++

@@ -4108,11 +4108,11 @@ const aiGateway = createGateway({
       if (!seenPath.has(p)) { seenPath.add(p); imageItems.push({ path: p }) }
     }
     for (const p of extractLocalFilesFromText(cleanedRaw)) {
-      if (isImageFilePath(p)) {
-        if (!seenPath.has(p)) { seenPath.add(p); imageItems.push({ path: p }) }
-      } else {
-        fileItems.push({ path: p })
+      if (isImageFilePath(p) && !seenPath.has(p)) {
+        seenPath.add(p)
+        imageItems.push({ path: p })
       }
+      // 飞书自动回发阶段仅自动发送图片；非图片文件由显式工具调用发送，避免误发本地路径
     }
     const spawnResultText = extractLatestSessionsSpawnResult(data.messages || [])
     const cleanedFeishu = (stripFeishuScreenshotMisfireText(cleanedRaw) || '').trim()
@@ -4125,6 +4125,16 @@ const aiGateway = createGateway({
     const textToSend = cleanedFeishu || spawnResultText || (imageItems.length > 0 ? '截图已发至当前会话。' : '（无回复内容）')
     const outBinding = { sessionId, projectPath: '__feishu__', channel: 'feishu', remoteId: chatId, feishuChatId: chatId }
     const outPayload = { text: textToSend, images: imageItems, files: fileItems }
+    appLogger?.info?.('[Feishu] 回发载荷', {
+      sessionId: String(sessionId || ''),
+      chatId: String(chatId || ''),
+      textLen: String(textToSend || '').length,
+      textPreview: String(textToSend || '').slice(0, 200),
+      imageCount: imageItems.length,
+      fileCount: fileItems.length,
+      imagePaths: imageItems.map((x) => (x && x.path) ? String(x.path) : '').filter(Boolean).slice(0, 8),
+      filePaths: fileItems.map((x) => (x && x.path) ? String(x.path) : '').filter(Boolean).slice(0, 8)
+    })
     if (imageItems.length > 0) appLogger?.info?.('[Feishu] 应用内飞书会话完成，带图回发', { imageCount: imageItems.length })
     eventBus.emit('chat.session.completed', { binding: outBinding, payload: outPayload })
   },

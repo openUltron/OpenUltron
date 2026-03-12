@@ -91,18 +91,28 @@ function write(level, message, options = {}) {
   }
 }
 
+function writeWithMeta(level, msg, opts) {
+  if (!opts || typeof opts !== 'object' || Array.isArray(opts)) {
+    write(level, msg, {})
+    return
+  }
+  const { module, stack, ...meta } = opts
+  const metaText = Object.keys(meta).length ? ` ${serializeArgs([meta])}` : ''
+  write(level, `${String(msg || '')}${metaText}`, { module, stack })
+}
+
 const logger = {
-  debug: (msg, opts) => write('debug', msg, opts),
-  info: (msg, opts) => write('info', msg, opts),
-  warn: (msg, opts) => write('warn', msg, opts),
-  error: (msg, opts) => write('error', msg, opts),
+  debug: (msg, opts) => writeWithMeta('debug', msg, opts),
+  info: (msg, opts) => writeWithMeta('info', msg, opts),
+  warn: (msg, opts) => writeWithMeta('warn', msg, opts),
+  error: (msg, opts) => writeWithMeta('error', msg, opts),
   /** 带 module 的快捷方法，便于各模块打日志 */
   module(moduleName) {
     return {
-      debug: (msg, o) => write('debug', msg, { ...o, module: moduleName }),
-      info: (msg, o) => write('info', msg, { ...o, module: moduleName }),
-      warn: (msg, o) => write('warn', msg, { ...o, module: moduleName }),
-      error: (msg, o) => write('error', msg, { ...o, module: moduleName })
+      debug: (msg, o) => writeWithMeta('debug', msg, { ...o, module: moduleName }),
+      info: (msg, o) => writeWithMeta('info', msg, { ...o, module: moduleName }),
+      warn: (msg, o) => writeWithMeta('warn', msg, { ...o, module: moduleName }),
+      error: (msg, o) => writeWithMeta('error', msg, { ...o, module: moduleName })
     }
   }
 }
