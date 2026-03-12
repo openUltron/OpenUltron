@@ -189,6 +189,7 @@ class StdioMcpConnection {
     this.pending = new Map() // id -> { resolve, reject }
     this.tools = []
     this.ready = false
+    this._restarting = false
   }
 
   async start() {
@@ -406,6 +407,7 @@ class StdioMcpConnection {
       const childCount = Number((state && state.childCount) || 0)
       const invalidPage = !href || href === 'about:blank' || href.startsWith('chrome-error://')
       if (invalidPage) {
+        await this._restartChromeSession('invalid_page_before_screenshot')
         const err = new Error(`chrome-devtools 当前页不可截图: ${href || 'about:blank'}。请先导航到目标页面后再截图。`)
         err.code = 'SCREENSHOT_INVALID_PAGE'
         err.nonRetryable = true
@@ -415,10 +417,25 @@ class StdioMcpConnection {
       if (looksReady) return
       await new Promise((r) => setTimeout(r, 300))
     }
+    await this._restartChromeSession('page_not_ready_before_screenshot')
     const err = new Error('chrome-devtools 页面渲染未就绪，截图已中止。请先等待页面加载完成后重试。')
     err.code = 'SCREENSHOT_NOT_READY'
     err.nonRetryable = true
     throw err
+  }
+
+  async _restartChromeSession(reason = 'unknown') {
+    if (this._restarting) return
+    this._restarting = true
+    try {
+      console.warn(`[MCP:${this.name}] 检测到异常页面状态，重启会话: ${reason}`)
+      this.stop()
+      await this.start()
+    } catch (e) {
+      console.error(`[MCP:${this.name}] 重启会话失败:`, e.message || String(e))
+    } finally {
+      this._restarting = false
+    }
   }
 
   stop() {
