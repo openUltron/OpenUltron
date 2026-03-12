@@ -3423,6 +3423,20 @@ async function scanExternalSubAgents(force = false) {
     })
   }
   _externalAgentScanCache = { ts: now, agents: list }
+  try {
+    appLogger?.info?.('[SubAgentScan] 外部子Agent扫描完成', {
+      force: !!force,
+      total: list.length,
+      available: list.filter(x => x.available).map(x => x.id),
+      details: list.map(x => ({
+        id: x.id,
+        available: !!x.available,
+        version: x.version || '',
+        path: x.path || '',
+        reason: x.reason || ''
+      }))
+    })
+  } catch (_) {}
   return list
 }
 
@@ -3549,22 +3563,60 @@ async function runSubChat(opts) {
   const availableExternalIds = scan.filter(a => a.available).map(a => a.id)
   const runtimeChain = resolveRuntimeChain(runtime, availableExternalIds)
   const attemptErrors = []
+  try {
+    appLogger?.info?.('[SubAgentDispatch] 开始派发子Agent', {
+      subSessionId,
+      requestedRuntime: runtime || 'internal',
+      runtimeChain,
+      availableExternalIds,
+      taskPreview: String(task || '').slice(0, 120)
+    })
+  } catch (_) {}
 
   for (const rt of runtimeChain) {
     try {
       if (rt === 'internal') {
         const out = await runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider }, subSessionId)
-        if (out.success) return { ...out, attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1) }
+        if (out.success) {
+          try {
+            appLogger?.info?.('[SubAgentDispatch] 子Agent执行成功', {
+              subSessionId,
+              runtime: 'internal',
+              attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1)
+            })
+          } catch (_) {}
+          return { ...out, attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1) }
+        }
+        try {
+          appLogger?.warn?.('[SubAgentDispatch] 子Agent执行失败，将尝试回退', {
+            subSessionId,
+            runtime: 'internal',
+            error: out.error || '执行失败'
+          })
+        } catch (_) {}
         attemptErrors.push(`[internal] ${out.error || '执行失败'}`)
         continue
       }
       const spec = EXTERNAL_SUBAGENT_SPECS.find(s => s.id === rt)
       if (!spec || !availableExternalIds.includes(rt)) {
+        try {
+          appLogger?.warn?.('[SubAgentDispatch] 外部子Agent不可用，跳过', {
+            subSessionId,
+            runtime: `external:${rt}`
+          })
+        } catch (_) {}
         attemptErrors.push(`[external:${rt}] 不可用（未安装或不可执行）`)
         continue
       }
       const out = await runByExternalSubAgent(spec, { task, systemPrompt, roleName, projectPath })
       if (out.success) {
+        try {
+          appLogger?.info?.('[SubAgentDispatch] 子Agent执行成功', {
+            subSessionId,
+            runtime: out.runtime || `external:${rt}`,
+            attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1)
+          })
+        } catch (_) {}
         return {
           success: true,
           result: out.result || '',
@@ -3574,12 +3626,34 @@ async function runSubChat(opts) {
           attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1)
         }
       }
+      try {
+        appLogger?.warn?.('[SubAgentDispatch] 外部子Agent执行失败，将尝试回退', {
+          subSessionId,
+          runtime: out.runtime || `external:${rt}`,
+          error: out.error || '执行失败'
+        })
+      } catch (_) {}
       attemptErrors.push(`[${out.runtime || `external:${rt}`}] ${out.error || '执行失败'}`)
     } catch (e) {
+      try {
+        appLogger?.warn?.('[SubAgentDispatch] 子Agent执行异常，将尝试回退', {
+          subSessionId,
+          runtime: rt,
+          error: e.message || String(e)
+        })
+      } catch (_) {}
       attemptErrors.push(`[${rt}] ${e.message || String(e)}`)
     }
   }
 
+  try {
+    appLogger?.error?.('[SubAgentDispatch] 子Agent派发失败', {
+      subSessionId,
+      requestedRuntime: runtime || 'internal',
+      runtimeChain,
+      errors: attemptErrors
+    })
+  } catch (_) {}
   return { success: false, error: attemptErrors.join(' | ') || '子 Agent 执行失败', subSessionId }
 }
 
