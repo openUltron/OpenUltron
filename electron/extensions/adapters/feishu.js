@@ -406,7 +406,7 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
     },
     /**
      * @param {{ channel: string; remoteId: string }} binding
-     * @param {{ text?: string; images?: Array<{ path?: string; base64?: string; filename?: string }> }} payload
+     * @param {{ text?: string; images?: Array<{ path?: string; base64?: string; filename?: string }>; files?: Array<{ path?: string; name?: string }> }} payload
      */
     async send(binding, payload) {
       const chatId = binding.remoteId
@@ -423,6 +423,11 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
               ? img.path
               : path.join(getAppRootPath('screenshots'), path.basename(img.path))
             if (!fs.existsSync(resolvedPath)) continue
+            const st = fs.statSync(resolvedPath)
+            if (!st.isFile()) {
+              appLogger?.warn?.('[Feishu] 截图路径不是文件，跳过发送', { path: resolvedPath })
+              continue
+            }
             const buf = fs.readFileSync(resolvedPath)
             if (buf.length === 0) {
               appLogger?.warn?.('[Feishu] 截图文件为空，跳过发送', { path: resolvedPath, bytes: 0 })
@@ -443,6 +448,26 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
           })
           if (!result || !result.success) {
             await feishuNotify.sendMessage({ chat_id: chatId, text: `截图发送失败：${(result && result.message) || '未知'}` }).catch(() => {})
+          }
+        }
+      }
+      if (payload.files && payload.files.length > 0) {
+        for (const f of payload.files) {
+          const p = String((f && f.path) || '').trim()
+          if (!p || !fs.existsSync(p)) continue
+          let st = null
+          try { st = fs.statSync(p) } catch (_) { st = null }
+          if (!st || !st.isFile()) {
+            appLogger?.warn?.('[Feishu] 文件路径不是文件，跳过发送', { path: p })
+            continue
+          }
+          const result = await feishuNotify.sendMessage({
+            chat_id: chatId,
+            file_path: p,
+            file_name: (f && f.name) ? String(f.name) : path.basename(p)
+          })
+          if (!result || !result.success) {
+            await feishuNotify.sendMessage({ chat_id: chatId, text: `文件发送失败：${(result && result.message) || '未知'}` }).catch(() => {})
           }
         }
       }

@@ -3659,6 +3659,7 @@ const aiGateway = createGateway({
       lastText = typeof last.content === 'string' ? last.content : (last.content && Array.isArray(last.content) ? last.content.map(c => (c && c.text) || '').join('') : '')
     }
     const { cleanedText: cleanedRaw, filePaths: pathsFromText } = extractLocalResourceScreenshots(lastText)
+    const fileItems = extractLocalFilesFromText(cleanedRaw).map(p => ({ path: p }))
     const imageItems = []
     const seenPath = new Set()
     const seenBase64Head = new Set()
@@ -3676,10 +3677,10 @@ const aiGateway = createGateway({
       m && m.role === 'assistant' && Array.isArray(m.tool_calls) &&
       m.tool_calls.some(tc => tc && tc.function && delegatedToolNames.has(tc.function.name))
     )
-    if (aiAlreadySentFeishu && !cleanedFeishu && !spawnResultText && imageItems.length === 0) return
+    if (aiAlreadySentFeishu && !cleanedFeishu && !spawnResultText && imageItems.length === 0 && fileItems.length === 0) return
     const textToSend = cleanedFeishu || spawnResultText || (imageItems.length > 0 ? '截图已发至当前会话。' : '（无回复内容）')
     const outBinding = { sessionId, projectPath: '__feishu__', channel: 'feishu', remoteId: chatId, feishuChatId: chatId }
-    const outPayload = { text: textToSend, images: imageItems }
+    const outPayload = { text: textToSend, images: imageItems, files: fileItems }
     if (imageItems.length > 0) appLogger?.info?.('[Feishu] 应用内飞书会话完成，带图回发', { imageCount: imageItems.length })
     eventBus.emit('chat.session.completed', { binding: outBinding, payload: outPayload })
   },
@@ -5002,6 +5003,41 @@ function extractLocalResourceScreenshots(text) {
   return { cleanedText, filePaths }
 }
 
+function extractLocalFilesFromText(text) {
+  const src = String(text || '')
+  if (!src.trim()) return []
+  const out = []
+  const seen = new Set()
+  const addIfValid = (p) => {
+    if (!p || typeof p !== 'string') return
+    const full = p.trim()
+    if (!full.startsWith('/')) return
+    if (seen.has(full)) return
+    try {
+      if (!fs.existsSync(full)) return
+      const st = fs.statSync(full)
+      if (!st.isFile()) return
+      seen.add(full)
+      out.push(full)
+    } catch (_) {}
+  }
+
+  // 1) 文件路径：`/abs/path/file.ext`
+  const codePathRe = /`(\/[^`\n]+)`/g
+  let m
+  while ((m = codePathRe.exec(src)) !== null) addIfValid(m[1])
+
+  // 2) markdown 链接：( /abs/path/file.ext )
+  const linkPathRe = /\]\((\/[^)\n]+)\)/g
+  while ((m = linkPathRe.exec(src)) !== null) addIfValid(m[1])
+
+  // 3) 行内显式写法：file_path:/abs/path 或 local_path:/abs/path
+  const namedPathRe = /(file_path|local_path|path)\s*[:：]\s*(\/\S+)/gi
+  while ((m = namedPathRe.exec(src)) !== null) addIfValid(m[2])
+
+  return out
+}
+
 // 只取「当前轮」消息：从最后一条 user 消息之后到结尾（避免把历史轮次的截图也发出去）
 function getCurrentRoundMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return []
@@ -5542,6 +5578,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       }
     }
     const cleanedText = stripFeishuScreenshotMisfireText(cleanedRaw)
+    const fileItems = extractLocalFilesFromText(cleanedText).map(p => ({ path: p }))
     // 检查 AI 是否已通过工具主动发送过消息，或派生子 agent 处理（无需再补发）
     const channelSendTools = { feishu: 'feishu_send_message', telegram: 'telegram_send_message', dingtalk: 'dingtalk_send_message' }
     const sendToolName = channelSendTools[binding.channel]
@@ -5568,9 +5605,9 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       mainWindow.webContents.send('feishu-session-updated', { sessionId: mainSessionId })
     }
     // AI 已主动发消息且没有额外文本/图片要补发，跳过自动回复
-    if (aiAlreadySent && !textToSend && imageItems.length === 0) return
+    if (aiAlreadySent && !textToSend && imageItems.length === 0 && fileItems.length === 0) return
     const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
-    const outPayload = { text: textToSend || '（无回复内容）', images: imageItems }
+    const outPayload = { text: textToSend || '（无回复内容）', images: imageItems, files: fileItems }
     if (binding.channel === 'telegram') {
       try {
         const tgCfg = require('./openultron-config').getTelegram()
