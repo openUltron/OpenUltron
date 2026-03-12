@@ -5527,9 +5527,9 @@ function parseScreenshotFromToolResult(result) {
 function stripRawToolCallXml(text) {
   if (!text || typeof text !== 'string') return text
   let s = text
-  s = s.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '')
+  s = s.replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, '')
   s = s.replace(/<function=[^>]+>[\s\S]*?<\/function>/gi, '')
-  s = s.replace(/<\/?tool_call>/gi, '')
+  s = s.replace(/<\/?tool_call\b[^>]*>/gi, '')
   s = s.replace(/<function=[^>]+>/gi, '')
   s = s.replace(/<\/function>/gi, '')
   s = s.replace(/<parameter=[^>]+>/gi, '')
@@ -5699,8 +5699,9 @@ function isProgressQueryText(text) {
 function isScreenshotFollowupText(text) {
   const t = String(text || '').trim()
   if (!t) return false
-  if (/(截图|截.{0,6}图|效果图|预览图|screen\s*shot)/i.test(t) && /(发|给|看|补|再来|重新|没收到|没有)/i.test(t)) return true
-  if (/(截图没发|没发截图|没有截图|图没发|发下截图)/i.test(t)) return true
+  if (/(截图|截屏|截.{0,8}(图|屏)|效果图|预览图|快照|screen\s*shot|screenshot)/i.test(t) &&
+      /(发|给|看|补|再来|重新|重发|打开|按上次|页面|没收到|没有|失败)/i.test(t)) return true
+  if (/(截图没发|没发截图|没有截图|图没发|发下截图|截屏没发|没发截屏)/i.test(t)) return true
   return false
 }
 
