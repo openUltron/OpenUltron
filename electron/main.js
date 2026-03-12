@@ -5726,6 +5726,37 @@ function extractLatestSessionsSpawnResult(messages = []) {
   return last
 }
 
+function extractLatestSessionsSpawnLogs(messages = []) {
+  if (!Array.isArray(messages) || messages.length === 0) return ''
+  const spawnCallIds = new Set()
+  for (const m of messages) {
+    if (!m || m.role !== 'assistant' || !Array.isArray(m.tool_calls)) continue
+    for (const tc of m.tool_calls) {
+      if (tc?.function?.name === 'sessions_spawn' && tc.id) spawnCallIds.add(String(tc.id))
+    }
+  }
+  let last = ''
+  for (const m of messages) {
+    if (!m || m.role !== 'tool') continue
+    const tcid = String(m.tool_call_id || '')
+    if (!tcid || !spawnCallIds.has(tcid)) continue
+    const raw = String(m.content || '').trim()
+    if (!raw) continue
+    try {
+      const obj = JSON.parse(raw)
+      let logs = ''
+      if (Array.isArray(obj.log_lines) && obj.log_lines.length > 0) {
+        logs = obj.log_lines.map((x) => String(x || '')).filter(Boolean).join('\n')
+      } else if (obj.stdout != null && String(obj.stdout).trim()) {
+        logs = String(obj.stdout).trim()
+      }
+      if (logs) last = logs
+    } catch (_) {}
+  }
+  if (!last) return ''
+  return last.length > 2400 ? `${last.slice(-2400)}` : last
+}
+
 // 主 Agent + 子 Agent：新消息到达时派生子 Agent，不直接停前一个；子 Agent 可调 stop_previous_task 停掉前边，或 wait_for_previous_run 等待前边完成再继续
 function channelSessionKey(binding) {
   return `${binding.projectPath}:${binding.sessionId}`
@@ -6668,6 +6699,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     const { cleanedText: cleanedRaw, filePaths: pathsFromText } = extractLocalResourceScreenshots(toSend)
     const currentRound = getCurrentRoundMessages(finalMessages)
     const spawnResultText = extractLatestSessionsSpawnResult(currentRound)
+    const spawnLogText = extractLatestSessionsSpawnLogs(currentRound)
     const screenshotsFromTools = extractScreenshotsFromMessages(currentRound)
     let imageItems = []
     const seenPath = new Set()
@@ -6743,6 +6775,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     )
     let forcedSpawnText = ''
     let forcedSpawnRuntime = ''
+    let forcedSpawnLogs = ''
     if (!aiAlreadySent && !hasSpawnCall && !spawnResultText) {
       try {
         appLogger?.warn?.('[SubAgentDispatch] 主Agent未触发 sessions_spawn，启用兜底派发', {
@@ -6758,18 +6791,25 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
         if (forced && forced.success) {
           forcedSpawnText = String(forced.result || '').trim()
           forcedSpawnRuntime = String(forced.runtime || '')
+          forcedSpawnLogs = Array.isArray(forced.commandLogs) ? forced.commandLogs.join('\n') : ''
         } else {
           forcedSpawnText = `子 Agent 执行失败：${String((forced && forced.error) || '未知错误')}`
+          forcedSpawnLogs = Array.isArray(forced?.commandLogs) ? forced.commandLogs.join('\n') : ''
         }
       } catch (e) {
         forcedSpawnText = `子 Agent 执行失败：${e.message || String(e)}`
       }
     }
-    const textToSend = forcedSpawnText
+    const baseTextToSend = forcedSpawnText
       ? forcedSpawnText
       : ((cleanedText && cleanedText.trim())
         ? cleanedText.trim()
         : (spawnResultText || (imageItems.length > 0 ? '截图已发至当前会话。' : null)))
+    const logsToSendRaw = forcedSpawnText ? forcedSpawnLogs : spawnLogText
+    const logsToSend = String(logsToSendRaw || '').trim()
+    const textToSend = logsToSend
+      ? `${baseTextToSend || '已执行。'}\n\n执行过程：\n${logsToSend}`
+      : baseTextToSend
     if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
       await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
     }
