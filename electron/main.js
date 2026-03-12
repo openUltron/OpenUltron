@@ -3786,8 +3786,8 @@ const aiGateway = createGateway({
       lastText = typeof last.content === 'string' ? last.content : (last.content && Array.isArray(last.content) ? last.content.map(c => (c && c.text) || '').join('') : '')
     }
     const { cleanedText: cleanedRaw, filePaths: pathsFromText } = extractLocalResourceScreenshots(lastText)
-    const fileItems = extractLocalFilesFromText(cleanedRaw).map(p => ({ path: p }))
     const imageItems = []
+    const fileItems = []
     const seenPath = new Set()
     const seenBase64Head = new Set()
     for (const item of list) {
@@ -3796,6 +3796,13 @@ const aiGateway = createGateway({
     }
     for (const p of pathsFromText) {
       if (!seenPath.has(p)) { seenPath.add(p); imageItems.push({ path: p }) }
+    }
+    for (const p of extractLocalFilesFromText(cleanedRaw)) {
+      if (isImageFilePath(p)) {
+        if (!seenPath.has(p)) { seenPath.add(p); imageItems.push({ path: p }) }
+      } else {
+        fileItems.push({ path: p })
+      }
     }
     const spawnResultText = extractLatestSessionsSpawnResult(data.messages || [])
     const cleanedFeishu = (stripFeishuScreenshotMisfireText(cleanedRaw) || '').trim()
@@ -5166,6 +5173,11 @@ function extractLocalFilesFromText(text) {
   return out
 }
 
+function isImageFilePath(filePath) {
+  const ext = path.extname(String(filePath || '')).toLowerCase()
+  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)
+}
+
 // 只取「当前轮」消息：从最后一条 user 消息之后到结尾（避免把历史轮次的截图也发出去）
 function getCurrentRoundMessages(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return []
@@ -5794,7 +5806,14 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       }
     }
     const cleanedText = stripFeishuScreenshotMisfireText(cleanedRaw)
-    const fileItems = extractLocalFilesFromText(cleanedText).map(p => ({ path: p }))
+    const fileItems = []
+    for (const p of extractLocalFilesFromText(cleanedText)) {
+      if (isImageFilePath(p)) {
+        if (!seenPath.has(p)) { seenPath.add(p); imageItems.push({ path: p }) }
+      } else {
+        fileItems.push({ path: p })
+      }
+    }
     // 检查 AI 是否已通过工具主动发送过消息，或派生子 agent 处理（无需再补发）
     const channelSendTools = { feishu: 'feishu_send_message', telegram: 'telegram_send_message', dingtalk: 'dingtalk_send_message' }
     const sendToolName = channelSendTools[binding.channel]

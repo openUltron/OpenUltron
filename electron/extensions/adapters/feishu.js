@@ -487,6 +487,27 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
             appLogger?.warn?.('[Feishu] 文件路径不是文件，跳过发送', { path: p })
             continue
           }
+          const ext = path.extname(p).toLowerCase()
+          if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) {
+            const buf = fs.readFileSync(p)
+            if (!buf || buf.length === 0) continue
+            if (buf.length > FEISHU_IMAGE_MAX_BYTES) {
+              await feishuNotify.sendMessage({ chat_id: chatId, text: `图片过大（${(buf.length / 1024 / 1024).toFixed(1)}MB），未发送。` }).catch(() => {})
+              continue
+            }
+            const imgResult = await feishuNotify.sendMessage({
+              chat_id: chatId,
+              image_base64: buf.toString('base64'),
+              image_filename: (f && f.name) ? String(f.name) : path.basename(p)
+            })
+            if (!imgResult || !imgResult.success) {
+              imageFailed++
+              await feishuNotify.sendMessage({ chat_id: chatId, text: `图片发送失败：${(imgResult && imgResult.message) || '未知'}` }).catch(() => {})
+            } else {
+              imageSent++
+            }
+            continue
+          }
           const result = await feishuNotify.sendMessage({
             chat_id: chatId,
             file_path: p,
