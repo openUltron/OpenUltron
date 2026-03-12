@@ -120,6 +120,8 @@ async function waitForScreenshotReady(wc, timeoutMs = 30000) {
   throw new Error(`页面渲染等待超时: ${lastErr || 'unknown'}`)
 }
 
+const SCREENSHOT_STABILIZE_MS = 700
+
 async function execute(args) {
   const {
     action, user_agent, url, cookie_url, cookie_name, cookie_value, cookie_domain, cookie_path, cookie_http_only, cookie_secure, cookie_expires,
@@ -187,7 +189,7 @@ async function execute(args) {
     let restoreSize = null
     // 先等待页面渲染完成，避免截到白板
     await waitForScreenshotReady(wc, timeout)
-    await new Promise((r) => setTimeout(r, 220))
+    await new Promise((r) => setTimeout(r, SCREENSHOT_STABILIZE_MS))
     if (wantFullPage) {
       try {
         const dim = await wc.executeJavaScript(`({
@@ -199,7 +201,7 @@ async function execute(args) {
         const cur = win.getContentBounds()
         restoreSize = { width: cur.width, height: cur.height }
         win.setContentSize(w, h)
-        await new Promise((r) => setTimeout(r, 220))
+        await new Promise((r) => setTimeout(r, SCREENSHOT_STABILIZE_MS))
       } catch (_) { /* ignore */ }
     }
     const img = await wc.capturePage()
