@@ -189,10 +189,26 @@
             @blur="saveDingtalkDebounced"
           />
         </div>
+        <div class="feishu-row">
+          <label>{{ t('notify.dingtalkRobotCode') }}</label>
+          <input
+            v-model="dingtalkDefaultRobotCode"
+            type="text"
+            class="feishu-input"
+            :placeholder="t('notify.dingtalkRobotCodePh')"
+            @blur="saveDingtalkDebounced"
+          />
+        </div>
         <div class="feishu-row feishu-row-check">
           <label class="feishu-check-label">
             <input v-model="dingtalkReceiveEnabled" type="checkbox" @change="saveDingtalkDebounced" />
             <span>{{ t('notify.receiveDingtalk') }}</span>
+          </label>
+        </div>
+        <div class="feishu-row feishu-row-check">
+          <label class="feishu-check-label">
+            <input v-model="dingtalkVoiceReplyEnabled" type="checkbox" @change="saveDingtalkDebounced" />
+            <span>{{ t('notify.dingtalkVoiceReply') }}</span>
           </label>
         </div>
       </div>
@@ -201,6 +217,10 @@
           <Loader v-if="dingtalkSaving" :size="13" class="spin" />
           {{ dingtalkSaving ? t('notify.saving') : t('notify.saveConfig') }}
         </button>
+      </div>
+      <div v-if="dingtalkStatusLoaded" class="feishu-result" :class="dingtalkRunning ? 'ok' : ''">
+        {{ t('notify.receiveStatus') }}{{ dingtalkRunning ? t('notify.running') : t('notify.disconnected') }}
+        <span v-if="!dingtalkRunning && dingtalkError" class="feishu-result err-inline">{{ dingtalkError }}</span>
       </div>
       <div v-if="dingtalkResult" class="feishu-result" :class="dingtalkResult.ok ? 'ok' : 'err'">
         {{ dingtalkResult.message }}
@@ -259,9 +279,14 @@ const telegramError = ref('')
 const dingtalkAppKey = ref('')
 const dingtalkAppSecret = ref('')
 const dingtalkDefaultChatId = ref('')
+const dingtalkDefaultRobotCode = ref('')
 const dingtalkReceiveEnabled = ref(false)
+const dingtalkVoiceReplyEnabled = ref(false)
 const dingtalkSaving = ref(false)
 const dingtalkResult = ref(null)
+const dingtalkStatusLoaded = ref(false)
+const dingtalkRunning = ref(false)
+const dingtalkError = ref('')
 
 const api = () => window.electronAPI?.feishu
 const telegramApi = () => window.electronAPI?.telegram
@@ -331,8 +356,16 @@ async function loadDingtalkConfig() {
     dingtalkAppKey.value = c.app_key || ''
     dingtalkAppSecret.value = c.app_secret || ''
     dingtalkDefaultChatId.value = c.default_chat_id || ''
+    dingtalkDefaultRobotCode.value = c.default_robot_code || ''
     dingtalkReceiveEnabled.value = !!c.receive_enabled
+    dingtalkVoiceReplyEnabled.value = !!c.voice_reply_enabled
   }
+  const status = await dingtalkApi()?.receiveStatus?.()
+  if (status) {
+    dingtalkRunning.value = !!status.running
+    dingtalkError.value = status.error || ''
+  }
+  dingtalkStatusLoaded.value = true
 }
 
 async function saveDingtalk() {
@@ -344,8 +377,11 @@ async function saveDingtalk() {
       app_key: dingtalkAppKey.value?.trim() || '',
       app_secret: dingtalkAppSecret.value?.trim() || '',
       default_chat_id: (dingtalkDefaultChatId.value || '').trim(),
-      receive_enabled: dingtalkReceiveEnabled.value
+      default_robot_code: (dingtalkDefaultRobotCode.value || '').trim(),
+      receive_enabled: dingtalkReceiveEnabled.value,
+      voice_reply_enabled: dingtalkVoiceReplyEnabled.value
     })
+    await loadDingtalkConfig()
     dingtalkResult.value = { ok: true, message: t('notify.saved') }
   } catch (e) {
     dingtalkResult.value = { ok: false, message: e?.message || t('notify.saveFailed') }

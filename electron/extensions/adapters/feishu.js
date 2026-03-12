@@ -4,6 +4,7 @@
  */
 const path = require('path')
 const fs = require('fs')
+const crypto = require('crypto')
 const { getAppRootPath } = require('../../app-root')
 const { logger: appLogger } = require('../../app-logger')
 const feishuWsReceive = require('../../ai/feishu-ws-receive')
@@ -58,7 +59,10 @@ function buildInboundDisplayText(text, attachments = []) {
 
 function buildAttachmentPathContext(attachments = []) {
   if (!Array.isArray(attachments) || attachments.length === 0) return ''
-  const lines = ['[Inbound Attachment Paths]']
+  const lines = [
+    '[Inbound Attachment Paths]',
+    '仅将以下路径视为本轮有效附件；若用户要求解读/读取文件，优先使用以下 local_path，禁止自动改用历史轮次附件路径。'
+  ]
   let idx = 1
   for (const a of attachments) {
     if (!a || !a.path) continue
@@ -69,6 +73,13 @@ function buildAttachmentPathContext(attachments = []) {
     idx++
   }
   return idx > 1 ? lines.join('\n') : ''
+}
+
+function hasFileReadIntent(text) {
+  const t = compactText(text || '')
+  if (!t) return false
+  return /(解读|读取|读一下|分析|解析|总结|提取|查看).*(文件|文档|pdf|表格|excel|xlsx|ppt|pptx|word|doc)/i.test(t) ||
+    /(这个|该|这份|这张).*(文件|文档|pdf|表格|excel|xlsx|ppt|pptx|word|doc)/i.test(t)
 }
 
 function extractMessageText(msg) {
@@ -304,11 +315,13 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
             })
           } else if (a.type === 'file' && a.file_key) {
             const dl = await feishuNotify.downloadFileByKey(a.file_key, { messageId })
+            const fileSha = crypto.createHash('sha256').update(dl.buffer).digest('hex').slice(0, 16)
             appLogger?.info?.('[Feishu] 文件下载成功', {
               messageId: messageId || '',
               file_key: a.file_key,
               fileName: a.file_name || dl.fileName || '',
-              bytes: dl.buffer?.length || 0
+              bytes: dl.buffer?.length || 0,
+              sha256_16: fileSha
             })
             rawAttachments.push({
               name: a.file_name || dl.fileName || `file-${Date.now()}.bin`,
@@ -360,7 +373,10 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
 
     // 给 AI 的入站文本：无论 OCR 成功与否，只要附件已落地，就强制注入 local_path，避免去 Downloads 盲搜
     const attachmentPathContext = buildAttachmentPathContext(normalizedAttachments)
-    const inboundText = [text, attachmentPathContext, attachmentContextText].filter(Boolean).join('\n\n').trim()
+    const noCurrentAttachmentGuard = (!normalizedAttachments.length && hasFileReadIntent(text))
+      ? '【系统提示】本轮消息未携带可用附件。若用户要求解读文件，禁止自动使用历史附件路径；请先要求用户重新上传文件，或明确提供要读取的 local_path。'
+      : ''
+    const inboundText = [text, noCurrentAttachmentGuard, attachmentPathContext, attachmentContextText].filter(Boolean).join('\n\n').trim()
     const message = createInboundMessage('feishu', chatId, inboundText, messageId, normalizedAttachments)
     const displayText = buildInboundDisplayText(text, normalizedAttachments)
     message.metadata = {

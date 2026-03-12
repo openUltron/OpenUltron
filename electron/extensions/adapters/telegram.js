@@ -6,6 +6,7 @@ const https = require('https')
 const { createInboundMessage, createSessionBinding } = require('../../core/message-model')
 const conversationFile = require('../../ai/conversation-file')
 const telegramSessionState = require('../../ai/telegram-session-state')
+const telegramNotify = require('../../ai/telegram-notify')
 
 const TELEGRAM_PROJECT = '__telegram__'
 const API_BASE = 'api.telegram.org'
@@ -175,7 +176,19 @@ function createTelegramAdapter(eventBus, getChannelConfig) {
     async send(binding, payload) {
       const chatId = binding.remoteId
       const text = (payload.text && payload.text.trim()) ? payload.text.trim() : '（无回复内容）'
-      await apiRequest('sendMessage', { chat_id: chatId, text })
+      const maybeAudioText = payload && (payload.audio_text || payload.audioText)
+      if (maybeAudioText && String(maybeAudioText).trim()) {
+        const res = await telegramNotify.sendMessage({
+          chat_id: chatId,
+          text,
+          audio_text: String(maybeAudioText).trim()
+        })
+        if (!res?.success) {
+          await apiRequest('sendMessage', { chat_id: chatId, text: `${text}\n\n[语音发送失败: ${(res && res.message) || 'unknown'}]` }).catch(() => {})
+        }
+      } else {
+        await apiRequest('sendMessage', { chat_id: chatId, text })
+      }
       // Telegram sendPhoto 需 URL 或 file_id，暂不传 base64；若有图可后续用 multipart 上传
       if (payload.images && payload.images.length > 0) {
         await apiRequest('sendMessage', { chat_id: chatId, text: `[${payload.images.length} 张截图已生成，请在应用内查看]` }).catch(() => {})

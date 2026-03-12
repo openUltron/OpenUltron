@@ -195,6 +195,27 @@ function createDefaultRegistry(options = {}) {
     console.warn('加载 feishu_send_message 工具失败:', e.message)
   }
 
+  // Telegram 通知：发送文本/语音
+  try {
+    registry.register('telegram_send_message', require('./tools/telegram-send-message'))
+  } catch (e) {
+    console.warn('加载 telegram_send_message 工具失败:', e.message)
+  }
+
+  // DingTalk 通知：发送文本/语音
+  try {
+    registry.register('dingtalk_send_message', require('./tools/dingtalk-send-message'))
+  } catch (e) {
+    console.warn('加载 dingtalk_send_message 工具失败:', e.message)
+  }
+
+  // TTS 音色管理：全量音色、别名、默认音色
+  try {
+    registry.register('tts_voice_manager', require('./tools/tts-voice-manager'))
+  } catch (e) {
+    console.warn('加载 tts_voice_manager 工具失败:', e.message)
+  }
+
   // process_manager 后台进程管理
   try {
     registry.register('process_manager', require('./tools/process-manager'))

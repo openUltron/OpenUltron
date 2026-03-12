@@ -44,7 +44,7 @@ echo "✅ 已清理所有相关进程"
 cd "$PROJECT_DIR"
 
 # 检查依赖是否完整（检查关键模块）
-if [ ! -d "node_modules/electron/dist" ] || [ ! -d "node_modules/vite" ] || [ ! -d "node_modules/concurrently" ]; then
+if [ ! -d "node_modules/electron/dist" ] || [ ! -d "node_modules/vite" ] || [ ! -d "node_modules/concurrently" ] || [ ! -d "node_modules/node-edge-tts" ]; then
     echo "📦 依赖不完整，正在安装..."
     npm install
     echo "✅ 依赖安装完成"
@@ -72,7 +72,6 @@ fi
 # 启动开发服务器（先等 5 秒让 Vite 起来，再启动 Electron，不依赖 wait-on）
 echo "🚀 启动开发服务器..."
 npx concurrently "npm run dev" "sleep 5 && NODE_ENV=development npx electron ." --names "VITE,ELECTRON" --prefix-colors "cyan,green"
-
 
 
 

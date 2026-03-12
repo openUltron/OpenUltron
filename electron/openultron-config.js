@@ -53,6 +53,10 @@ const DEFAULT_FEISHU = {
   default_chat_id: '',
   notify_on_complete: false,
   receive_enabled: false,
+  // TTS：默认音色（可填 Edge shortName 或别名）
+  tts_default_voice: '',
+  // TTS：音色别名映射，key=别名，value=Edge shortName（如 zh-CN-XiaoyiNeural）
+  tts_voice_aliases: {},
   /** 允许触发的 chat_id/用户 ID 列表，'*' 表示全部允许；不配或空数组表示全部允许（兼容旧配置） */
   allowFrom: undefined
 }
@@ -60,6 +64,7 @@ const DEFAULT_FEISHU = {
 const DEFAULT_TELEGRAM = {
   bot_token: '',
   enabled: false,
+  voice_reply_enabled: false,
   /** 允许触发的 chat_id 列表，'*' 表示全部允许；不配或空数组表示全部允许 */
   allowFrom: undefined
 }
@@ -68,7 +73,9 @@ const DEFAULT_DINGTALK = {
   app_key: '',
   app_secret: '',
   default_chat_id: '',
+  default_robot_code: '',
   receive_enabled: false,
+  voice_reply_enabled: false,
   /** 允许触发的 conversationId/用户 ID 列表，'*' 表示全部允许；不配或空数组表示全部允许 */
   allowFrom: undefined
 }
@@ -223,6 +230,10 @@ function setFeishu(partial) {
     default_chat_id: partial && partial.default_chat_id !== undefined ? String(partial.default_chat_id).trim() : cur.default_chat_id,
     notify_on_complete: partial && partial.notify_on_complete !== undefined ? !!partial.notify_on_complete : cur.notify_on_complete,
     receive_enabled: partial && partial.receive_enabled !== undefined ? !!partial.receive_enabled : cur.receive_enabled,
+    tts_default_voice: partial && partial.tts_default_voice !== undefined ? String(partial.tts_default_voice).trim() : String(cur.tts_default_voice || ''),
+    tts_voice_aliases: partial && partial.tts_voice_aliases !== undefined
+      ? (partial.tts_voice_aliases && typeof partial.tts_voice_aliases === 'object' ? partial.tts_voice_aliases : {})
+      : (cur.tts_voice_aliases && typeof cur.tts_voice_aliases === 'object' ? cur.tts_voice_aliases : {}),
     allowFrom: allowFromFeishu
   }
   writeAll(all)
@@ -243,6 +254,7 @@ function setTelegram(partial) {
   all.telegram = {
     bot_token: partial && partial.bot_token !== undefined ? String(partial.bot_token).trim() : cur.bot_token,
     enabled: partial && partial.enabled !== undefined ? !!partial.enabled : cur.enabled,
+    voice_reply_enabled: partial && partial.voice_reply_enabled !== undefined ? !!partial.voice_reply_enabled : !!cur.voice_reply_enabled,
     allowFrom: allowFromTg
   }
   writeAll(all)
@@ -264,7 +276,9 @@ function setDingtalk(partial) {
     app_key: partial && partial.app_key !== undefined ? String(partial.app_key).trim() : cur.app_key,
     app_secret: partial && partial.app_secret !== undefined ? String(partial.app_secret).trim() : cur.app_secret,
     default_chat_id: partial && partial.default_chat_id !== undefined ? String(partial.default_chat_id).trim() : cur.default_chat_id,
+    default_robot_code: partial && partial.default_robot_code !== undefined ? String(partial.default_robot_code).trim() : String(cur.default_robot_code || ''),
     receive_enabled: partial && partial.receive_enabled !== undefined ? !!partial.receive_enabled : cur.receive_enabled,
+    voice_reply_enabled: partial && partial.voice_reply_enabled !== undefined ? !!partial.voice_reply_enabled : !!cur.voice_reply_enabled,
     allowFrom: allowFromDingtalk
   }
   writeAll(all)

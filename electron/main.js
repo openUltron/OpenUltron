@@ -3330,18 +3330,10 @@ const aiGateway = createGateway({
     try {
       const conv = require('./ai/conversation-file')
       const toSave = Array.isArray(messages)
-        ? messages
-            .filter(m => m && m.role !== 'tool')
-            .map(m => {
-              const out = { ...m }
-              if (out.toolCalls !== undefined) delete out.toolCalls
-              if (out.tool_calls !== undefined) delete out.tool_calls
-              return out
-            })
-            .filter(m => m.role !== 'assistant' || (m.content && String(m.content).trim()))
+        ? mergeCompactedConversationMessages(projectPath, sessionId, messages)
         : []
       if (!toSave.length) return
-      if ((projectPath === FEISHU_PROJECT || projectPath === TELEGRAM_PROJECT) && isRunSessionId(sessionId)) return
+      if ((projectPath === FEISHU_PROJECT || projectPath === TELEGRAM_PROJECT || projectPath === DINGTALK_PROJECT) && isRunSessionId(sessionId)) return
       const projectKey = conv.hashProjectPath(projectPath)
       conv.saveConversation(projectKey, { id: sessionId, messages: toSave, projectPath })
       console.log('[Gateway] 会话已保存:', sessionId, '条数:', toSave.length)
@@ -4167,6 +4159,61 @@ function stripToolExecutionFromMessages(messages) {
     .filter(m => m.role !== 'assistant' || (m.content && String(m.content).trim()))
 }
 
+function isCompactedSummaryMessage(msg) {
+  if (!msg || msg.role !== 'system') return false
+  const text = extractMessageTextForSummary(msg)
+  if (!text) return false
+  return text.includes('对话摘要') || text.includes('早期消息已压缩')
+}
+
+function toComparableEntries(messages) {
+  return (messages || [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+    .map((m) => ({ key: `${m.role}:${extractMessageTextForSummary(m)}`, msg: m }))
+    .filter((x) => x.key && x.key !== 'user:' && x.key !== 'assistant:')
+}
+
+function findTailPrefixOverlap(baseKeys, nextKeys) {
+  const max = Math.min(baseKeys.length, nextKeys.length)
+  for (let k = max; k > 0; k--) {
+    let ok = true
+    for (let i = 0; i < k; i++) {
+      if (baseKeys[baseKeys.length - k + i] !== nextKeys[i]) {
+        ok = false
+        break
+      }
+    }
+    if (ok) return k
+  }
+  return 0
+}
+
+function mergeCompactedConversationMessages(projectPath, sessionId, incomingMessages) {
+  const incoming = stripToolExecutionFromMessages(incomingMessages)
+  if (!incoming || incoming.length === 0) return []
+
+  const hasCompactedMarker = incoming.some(isCompactedSummaryMessage)
+  if (!hasCompactedMarker) return incoming
+
+  const projectKey = conversationFile.hashProjectPath(projectPath)
+  const existingConv = conversationFile.loadConversation(projectKey, sessionId)
+  const existing = stripToolExecutionFromMessages(existingConv?.messages || [])
+  if (!existing.length) return incoming
+
+  const baseEntries = toComparableEntries(existing)
+  const nextEntries = toComparableEntries(incoming)
+  if (!nextEntries.length) return existing
+
+  const overlap = findTailPrefixOverlap(
+    baseEntries.map((x) => x.key),
+    nextEntries.map((x) => x.key)
+  )
+  const appended = nextEntries.slice(overlap).map((x) => x.msg)
+  if (!appended.length) return existing
+
+  return [...existing, ...appended]
+}
+
 function compactSummaryText(s) {
   return String(s || '').replace(/\s+/g, ' ').trim()
 }
@@ -4233,6 +4280,7 @@ const MAIN_CHAT_PROJECT = '__main_chat__'
 const FEISHU_PROJECT = '__feishu__'
 const GATEWAY_PROJECT = '__gateway__'
 const TELEGRAM_PROJECT = '__telegram__'
+const DINGTALK_PROJECT = '__dingtalk__'
 
 registerChannel('ai-save-session-summary', async (event, { projectPath, sessionId, messages }) => {
   try {
@@ -4377,7 +4425,8 @@ const SESSION_SOURCES = [
   { projectPath: MAIN_CHAT_PROJECT, source: 'main', label: '主会话' },
   { projectPath: FEISHU_PROJECT, source: 'feishu', label: '飞书' },
   { projectPath: GATEWAY_PROJECT, source: 'gateway', label: 'Gateway' },
-  { projectPath: TELEGRAM_PROJECT, source: 'telegram', label: 'Telegram' }
+  { projectPath: TELEGRAM_PROJECT, source: 'telegram', label: 'Telegram' },
+  { projectPath: DINGTALK_PROJECT, source: 'dingtalk', label: '钉钉' }
 ]
 
 // 统一会话列表（主会话 + 飞书 + 后续扩展）；主会话只展示一条（最新），新会话 id 仍关联主会话
@@ -4457,6 +4506,7 @@ const eventBus = createEventBus()
 const chatChannelRegistry = require('./extensions/chat-channel-registry')
 const { createFeishuAdapter } = require('./extensions/adapters/feishu')
 const { createTelegramAdapter } = require('./extensions/adapters/telegram')
+const { createDingtalkAdapter } = require('./extensions/adapters/dingtalk')
 const openultronConfigChannels = require('./openultron-config')
 function getChannelConfig(key) {
   if (key === 'feishu') return openultronConfigChannels.getFeishu()
@@ -4466,6 +4516,7 @@ function getChannelConfig(key) {
 }
 chatChannelRegistry.register(createFeishuAdapter(eventBus, getChannelConfig))
 chatChannelRegistry.register(createTelegramAdapter(eventBus, getChannelConfig))
+chatChannelRegistry.register(createDingtalkAdapter(eventBus, getChannelConfig))
 
 const feishuWsReceive = require('./ai/feishu-ws-receive')
 
@@ -4495,6 +4546,32 @@ function getCurrentRoundMessages(messages) {
   }
   if (lastUserIdx < 0) return messages
   return messages.slice(lastUserIdx + 1)
+}
+
+function detectImageExtFromBuffer(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 12) return null
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return 'png'
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[buf.length - 2] === 0xFF && buf[buf.length - 1] === 0xD9) return 'jpg'
+  if (buf.slice(0, 6).toString('ascii') === 'GIF87a' || buf.slice(0, 6).toString('ascii') === 'GIF89a') return 'gif'
+  if (buf.slice(0, 4).toString('ascii') === 'RIFF' && buf.slice(8, 12).toString('ascii') === 'WEBP') return 'webp'
+  if (buf[0] === 0x42 && buf[1] === 0x4D) return 'bmp'
+  return null
+}
+
+function isValidImageBase64(input) {
+  if (!input || typeof input !== 'string') return false
+  let raw = input.trim()
+  if (!raw) return false
+  // 截断文本（工具结果被裁剪）直接判定无效，避免误发
+  if (raw.includes('...(已截断') || raw.includes('...(truncated)')) return false
+  const m = raw.match(/^data:[^;,]+;base64,(.*)$/i)
+  if (m) raw = m[1] || ''
+  raw = raw.replace(/\s+/g, '').replace(/-/g, '+').replace(/_/g, '/')
+  while (raw.length % 4 !== 0) raw += '='
+  if (raw.length < 128) return false
+  const buf = Buffer.from(raw, 'base64')
+  if (!buf || buf.length < 16) return false
+  return !!detectImageExtFromBuffer(buf)
 }
 
 // 从本轮对话的 tool 结果中收集截图：路径或 base64（webview_control 返回 file_path；MCP 可能只返回 image_base64）
@@ -4544,7 +4621,7 @@ function extractScreenshotsFromMessages(messages) {
         }
       }
     }
-    if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.length > 100 && !seenBase64.has(imageBase64.slice(0, 50))) {
+    if (imageBase64 && typeof imageBase64 === 'string' && isValidImageBase64(imageBase64) && !seenBase64.has(imageBase64.slice(0, 50))) {
       seenBase64.add(imageBase64.slice(0, 50))
       out.push({ base64: imageBase64 })
     }
@@ -4599,7 +4676,7 @@ function parseScreenshotFromToolResult(result) {
     const filename = fileUrl.replace(/^local-resource:\/\/screenshots\//i, '').replace(/^\/+/, '')
     if (filename) out.push({ path: getAppRootPath('screenshots', filename) })
   }
-  if (imageBase64 && typeof imageBase64 === 'string' && imageBase64.length > 100) {
+  if (imageBase64 && typeof imageBase64 === 'string' && isValidImageBase64(imageBase64)) {
     out.push({ base64: imageBase64 })
   }
   return out
@@ -4650,7 +4727,7 @@ const abortedRunSessionIds = new Set() // 被 stop_previous_task 停掉的 run�
 
 async function processMessageReplace(payload) {
   const { binding } = payload || {}
-  if (!binding || (binding.channel !== 'feishu' && binding.channel !== 'telegram')) return
+  if (!binding || (binding.channel !== 'feishu' && binding.channel !== 'telegram' && binding.channel !== 'dingtalk')) return
   const key = channelSessionKey(binding)
   const mainSessionId = binding.sessionId
   // 同一会话收到新消息时，默认中止之前仍在运行的子任务，避免并发串话/错答
@@ -4689,16 +4766,20 @@ async function processMessageReplace(payload) {
 async function handleChatMessageReceived(payload, runSessionId, mainSessionId, key, runId, startTime) {
   const { message, binding } = payload || {}
   if (!message || !binding) return
-  if (binding.channel !== 'feishu' && binding.channel !== 'telegram') return
+  if (binding.channel !== 'feishu' && binding.channel !== 'telegram' && binding.channel !== 'dingtalk') return
   const typingReactionId = payload.typingReactionId || null
   const userMessageId = message.messageId || null
   const chatId = binding.remoteId
-  const projectPath = binding.channel === 'feishu' ? FEISHU_PROJECT : TELEGRAM_PROJECT
+  const projectPath = binding.channel === 'feishu'
+    ? FEISHU_PROJECT
+    : (binding.channel === 'telegram' ? TELEGRAM_PROJECT : DINGTALK_PROJECT)
   const projectKey = conversationFile.hashProjectPath(projectPath)
   let conv = conversationFile.loadConversation(projectKey, mainSessionId)
   if (!conv) {
     const now = new Date().toISOString()
-    const titlePrefix = binding.channel === 'feishu' ? '飞书' : 'Telegram'
+    const titlePrefix = binding.channel === 'feishu'
+      ? '飞书'
+      : (binding.channel === 'telegram' ? 'Telegram' : '钉钉')
     conversationFile.updateConversationMeta(projectKey, mainSessionId, {
       title: `${titlePrefix}: ${String(chatId).slice(0, 20)}`,
       updatedAt: now,
@@ -4730,7 +4811,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
       await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
     }
-    const errBinding = { sessionId: mainSessionId, projectPath, channel: binding.channel, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+    const errBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
     eventBus.emit('chat.session.completed', { binding: errBinding, payload: { text: '请先在应用内配置 API Key 后再使用。' } })
     return
   }
@@ -4834,8 +4915,20 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     if (binding.channel === 'feishu' && mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('feishu-session-updated', { sessionId: mainSessionId })
     }
-    const outBinding = { sessionId: mainSessionId, projectPath, channel: binding.channel, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+    const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
     const outPayload = { text: textToSend, images: imageItems }
+    if (binding.channel === 'telegram') {
+      try {
+        const tgCfg = require('./openultron-config').getTelegram()
+        if (tgCfg && tgCfg.voice_reply_enabled) outPayload.audio_text = textToSend
+      } catch (_) {}
+    }
+    if (binding.channel === 'dingtalk') {
+      try {
+        const dtCfg = require('./openultron-config').getDingtalk()
+        if (dtCfg && dtCfg.voice_reply_enabled) outPayload.audio_text = textToSend
+      } catch (_) {}
+    }
     if (imageItems.length > 0) {
       appLogger?.info?.(`[${binding.channel}] 会话完成，带图回发`, { imageCount: imageItems.length })
     }
@@ -4845,7 +4938,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
       await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
     }
-    const errBinding = { sessionId: mainSessionId, projectPath, channel: binding.channel, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+    const errBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
     eventBus.emit('chat.session.completed', { binding: errBinding, payload: { text: `处理出错: ${e.message}` } })
   }
 }
@@ -4928,6 +5021,20 @@ registerChannel('set-dingtalk-config', (event, payload) => {
   require('./openultron-config').setDingtalk(payload || {})
   startFeishuReceive().catch(e => console.warn('[Channels] 重启渠道失败:', e.message))
   return { ok: true }
+})
+registerChannel('dingtalk-receive-status', () => {
+  const adapter = chatChannelRegistry.get('dingtalk')
+  return {
+    running: adapter ? adapter.isRunning() : false,
+    error: adapter && adapter.getLastError ? adapter.getLastError() : null
+  }
+})
+registerChannel('dingtalk-inbound', async (event, payload = {}) => {
+  const adapter = chatChannelRegistry.get('dingtalk')
+  if (!adapter || typeof adapter.receive !== 'function') {
+    return { ok: false, error: 'dingtalk adapter unavailable' }
+  }
+  return adapter.receive(payload || {})
 })
 
 // Doctor：轻量诊断（配置、端口、飞书连接等），供设置页与 GET /api/doctor 使用

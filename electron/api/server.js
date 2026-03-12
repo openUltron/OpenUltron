@@ -100,6 +100,28 @@ function createApiServer(opts = {}) {
   })
 
   /**
+   * DingTalk 回调入口：POST /api/dingtalk/inbound
+   * - 若携带 challenge，按钉钉握手要求原样返回
+   * - 其余事件透传到 dingtalk-inbound channel 处理
+   */
+  app.post('/api/dingtalk/inbound', async (req, res) => {
+    try {
+      const body = req.body || {}
+      if (body.challenge) {
+        return res.json({ challenge: body.challenge })
+      }
+      if (!invokeRegistry.has('dingtalk-inbound')) {
+        return res.status(501).json({ success: false, error: 'dingtalk-inbound not registered' })
+      }
+      const result = await invokeRegistry.invoke('dingtalk-inbound', [body])
+      res.json({ success: true, data: result })
+    } catch (err) {
+      console.error('[API] dingtalk inbound error:', err.message)
+      res.status(500).json({ success: false, error: err.message })
+    }
+  })
+
+  /**
    * 统一调用入口：POST /api/invoke
    * Body: { "channel": "get-config", "args": ["myKey"] }
    * 与 IPC 使用同一套 channel 与 args，数据源一致。

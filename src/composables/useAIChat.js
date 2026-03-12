@@ -442,6 +442,15 @@ export function useAIChat() {
   const setCurrentSessionId = (sessionId) => {
     currentSessionId = sessionId
   }
+  const ensureSessionId = (preferredSessionId) => {
+    if (preferredSessionId != null && String(preferredSessionId).trim() !== '') {
+      currentSessionId = String(preferredSessionId).trim()
+    } else if (!currentSessionId) {
+      currentSessionId = genSessionId()
+    }
+    return currentSessionId
+  }
+  const getCurrentSessionId = () => currentSessionId
   const startStreamingPlaceholder = () => {
     ensureListeners()
     messages.value.push({ role: 'assistant', content: '', toolCalls: [] })
@@ -481,6 +490,8 @@ export function useAIChat() {
     loadMessages,
     respondConfirm,
     setCurrentSessionId,
+    ensureSessionId,
+    getCurrentSessionId,
     startStreamingPlaceholder,
     cleanup
   }

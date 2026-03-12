@@ -128,7 +128,8 @@ function parseMessageEvent(data) {
   }
 
   // 最后兜底：直接从原始 content 字符串抓取 key（兼容飞书结构变化/解析失败）
-  if (attachments.length === 0 && rawContentStr) {
+  // 仅对非 text 消息启用，避免从普通文本中误抓历史 file_key/image_key 造成串文件
+  if (attachments.length === 0 && rawContentStr && messageType !== 'text') {
     const imgMatches = [...rawContentStr.matchAll(/"image_key"\s*:\s*"([^"]+)"/g)]
     for (const m of imgMatches) {
       const key = (m && m[1]) ? m[1].trim() : ''

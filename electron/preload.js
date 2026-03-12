@@ -386,6 +386,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dingtalk: {
     getConfig: () => ipcRenderer.invoke('get-dingtalk-config'),
     setConfig: (payload) => ipcRenderer.invoke('set-dingtalk-config', payload),
+    receiveStatus: () => ipcRenderer.invoke('dingtalk-receive-status'),
   },
 
   // ==================== 定时任务 Cron ====================

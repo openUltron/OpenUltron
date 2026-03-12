@@ -128,7 +128,8 @@ class Orchestrator {
         '[当前应用]\n' +
         '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
         '当用户要求修改或配置**本机其他项目**、某仓库或用户提到的任意名称时：自行决定用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不得未执行就称找不到或向用户索要路径。可先调用 query_command_log 查看当前项目下已执行命令的成功/失败与已查看路径，再决定本次命令，实现自我进化。具体项目名称、常见路径与配置文件名由你自行检索或根据用户表述判断，提示词中不预设。\n' +
-        '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：不要只给安装建议。应直接执行最小化安装步骤并继续任务；安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
+        '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：先判断是否存在内置工具可完成任务；若有内置工具必须优先使用，禁止安装依赖。仅当确实不存在内置替代方案时，才可执行最小化安装步骤并继续任务；安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
+        'TTS/语音场景是强制例外：必须优先使用内置工具，不要安装依赖。先用 tts_voice_manager(list_voices/list_aliases) 获取音色与别名，再用 tts_voice_manager(set_alias/set_default) 记录用户选择；飞书发送用 feishu_send_message 的 audio_* 参数，Telegram 发送用 telegram_send_message 的 audio_* 参数；不要执行 npm/brew/pip 安装 node-edge-tts 或其他 TTS 依赖。\n' +
         `默认工作空间：${getWorkspaceRoot()}。\n` +
         `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
         '**回复风格**：不要写「我来帮你…」「让我执行…」等固定话术；不要输出「可能的原因和建议」「请提供以下任一信息」等模板式列表。直接执行、根据结果继续或简短说明已尝试与下一步。未明确要求修改外部项目时，默认在 OpenUltron 内完成。'
@@ -350,25 +351,57 @@ class Orchestrator {
             const callFn = tryAnthropic ? this._callAnthropicLLM.bind(this) : this._callOpenAILLM.bind(this)
             try {
               const messagesToSend = tryAnthropic ? currentMessages : this._sanitizeOpenAIMessages(currentMessages)
-              response = await callFn({
-              messages: messagesToSend,
-              model: tryModel,
-              tools: sanitizedTools.length > 0 ? sanitizedTools : undefined,
-              temperature: config.temperature ?? 0,
-              max_tokens: config.maxTokens || 0
-            }, config, wrappedSender, sessionId, abortController.signal)
-            if (mi > 0) {
-              console.log(`[AI] 已故障转移到备用模型: ${tryModel}`)
-              wrappedSender.send('ai-chat-token', { sessionId, token: `\n\n> ⚠️ 主模型不可用，已自动切换至备用模型 ${tryModel}\n\n` })
+              const toolModes = sanitizedTools.length > 0
+                ? [{ tools: sanitizedTools, withTools: true }, { tools: undefined, withTools: false }]
+                : [{ tools: undefined, withTools: false }]
+              let lastModeErr = null
+              for (let ti = 0; ti < toolModes.length; ti++) {
+                const mode = toolModes[ti]
+                try {
+                  response = await callFn({
+                    messages: messagesToSend,
+                    model: tryModel,
+                    tools: mode.tools,
+                    temperature: config.temperature ?? 0,
+                    max_tokens: config.maxTokens || 0
+                  }, config, wrappedSender, sessionId, abortController.signal)
+                  if (!mode.withTools) {
+                    wrappedSender.send('ai-chat-token', {
+                      sessionId,
+                      token: '\n\n> ⚠️ 当前模型不允许工具调用，已自动切换为无工具模式继续回答。\n\n'
+                    })
+                  }
+                  break
+                } catch (modeErr) {
+                  lastModeErr = modeErr
+                  const classify = this._classifyLlmError(modeErr)
+                  const shouldRetryWithoutTools = mode.withTools &&
+                    classify.action === 'disable_tools_then_retry' &&
+                    ti < toolModes.length - 1
+                  if (shouldRetryWithoutTools) {
+                    console.warn(`[AI] 模型 ${tryModel} 工具调用受限（${classify.kind}），自动改为无工具模式重试:`, modeErr.message)
+                    continue
+                  }
+                  throw modeErr
+                }
+              }
+              if (!response && lastModeErr) throw lastModeErr
+              if (mi > 0) {
+                console.log(`[AI] 已故障转移到备用模型: ${tryModel}`)
+                wrappedSender.send('ai-chat-token', { sessionId, token: `\n\n> ⚠️ 主模型不可用，已自动切换至备用模型 ${tryModel}\n\n` })
+              }
+              break
+            } catch (err) {
+              const classify = this._classifyLlmError(err)
+              if (classify.action === 'fail_fast') {
+                throw err
+              }
+              if (mi < modelsToTry.length - 1) {
+                console.warn(`[AI] 模型 ${tryModel} 调用失败，尝试下一个:`, err.message)
+              } else {
+                throw err  // 所有备用模型都失败，抛出错误
+              }
             }
-            break
-          } catch (err) {
-            if (mi < modelsToTry.length - 1) {
-              console.warn(`[AI] 模型 ${tryModel} 调用失败，尝试下一个:`, err.message)
-            } else {
-              throw err  // 所有备用模型都失败，抛出错误
-            }
-          }
         }
         }
 
@@ -873,6 +906,40 @@ class Orchestrator {
     } catch {
       return '{}'
     }
+  }
+
+  _isOperationNotAllowedError(err) {
+    const msg = String(err && err.message ? err.message : err || '').toLowerCase()
+    return msg.includes('operation not allowed') || msg.includes('not allowed')
+  }
+
+  _classifyLlmError(err) {
+    const status = Number(err && (err.httpStatus || err.statusCode || 0)) || 0
+    const raw = String(err && err.message ? err.message : err || '')
+    const msg = raw.toLowerCase()
+
+    const isAuth = status === 401 || status === 403 ||
+      /invalid api key|unauthorized|authentication|auth failed|forbidden/.test(msg)
+    if (isAuth) return { kind: 'auth', action: 'fail_fast' }
+
+    const isBilling = /insufficient_quota|quota|billing|余额|欠费|credit|payment required/.test(msg)
+    if (isBilling) return { kind: 'billing', action: 'fail_fast' }
+
+    const isModelUnavailable =
+      status === 404 ||
+      /model .*not found|does not exist|unknown model|invalid model|model_not_found|not available in your region|region/.test(msg)
+    if (isModelUnavailable) return { kind: 'model_unavailable', action: 'fallback_model' }
+
+    const isToolRestricted =
+      /operation not allowed|function calling|tool[_ ]?call|tools are not supported|tool use is not supported|tool_choice/.test(msg)
+    if (isToolRestricted) return { kind: 'tool_restricted', action: 'disable_tools_then_retry' }
+
+    const isVisionRestricted =
+      /image|vision|multimodal|input_image|image_url|does not support vision/.test(msg) &&
+      (/not support|not supported|invalid parameter|unsupported/.test(msg))
+    if (isVisionRestricted) return { kind: 'vision_restricted', action: 'fallback_model' }
+
+    return { kind: 'unknown', action: 'none' }
   }
 
   /** 将工具参数解析为对象，非对象参数降级为空对象，避免执行层抛异常中断 */
