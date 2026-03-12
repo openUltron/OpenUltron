@@ -3366,6 +3366,12 @@ async function runCliCommand(command, args = [], options = {}) {
     let done = false
     let timedOut = false
     let abortedByPattern = false
+    const finish = (payload) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve(payload)
+    }
     const child = spawn(command, args, {
       cwd: cwd || getWorkspaceRoot(),
       shell: false,
@@ -3374,6 +3380,15 @@ async function runCliCommand(command, args = [], options = {}) {
     const timer = setTimeout(() => {
       timedOut = true
       try { child.kill('SIGKILL') } catch (_) {}
+      // 避免子进程不退出导致主流程卡死：超时后直接返回失败
+      finish({
+        success: false,
+        exitCode: -1,
+        stdout,
+        stderr,
+        error: `命令执行超时 (${Math.floor(timeoutMs / 1000)}秒)`,
+        timedOut: true
+      })
     }, timeoutMs)
     child.stdout?.on('data', (chunk) => {
       const text = String(chunk || '')
@@ -3388,20 +3403,23 @@ async function runCliCommand(command, args = [], options = {}) {
         if (!done && typeof shouldAbort === 'function' && shouldAbort(text, { stdout, stderr })) {
           abortedByPattern = true
           try { child.kill('SIGKILL') } catch (_) {}
+          // 命中快速失败条件时立即返回，不再等待 close 事件
+          finish({
+            success: false,
+            exitCode: -1,
+            stdout,
+            stderr,
+            error: '命中快速失败条件，已提前终止',
+            timedOut: false
+          })
         }
       } catch (_) {}
     })
     child.on('error', (err) => {
-      if (done) return
-      done = true
-      clearTimeout(timer)
-      resolve({ success: false, exitCode: -1, stdout, stderr, error: err.message, timedOut: false })
+      finish({ success: false, exitCode: -1, stdout, stderr, error: err.message, timedOut: false })
     })
     child.on('close', (code) => {
-      if (done) return
-      done = true
-      clearTimeout(timer)
-      resolve({
+      finish({
         success: !timedOut && !abortedByPattern && code === 0,
         exitCode: timedOut ? -1 : (code ?? 0),
         stdout,
