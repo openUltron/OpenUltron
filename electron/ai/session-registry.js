@@ -213,6 +213,15 @@ class SessionRegistry extends EventEmitter {
     })
   }
 
+  /** 外部调用可按需刷新进度（例如外部子 Agent 执行心跳） */
+  updateProgress(sessionId, patch = {}) {
+    const entry = this.sessions.get(sessionId)
+    if (!entry) return false
+    entry.lastActivity = new Date().toISOString()
+    this._setProgress(entry, patch)
+    return true
+  }
+
   /** 前端更新会话元信息（模型切换等） */
   updateMeta(sessionId, meta) {
     const entry = this.sessions.get(sessionId)

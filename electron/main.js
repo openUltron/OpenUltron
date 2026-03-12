@@ -3453,7 +3453,7 @@ function buildExternalPrompt({ task, systemPrompt, roleName, projectPath }) {
   return blocks.join('\n\n')
 }
 
-async function runByExternalSubAgent(spec, ctx, resolvedCommand = '') {
+async function runByExternalSubAgent(spec, ctx, resolvedCommand = '', heartbeat = null) {
   const prompt = buildExternalPrompt(ctx)
   const rawProjectPath = String(ctx.projectPath || '').trim()
   const cwd = (rawProjectPath && path.isAbsolute(rawProjectPath) && fs.existsSync(rawProjectPath))
@@ -3484,6 +3484,7 @@ async function runByExternalSubAgent(spec, ctx, resolvedCommand = '') {
     if (!r.success) {
       console.warn('[SubAgentDispatch] 外部子Agent单次尝试失败', `external:${spec.id}`, `exit=${r.exitCode}`, `error=${r.error || ''}`, `stderr=${errout.slice(-300)}`)
     }
+    try { if (typeof heartbeat === 'function') heartbeat({ event: 'attempt_done', success: !!r.success, exitCode: r.exitCode, error: r.error || '' }) } catch (_) {}
     attempts.push({
       args,
       success: !!r.success,
@@ -3591,7 +3592,7 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
 
 // 多 Agent：派生子 Agent 执行任务并返回结果（sessions_spawn）
 async function runSubChat(opts) {
-  const { task, systemPrompt, roleName, model, projectPath, provider, runtime } = opts || {}
+  const { task, systemPrompt, roleName, model, projectPath, provider, runtime, parentSessionId } = opts || {}
   const subSessionId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const userRuntime = String(runtime || '').trim()
   let effectiveRuntime = userRuntime
@@ -3605,6 +3606,21 @@ async function runSubChat(opts) {
   const availableExternalById = new Map(availableExternal.map(a => [a.id, a]))
   const runtimeChain = resolveRuntimeChain(effectiveRuntime, availableExternalIds)
   const attemptErrors = []
+  try {
+    sessionRegistry.markRunning(subSessionId, {
+      projectPath: projectPath || '__main_chat__',
+      projectName: 'sub-agent',
+      model: effectiveRuntime || 'auto',
+      sender: null,
+      abortController: null
+    })
+    sessionRegistry.updateProgress(subSessionId, {
+      phase: 'tool_running',
+      progress: 8,
+      last_action: `子Agent准备执行（${effectiveRuntime || 'auto'}）`,
+      eta: null
+    })
+  } catch (_) {}
   try {
     appLogger?.info?.('[SubAgentDispatch] 开始派发子Agent', {
       subSessionId,
@@ -3627,8 +3643,25 @@ async function runSubChat(opts) {
   for (const rt of runtimeChain) {
     try {
       if (rt === 'internal') {
+        try {
+          sessionRegistry.updateProgress(subSessionId, {
+            phase: 'tool_running',
+            progress: 25,
+            last_action: '回退到 internal 执行',
+            eta: null
+          })
+          if (parentSessionId) {
+            sessionRegistry.updateProgress(parentSessionId, {
+              phase: 'tool_running',
+              progress: 20,
+              last_action: '子Agent回退到 internal 执行',
+              eta: null
+            })
+          }
+        } catch (_) {}
         const out = await runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider }, subSessionId)
         if (out.success) {
+          try { sessionRegistry.markComplete(subSessionId) } catch (_) {}
           try {
             appLogger?.info?.('[SubAgentDispatch] 子Agent执行成功', {
               subSessionId,
@@ -3646,6 +3679,7 @@ async function runSubChat(opts) {
           })
         } catch (_) {}
         attemptErrors.push(`[internal] ${out.error || '执行失败'}`)
+        try { sessionRegistry.markError(subSessionId, out.error || 'internal执行失败') } catch (_) {}
         continue
       }
       const spec = EXTERNAL_SUBAGENT_SPECS.find(s => s.id === rt)
@@ -3661,8 +3695,40 @@ async function runSubChat(opts) {
       }
       const found = availableExternalById.get(rt)
       const resolvedCommand = found && found.path ? String(found.path).trim() : ''
-      const out = await runByExternalSubAgent(spec, { task, systemPrompt, roleName, projectPath }, resolvedCommand)
+      const extStart = Date.now()
+      let beatTimer = null
+      const heartbeat = (evt = {}) => {
+        const elapsed = Math.max(0, Math.floor((Date.now() - extStart) / 1000))
+        const txt = evt && evt.event === 'attempt_done'
+          ? `子Agent(${rt})尝试结束，exit=${evt.exitCode}${evt.success ? '' : `，${evt.error || '失败'}`}`
+          : `子Agent(${rt})执行中，已运行 ${elapsed}s`
+        try {
+          sessionRegistry.updateProgress(subSessionId, {
+            phase: 'tool_running',
+            progress: Math.min(88, 18 + Math.floor(elapsed / 15) * 3),
+            last_action: txt,
+            eta: null
+          })
+          if (parentSessionId) {
+            sessionRegistry.updateProgress(parentSessionId, {
+              phase: 'tool_running',
+              progress: Math.min(70, 12 + Math.floor(elapsed / 15) * 2),
+              last_action: txt,
+              eta: null
+            })
+          }
+        } catch (_) {}
+      }
+      beatTimer = setInterval(() => heartbeat({ event: 'tick' }), 15000)
+      heartbeat({ event: 'tick' })
+      let out = null
+      try {
+        out = await runByExternalSubAgent(spec, { task, systemPrompt, roleName, projectPath }, resolvedCommand, heartbeat)
+      } finally {
+        try { if (beatTimer) clearInterval(beatTimer) } catch (_) {}
+      }
       if (out.success) {
+        try { sessionRegistry.markComplete(subSessionId) } catch (_) {}
         try {
           appLogger?.info?.('[SubAgentDispatch] 子Agent执行成功', {
             subSessionId,
@@ -3699,6 +3765,14 @@ async function runSubChat(opts) {
         console.warn('[SubAgentDispatch] 外部子Agent失败并回退', out.runtime || `external:${rt}`, out.error || '执行失败', attemptSummary)
       } catch (_) {}
       attemptErrors.push(`[${out.runtime || `external:${rt}`}] ${out.error || '执行失败'}`)
+      try {
+        sessionRegistry.updateProgress(subSessionId, {
+          phase: 'tool_running',
+          progress: 24,
+          last_action: `子Agent(${rt})失败，准备回退`,
+          eta: null
+        })
+      } catch (_) {}
     } catch (e) {
       try {
         appLogger?.warn?.('[SubAgentDispatch] 子Agent执行异常，将尝试回退', {
@@ -3708,6 +3782,7 @@ async function runSubChat(opts) {
         })
       } catch (_) {}
       attemptErrors.push(`[${rt}] ${e.message || String(e)}`)
+      try { sessionRegistry.markError(subSessionId, e.message || String(e)) } catch (_) {}
     }
   }
 
@@ -3720,6 +3795,7 @@ async function runSubChat(opts) {
       errors: attemptErrors
     })
   } catch (_) {}
+  try { sessionRegistry.markError(subSessionId, attemptErrors.join(' | ') || '子 Agent 执行失败') } catch (_) {}
   return { success: false, error: attemptErrors.join(' | ') || '子 Agent 执行失败', subSessionId }
 }
 
