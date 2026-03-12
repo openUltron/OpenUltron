@@ -1,6 +1,6 @@
 const { app, BrowserWindow, Menu, shell, dialog, ipcMain, session, protocol, net } = require('electron')
 const path = require('path')
-const { exec } = require('child_process')
+const { exec, spawn } = require('child_process')
 const { promisify } = require('util')
 const fs = require('fs')
 const https = require('https')
@@ -3317,10 +3317,174 @@ function getResolvedAIConfigForProvider(providerKey) {
   }
 }
 
-// 多 Agent：派生子 Agent 执行任务并返回结果（sessions_spawn）
-async function runSubChat(opts) {
-  const { task, systemPrompt, roleName, model, projectPath, provider } = opts || {}
-  const subSessionId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+const EXTERNAL_SUBAGENT_SPECS = [
+  {
+    id: 'codex',
+    command: 'codex',
+    versionArgs: ['--version'],
+    runArgBuilders: [
+      (prompt) => ['exec', prompt],
+      (prompt) => ['run', prompt]
+    ]
+  },
+  {
+    id: 'claude',
+    command: 'claude',
+    versionArgs: ['--version'],
+    runArgBuilders: [
+      (prompt) => ['-p', prompt],
+      (prompt) => ['--print', prompt]
+    ]
+  },
+  {
+    id: 'openclaw',
+    command: 'openclaw',
+    versionArgs: ['--version'],
+    runArgBuilders: [
+      (prompt) => ['run', prompt],
+      (prompt) => ['exec', prompt]
+    ]
+  },
+  {
+    id: 'opencode',
+    command: 'opencode',
+    versionArgs: ['--version'],
+    runArgBuilders: [
+      (prompt) => ['run', prompt],
+      (prompt) => ['exec', prompt]
+    ]
+  }
+]
+
+const EXTERNAL_AGENT_SCAN_TTL = 60 * 1000
+let _externalAgentScanCache = { ts: 0, agents: [] }
+
+async function runCliCommand(command, args = [], options = {}) {
+  const { cwd, timeoutMs = 90000, env } = options
+  return await new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    let done = false
+    let timedOut = false
+    const child = spawn(command, args, {
+      cwd: cwd || getWorkspaceRoot(),
+      shell: false,
+      env: env || process.env
+    })
+    const timer = setTimeout(() => {
+      timedOut = true
+      try { child.kill('SIGKILL') } catch (_) {}
+    }, timeoutMs)
+    child.stdout?.on('data', (chunk) => { stdout += String(chunk || '') })
+    child.stderr?.on('data', (chunk) => { stderr += String(chunk || '') })
+    child.on('error', (err) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve({ success: false, exitCode: -1, stdout, stderr, error: err.message, timedOut: false })
+    })
+    child.on('close', (code) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve({
+        success: !timedOut && code === 0,
+        exitCode: timedOut ? -1 : (code ?? 0),
+        stdout,
+        stderr,
+        error: timedOut ? `命令执行超时 (${Math.floor(timeoutMs / 1000)}秒)` : '',
+        timedOut
+      })
+    })
+  })
+}
+
+async function scanExternalSubAgents(force = false) {
+  const now = Date.now()
+  if (!force && _externalAgentScanCache.ts > 0 && now - _externalAgentScanCache.ts < EXTERNAL_AGENT_SCAN_TTL) {
+    return _externalAgentScanCache.agents
+  }
+  const list = []
+  for (const spec of EXTERNAL_SUBAGENT_SPECS) {
+    const found = await runCliCommand('which', [spec.command], { timeoutMs: 2500 })
+    if (!found.success) {
+      list.push({ id: spec.id, command: spec.command, available: false, reason: 'not_found' })
+      continue
+    }
+    const version = await runCliCommand(spec.command, spec.versionArgs || ['--version'], { timeoutMs: 4000 })
+    const verText = String(version.stdout || version.stderr || '').trim().split('\n')[0] || ''
+    list.push({
+      id: spec.id,
+      command: spec.command,
+      available: !!version.success,
+      path: String(found.stdout || '').trim(),
+      version: verText,
+      reason: version.success ? '' : (version.error || 'version_check_failed')
+    })
+  }
+  _externalAgentScanCache = { ts: now, agents: list }
+  return list
+}
+
+function buildExternalPrompt({ task, systemPrompt, roleName, projectPath }) {
+  const blocks = []
+  if (roleName) blocks.push(`角色：${roleName}`)
+  if (systemPrompt) blocks.push(`系统约束：\n${systemPrompt}`)
+  if (projectPath) blocks.push(`工作目录：${projectPath}`)
+  blocks.push(`任务：\n${task}`)
+  blocks.push('请直接输出最终答案，不要输出工具调用 XML。')
+  return blocks.join('\n\n')
+}
+
+async function runByExternalSubAgent(spec, ctx) {
+  const prompt = buildExternalPrompt(ctx)
+  const cwd = ctx.projectPath || getWorkspaceRoot()
+  const attempts = []
+  for (const buildArgs of (spec.runArgBuilders || [])) {
+    const args = buildArgs(prompt)
+    const r = await runCliCommand(spec.command, args, { cwd, timeoutMs: 10 * 60 * 1000 })
+    const output = String(r.stdout || r.stderr || '').trim()
+    const errout = String(r.stderr || '').trim()
+    attempts.push({
+      args,
+      success: !!r.success,
+      exitCode: r.exitCode,
+      error: r.error || '',
+      stderr: errout.slice(-300)
+    })
+    if (r.success && output) {
+      return {
+        success: true,
+        result: output,
+        runtime: `external:${spec.id}`,
+        messages: [{ role: 'assistant', content: output }],
+        attempts
+      }
+    }
+  }
+  const last = attempts[attempts.length - 1] || {}
+  const msg = last.error || last.stderr || `外部子 Agent ${spec.id} 执行失败`
+  return { success: false, error: msg, runtime: `external:${spec.id}`, attempts }
+}
+
+function resolveRuntimeChain(runtime, availableExternalIds) {
+  const extIds = availableExternalIds || []
+  const normalized = String(runtime || '').trim().toLowerCase()
+  if (!normalized || normalized === 'internal') return ['internal']
+  if (normalized === 'external' || normalized === 'auto') return [...extIds, 'internal']
+  if (normalized.startsWith('external:')) {
+    const pick = normalized.slice('external:'.length).trim()
+    const rest = extIds.filter(id => id !== pick)
+    return [pick, ...rest, 'internal']
+  }
+  if (extIds.includes(normalized)) {
+    const rest = extIds.filter(id => id !== normalized)
+    return [normalized, ...rest, 'internal']
+  }
+  return ['internal']
+}
+
+async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider }, subSessionId) {
   const messages = []
   const rolePrompt = roleName && String(roleName).trim()
     ? `你当前扮演的角色是「${String(roleName).trim()}」。请严格按该角色完成任务，并仅输出该角色应给出的结果。`
@@ -3328,15 +3492,14 @@ async function runSubChat(opts) {
   const mergedSystemPrompt = [rolePrompt, systemPrompt && String(systemPrompt).trim() ? String(systemPrompt).trim() : '']
     .filter(Boolean)
     .join('\n\n')
-  if (mergedSystemPrompt) {
-    messages.push({ role: 'system', content: mergedSystemPrompt })
-  }
+  if (mergedSystemPrompt) messages.push({ role: 'system', content: mergedSystemPrompt })
   messages.push({ role: 'user', content: String(task || '').trim() })
+
   let resolvedConfig = null
   if (provider != null && String(provider).trim() !== '') {
     resolvedConfig = getResolvedAIConfigForProvider(String(provider).trim())
     if (!resolvedConfig) {
-      return { success: false, error: `未找到或未配置该供应商的 API Key: ${provider}`, subSessionId }
+      return { success: false, error: `未找到或未配置该供应商的 API Key: ${provider}`, subSessionId, runtime: 'internal' }
     }
   }
   if (!resolvedConfig) resolvedConfig = getResolvedAIConfig()
@@ -3346,46 +3509,88 @@ async function runSubChat(opts) {
       ? resolvedConfig.modelPool.map(x => String(x || '').trim()).filter(Boolean)
       : []
     if (pool.length > 0 && !pool.includes(pick)) {
-      return { success: false, error: `模型 ${pick} 不在全局模型池中`, subSessionId }
+      return { success: false, error: `模型 ${pick} 不在全局模型池中`, subSessionId, runtime: 'internal' }
     }
     if ((provider == null || String(provider).trim() === '') && resolvedConfig.modelBindings && resolvedConfig.modelBindings[pick]) {
       const byModelProvider = getResolvedAIConfigForProvider(resolvedConfig.modelBindings[pick])
-      if (byModelProvider) {
-        resolvedConfig = { ...byModelProvider, defaultModel: pick }
-      }
+      if (byModelProvider) resolvedConfig = { ...byModelProvider, defaultModel: pick }
     }
   }
-  const toolDefs = getToolsForChat()
-  try {
-    const result = await aiOrchestrator.startChat({
-      sessionId: subSessionId,
-      messages,
-      model: model && String(model).trim() ? String(model).trim() : undefined,
-      tools: toolDefs,
-      sender: null,
-      config: resolvedConfig,
-      projectPath: projectPath || '__main_chat__',
-      panelId: undefined,
-      feishuChatId: undefined
-    })
-    if (!result.success) {
-      return { success: false, error: result.error || '子 Agent 执行失败', subSessionId }
-    }
-    const msgs = result.messages || []
-    const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant' && m.content != null)
-    let resultText = ''
-    if (lastAssistant && lastAssistant.content) {
-      if (typeof lastAssistant.content === 'string') {
-        resultText = lastAssistant.content.trim()
-      } else if (Array.isArray(lastAssistant.content)) {
-        resultText = lastAssistant.content.map(c => (c && c.text) || '').join('').trim()
-      }
-    }
-    return { success: true, result: resultText, subSessionId, messages: msgs }
-  } catch (e) {
-    return { success: false, error: e.message || String(e), subSessionId }
+
+  const result = await aiOrchestrator.startChat({
+    sessionId: subSessionId,
+    messages,
+    model: model && String(model).trim() ? String(model).trim() : undefined,
+    tools: getToolsForChat(),
+    sender: null,
+    config: resolvedConfig,
+    projectPath: projectPath || '__main_chat__',
+    panelId: undefined,
+    feishuChatId: undefined
+  })
+  if (!result.success) {
+    return { success: false, error: result.error || '子 Agent 执行失败', subSessionId, runtime: 'internal' }
   }
+  const msgs = result.messages || []
+  const lastAssistant = [...msgs].reverse().find(m => m.role === 'assistant' && m.content != null)
+  let resultText = ''
+  if (lastAssistant && lastAssistant.content) {
+    if (typeof lastAssistant.content === 'string') resultText = lastAssistant.content.trim()
+    else if (Array.isArray(lastAssistant.content)) resultText = lastAssistant.content.map(c => (c && c.text) || '').join('').trim()
+  }
+  return { success: true, result: resultText, subSessionId, messages: msgs, runtime: 'internal' }
 }
+
+// 多 Agent：派生子 Agent 执行任务并返回结果（sessions_spawn）
+async function runSubChat(opts) {
+  const { task, systemPrompt, roleName, model, projectPath, provider, runtime } = opts || {}
+  const subSessionId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const scan = await scanExternalSubAgents(false)
+  const availableExternalIds = scan.filter(a => a.available).map(a => a.id)
+  const runtimeChain = resolveRuntimeChain(runtime, availableExternalIds)
+  const attemptErrors = []
+
+  for (const rt of runtimeChain) {
+    try {
+      if (rt === 'internal') {
+        const out = await runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider }, subSessionId)
+        if (out.success) return { ...out, attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1) }
+        attemptErrors.push(`[internal] ${out.error || '执行失败'}`)
+        continue
+      }
+      const spec = EXTERNAL_SUBAGENT_SPECS.find(s => s.id === rt)
+      if (!spec || !availableExternalIds.includes(rt)) {
+        attemptErrors.push(`[external:${rt}] 不可用（未安装或不可执行）`)
+        continue
+      }
+      const out = await runByExternalSubAgent(spec, { task, systemPrompt, roleName, projectPath })
+      if (out.success) {
+        return {
+          success: true,
+          result: out.result || '',
+          subSessionId,
+          messages: out.messages || [],
+          runtime: out.runtime,
+          attemptedRuntimes: runtimeChain.slice(0, attemptErrors.length + 1)
+        }
+      }
+      attemptErrors.push(`[${out.runtime || `external:${rt}`}] ${out.error || '执行失败'}`)
+    } catch (e) {
+      attemptErrors.push(`[${rt}] ${e.message || String(e)}`)
+    }
+  }
+
+  return { success: false, error: attemptErrors.join(' | ') || '子 Agent 执行失败', subSessionId }
+}
+
+registerChannel('ai-list-external-subagents', async (event, { force } = {}) => {
+  try {
+    const agents = await scanExternalSubAgents(!!force)
+    return { success: true, agents }
+  } catch (e) {
+    return { success: false, error: e.message || String(e), agents: [] }
+  }
+})
 try {
   const { createSessionsSpawnTool } = require('./ai/tools/sessions-spawn')
   aiToolRegistry.register('sessions_spawn', createSessionsSpawnTool(runSubChat))
@@ -4199,6 +4404,7 @@ function getCoordinatorSystemPrompt(channel = '') {
     '[主 Agent 协调模式]',
     `你是 ${channelName} 主 Agent，只负责：接收消息、派发子任务、管理状态、向用户汇报。`,
     '除纯问候或进度询问外，用户的实际任务必须调用 sessions_spawn 交给子 Agent 执行。',
+    '优先使用 sessions_spawn(runtime="auto")，系统会先尝试可用外部子 Agent（codex/claude/openclaw/opencode），失败自动回退到其他可用子 Agent 与 internal。',
     '主 Agent 不直接调用业务工具、不直接执行具体任务。',
     '收到子 Agent 结果后，简洁向用户回复结论与必要说明。'
   ].join('\n')
