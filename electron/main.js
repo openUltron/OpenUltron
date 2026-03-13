@@ -2825,6 +2825,7 @@ const { ensurePromptsDirAndDefaults } = require('./ai/system-prompts')
 const mcpConfigFile = require('./ai/mcp-config-file')
 const conversationFile = require('./ai/conversation-file')
 const memoryStore = require('./ai/memory-store')
+const commandExecutionLog = require('./ai/command-execution-log')
 
 function getAIConfigLegacy() {
   const data = aiConfigFile.readAIConfig(app, store)
@@ -5487,28 +5488,89 @@ registerChannel('ai-clear-chat-history', async (event, { projectPath, sessionId 
   }
 })
 
-// 开启新会话时主动自我进化：根据上一会话记录提炼经验并写入知识库（后台执行，不阻塞 UI）
-registerChannel('ai-evolve-from-session', async (event, { projectPath, sessionId }) => {
-  if (!projectPath || !sessionId) return { success: true }
-  try {
-    const projectKey = conversationFile.hashProjectPath(projectPath)
-    const conv = conversationFile.loadConversation(projectKey, sessionId)
-    if (!conv || !conv.messages || conv.messages.length < 2) return { success: true }
+const EVOLVE_MIN_INTERVAL_MS = 3 * 60 * 1000
+const EVOLVE_MIN_DIALOG_MESSAGES = 6
+const EVOLVE_MIN_NEW_MESSAGES = 4
+const evolveSessionState = new Map() // key => { lastTs, lastDialogCount, running }
 
-    const dialogMsgs = conv.messages
-      .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => {
+function getDialogMessagesForEvolve(conv) {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : []
+  return msgs.filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+}
+
+function getEvolveStateKey(projectPath, sessionId) {
+  return `${String(projectPath || '').trim()}::${String(sessionId || '').trim()}`
+}
+
+function shouldRunSessionEvolve({ projectPath, sessionId, dialogCount, force = false }) {
+  if (!projectPath || !sessionId) return { ok: false, reason: 'missing_params' }
+  if (dialogCount < EVOLVE_MIN_DIALOG_MESSAGES) return { ok: false, reason: 'too_few_messages' }
+  const key = getEvolveStateKey(projectPath, sessionId)
+  const state = evolveSessionState.get(key) || {}
+  if (state.running) return { ok: false, reason: 'already_running' }
+  if (!force) {
+    const now = Date.now()
+    const elapsed = now - Number(state.lastTs || 0)
+    if (elapsed < EVOLVE_MIN_INTERVAL_MS) return { ok: false, reason: 'cooldown' }
+    if (Number(state.lastDialogCount || 0) > 0 && (dialogCount - Number(state.lastDialogCount || 0)) < EVOLVE_MIN_NEW_MESSAGES) {
+      return { ok: false, reason: 'delta_too_small' }
+    }
+  }
+  return { ok: true, reason: 'ready' }
+}
+
+async function evolveFromSessionInternal({ projectPath, sessionId, force = false, reason = 'manual' } = {}) {
+  if (!projectPath || !sessionId) return { success: true, skipped: true, reason: 'missing_params' }
+  const projectKey = conversationFile.hashProjectPath(projectPath)
+  const conv = conversationFile.loadConversation(projectKey, sessionId)
+  const dialogMsgs = getDialogMessagesForEvolve(conv)
+  const gate = shouldRunSessionEvolve({ projectPath, sessionId, dialogCount: dialogMsgs.length, force })
+  if (!gate.ok) return { success: true, skipped: true, reason: gate.reason }
+
+  const stateKey = getEvolveStateKey(projectPath, sessionId)
+  const prev = evolveSessionState.get(stateKey) || {}
+  evolveSessionState.set(stateKey, { ...prev, running: true })
+  try {
+    const dialogText = dialogMsgs
+      .map((m) => {
         const text = typeof m.content === 'string' ? m.content : (Array.isArray(m.content) ? (m.content.map(c => c?.text || '').join('')) : '')
         return `[${m.role}]: ${text.slice(0, 1500)}${text.length > 1500 ? '...' : ''}`
       })
-    const dialogText = dialogMsgs.join('\n\n').slice(0, 8000)
-    if (!dialogText.trim()) return { success: true }
+      .join('\n\n')
+      .slice(0, 9000)
+    if (!dialogText.trim()) return { success: true, skipped: true, reason: 'empty_dialog' }
 
     const config = getResolvedAIConfig()
-    if (!config?.apiKey?.trim()) return { success: true }
+    if (!config?.apiKey?.trim()) return { success: true, skipped: true, reason: 'missing_api_key' }
 
-    const systemPrompt = '你负责从对话中提炼经验教训。只输出一个 JSON 数组，格式为 [{"content":"...", "category":"..."}]。每条 content 须详细：含具体场景、失败原因或成功做法、可复用的命令或步骤（80～400字）。category 为通用/git/部署/调试/命令等。若无值得提炼的则输出 []。不要输出 markdown 代码块或其它说明，仅输出 JSON。'
-    const prompt = `请根据以下对话提炼 1～5 条经验教训：\n\n${dialogText}`
+    const cmdSummary = commandExecutionLog.getExecutionSummary(projectPath || '')
+    const cmdViewed = commandExecutionLog.getViewedPaths(projectPath || '')
+    const cmdBrief = [
+      `命令总数=${Number(cmdSummary?.total || 0)}`,
+      `成功=${Number(cmdSummary?.success || 0)}`,
+      `失败=${Number(cmdSummary?.failed || 0)}`,
+      `最近查看目录数=${Array.isArray(cmdViewed?.directories) ? cmdViewed.directories.length : 0}`,
+      `最近查看文件数=${Array.isArray(cmdViewed?.files) ? cmdViewed.files.length : 0}`
+    ].join('，')
+    const cmdByTool = (() => {
+      const byTool = cmdSummary?.byTool && typeof cmdSummary.byTool === 'object' ? cmdSummary.byTool : {}
+      const rows = Object.entries(byTool)
+        .slice(0, 6)
+        .map(([k, v]) => `${k}:total=${v?.total || 0},ok=${v?.success || 0},fail=${v?.failed || 0}`)
+      return rows.join(' | ')
+    })()
+
+    const systemPrompt = '你负责从对话中提炼经验教训。只输出一个 JSON 数组，格式为 [{"content":"...", "category":"..."}]。每条 content 必须详细（80～400字）：包含具体场景、失败原因或成功做法、可复用的命令/路径/步骤。category 只能从 通用/git/部署/调试/命令/飞书/MCP/自动化 中选。若无值得提炼内容则输出 []。禁止 markdown 代码块，禁止额外解释。'
+    const prompt = [
+      `触发来源：${reason}`,
+      `项目：${projectPath}`,
+      `会话：${sessionId}`,
+      `命令执行摘要：${cmdBrief}`,
+      cmdByTool ? `按工具统计：${cmdByTool}` : '',
+      '',
+      '请根据以下对话提炼 1～5 条经验教训：',
+      dialogText
+    ].filter(Boolean).join('\n')
 
     const result = await aiOrchestrator.generateText({
       prompt,
@@ -5517,30 +5579,64 @@ registerChannel('ai-evolve-from-session', async (event, { projectPath, sessionId
       model: config.defaultModel || 'deepseek-v3'
     })
     const raw = (result && typeof result === 'string') ? result.trim() : ''
-    let jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
+    const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
     let arr
     try {
       arr = JSON.parse(jsonStr)
     } catch (_) {
-      return { success: true }
+      return { success: true, skipped: true, reason: 'invalid_json' }
     }
-    if (!Array.isArray(arr) || arr.length === 0) return { success: true }
+    if (!Array.isArray(arr) || arr.length === 0) {
+      evolveSessionState.set(stateKey, { lastTs: Date.now(), lastDialogCount: dialogMsgs.length, running: false })
+      return { success: true, skipped: true, reason: 'empty_lessons' }
+    }
+    let saved = 0
     for (const item of arr.slice(0, 5)) {
       const content = item && (item.content || item.text)
       const category = (item && item.category) ? String(item.category).trim() : '通用'
-      if (content && String(content).trim()) {
-        try {
-          memoryStore.appendLesson(String(content).trim(), category)
-        } catch (e) {
-          console.warn('[AI] evolve appendLesson failed:', e.message)
-        }
+      if (!content || !String(content).trim()) continue
+      try {
+        memoryStore.appendLesson(String(content).trim(), category)
+        saved++
+      } catch (e) {
+        console.warn('[AI] evolve appendLesson failed:', e.message)
       }
     }
-    return { success: true }
+    evolveSessionState.set(stateKey, { lastTs: Date.now(), lastDialogCount: dialogMsgs.length, running: false })
+    try {
+      appLogger?.info?.('[AI] evolve-from-session done', {
+        projectPath,
+        sessionId,
+        reason,
+        dialogCount: dialogMsgs.length,
+        saved
+      })
+    } catch (_) {}
+    return { success: true, saved }
   } catch (e) {
     console.warn('[AI] evolve-from-session failed:', e.message)
-    return { success: true }
+    return { success: true, skipped: true, reason: 'error', message: e.message }
+  } finally {
+    const s = evolveSessionState.get(stateKey) || {}
+    evolveSessionState.set(stateKey, { ...s, running: false })
   }
+}
+
+function triggerAutoEvolveFromSession(payload = {}) {
+  evolveFromSessionInternal(payload).catch((e) => {
+    console.warn('[AI] auto evolve trigger failed:', e.message)
+  })
+}
+
+// 开启新会话时主动自我进化：根据上一会话记录提炼经验并写入知识库（后台执行，不阻塞 UI）
+registerChannel('ai-evolve-from-session', async (event, { projectPath, sessionId, force }) => {
+  const out = await evolveFromSessionInternal({
+    projectPath,
+    sessionId,
+    force: force === true,
+    reason: 'manual_channel'
+  })
+  return out && typeof out === 'object' ? out : { success: true }
 })
 
 // 列出项目所有历史对话（用于对话列表 UI）
@@ -6496,6 +6592,37 @@ function isProgressQueryText(text) {
   return false
 }
 
+function hasTaskIntentText(text) {
+  const t = String(text || '').trim()
+  if (!t) return false
+  if (isProgressQueryText(t)) return false
+  if (isPureScreenshotRequestText(t)) return false
+  if (/^(你好|您好|hello|hi|在吗|在不在|谢谢|thanks?)$/i.test(t)) return false
+  if (/(帮我|帮忙|请你|请帮|继续|重新|再|复现|排查|检查|查看|分析|修复|改|生成|创建|写|做|发布|部署|上线|执行|跑|打开|发送|导出|打包|截图|截屏|优化)/i.test(t)) return true
+  if (t.length >= 12) return true
+  return false
+}
+
+function looksLikeInterimAckText(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return false
+  if (/(请提供|请告诉我|需要你提供|还需要|先确认|无法执行|不能执行|权限不足|缺少|未配置)/i.test(t)) return false
+  if (/(我来|我会|我先|马上|稍等|请稍等|让我|正在|先去)/i.test(t) && !/(已完成|完成了|成功|失败|结果|原因|报告|详情|链接|文档ID|构建号)/i.test(t)) {
+    return true
+  }
+  return false
+}
+
+function shouldAutoInternalFallbackDispatch({ userText = '', assistantText = '', hasSpawnCall = false, aiAlreadySent = false } = {}) {
+  if (hasSpawnCall || aiAlreadySent) return false
+  if (!hasTaskIntentText(userText)) return false
+  const a = String(assistantText || '').trim()
+  if (!a) return true
+  if (looksLikeGenericGreeting(a)) return true
+  if (looksLikeInterimAckText(a)) return true
+  return false
+}
+
 function isScreenshotFollowupText(text) {
   const t = String(text || '').trim()
   if (!t) return false
@@ -6865,7 +6992,16 @@ function buildSingleRunProgressSummary(key, runSessionId) {
   if (!run) return ''
   const snapshot = sessionRegistry.getSnapshot()
   const s = snapshot.find(x => x.sessionId === runSessionId)
-  if (!s) return ''
+  if (!s) {
+    const taskText = summarizeTaskText(run.delegatedTask || run.userTask || '')
+    const duration = formatRunningDuration(run.startTime)
+    const parts = [
+      '状态：执行中',
+      `已运行：${duration}`,
+      taskText ? `任务：${taskText}` : ''
+    ].filter(Boolean)
+    return parts.map((p) => `- ${p}`).join('\n')
+  }
   const status = statusTextForUser(s?.status || 'running')
   const progressPct = computeDisplayProgress(s?.progress?.progress || 0, run.startTime, s?.status || 'running')
   const phase = s?.progress?.phase ? phaseTextForUser(String(s.progress.phase)) : ''
@@ -7541,17 +7677,60 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       m && m.role === 'assistant' && Array.isArray(m.tool_calls) &&
       m.tool_calls.some(tc => tc && tc.function && delegatedTools.has(tc.function.name))
     )
-    const hasSpawnCall = currentRound.some((m) =>
+    let hasSpawnCall = currentRound.some((m) =>
       m && m.role === 'assistant' && Array.isArray(m.tool_calls) &&
       m.tool_calls.some((tc) => tc?.function?.name === 'sessions_spawn')
     )
     const latestVisibleText = String(extractLatestVisibleText(currentRound) || '').trim()
-    // 单次判定策略：不再进行额外的“兜底强制派发”二次模型请求。
-    const rawFallbackText = (toSend && String(toSend).trim())
+    const seedFallbackText = (toSend && String(toSend).trim())
       ? String(toSend).trim()
       : ((spawnResultText && String(spawnResultText).trim())
           ? String(spawnResultText).trim()
           : ((latestVisibleText && String(latestVisibleText).trim()) ? String(latestVisibleText).trim() : ''))
+    let autoFallbackResultText = ''
+    let autoFallbackError = ''
+    const needAutoFallback = shouldAutoInternalFallbackDispatch({
+      userText: String(message?.text || ''),
+      assistantText: seedFallbackText,
+      hasSpawnCall,
+      aiAlreadySent
+    })
+    if (needAutoFallback) {
+      try {
+        appLogger?.warn?.('[SubAgentDispatch] 主Agent未触发 sessions_spawn，自动补一次 internal 派发', {
+          runSessionId,
+          messageId: userMessageId || '',
+          taskPreview: summarizeTaskText(String(message?.text || ''), 80)
+        })
+      } catch (_) {}
+      appendCommandLine('- 主Agent未触发 sessions_spawn，自动补派发 internal')
+      scheduleStreamFlush()
+      const fallbackOut = await runSubChat({
+        task: String(message?.text || ''),
+        systemPrompt: '这是主Agent自动补派发任务。请直接执行，不要先回复“我来检查/我会处理”之类过渡话术；返回可直接给用户的结果。',
+        roleName: '执行助手',
+        projectPath,
+        runtime: 'internal',
+        parentSessionId: mainSessionId,
+        feishuChatId: chatId,
+        feishuTenantKey: String(binding.feishuTenantKey || '').trim() || undefined,
+        feishuDocHost: String(binding.feishuDocHost || '').trim() || undefined,
+        feishuSenderOpenId: String(binding.feishuSenderOpenId || '').trim() || undefined,
+        feishuSenderUserId: String(binding.feishuSenderUserId || '').trim() || undefined
+      })
+      if (fallbackOut?.success && String(fallbackOut.result || '').trim()) {
+        autoFallbackResultText = String(fallbackOut.result || '').trim()
+        hasSpawnCall = true
+        appendCommandLine('- 自动补派发执行完成')
+      } else {
+        autoFallbackError = String(fallbackOut?.error || '自动补派发失败').trim()
+        appendCommandLine(`- 自动补派发失败：${autoFallbackError}`)
+      }
+      scheduleStreamFlush()
+    }
+    const rawFallbackText = (autoFallbackResultText && String(autoFallbackResultText).trim())
+      ? String(autoFallbackResultText).trim()
+      : seedFallbackText
     const safeRawFallbackText = stripToolProtocolAndJsonNoise(rawFallbackText, { dropJsonEnvelope: true })
     const cleanedTextTrim = String(cleanedText || '').trim()
     const cleanedSpawnTrim = String(cleanedSpawnText || '').trim()
@@ -7571,6 +7750,11 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     }) || (safeRawFallbackText || (imageItems.length > 0
       ? '截图已发至当前会话。'
       : '任务已执行完成，但未生成可展示的文本结果。'))
+    if (!textToSend && autoFallbackError) {
+      textToSend = `执行失败：${autoFallbackError}`
+    } else if (autoFallbackError && !autoFallbackResultText) {
+      textToSend = `${textToSend}\n\n自动补派发失败：${autoFallbackError}`
+    }
     if (hasSpawnCall && !cleanedSpawnTrim && looksLikeGenericGreeting(textToSend)) {
       const delegated = summarizeTaskText(String(message?.text || ''), 60)
       textToSend = delegated
@@ -7629,6 +7813,12 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       appLogger?.info?.(`[${binding.channel}] 会话完成，带图回发`, { imageCount: imageItems.length })
     }
     eventBus.emit('chat.session.completed', { binding: outBinding, payload: outPayload })
+    triggerAutoEvolveFromSession({
+      projectPath,
+      sessionId: mainSessionId,
+      reason: `${binding.channel || 'channel'}_completed`,
+      force: false
+    })
     if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
       // 不阻塞最终回复发送，异步移除“敲键盘”表情
       feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
@@ -7646,6 +7836,12 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     }
     const errBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
     eventBus.emit('chat.session.completed', { binding: errBinding, payload: { text: `处理出错: ${e.message}` } })
+    triggerAutoEvolveFromSession({
+      projectPath,
+      sessionId: mainSessionId,
+      reason: `${binding.channel || 'channel'}_failed`,
+      force: false
+    })
   } finally {
     if (streamState.flushTimer) {
       try { clearTimeout(streamState.flushTimer) } catch (_) {}
