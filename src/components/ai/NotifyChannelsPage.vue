@@ -60,6 +60,29 @@
           />
         </div>
         <div class="feishu-row">
+          <label>{{ t('notify.feishuOauthRedirectUri') }}</label>
+          <input
+            v-model="oauthRedirectUri"
+            type="text"
+            class="feishu-input"
+            :placeholder="t('notify.feishuOauthRedirectUriPh')"
+            @blur="saveConfigDebounced"
+          />
+        </div>
+        <div class="feishu-oauth-tip">
+          {{ t('notify.feishuOauthTip') }}
+        </div>
+        <div class="feishu-row">
+          <label>{{ t('notify.feishuUserAccessToken') }}</label>
+          <input
+            v-model="feishuUserAccessToken"
+            type="password"
+            class="feishu-input"
+            :placeholder="t('notify.feishuUserAccessTokenPh')"
+            @blur="saveConfigDebounced"
+          />
+        </div>
+        <div class="feishu-row">
           <label>{{ t('notify.testChatId') }}</label>
           <input
             v-model="testChatId"
@@ -67,6 +90,12 @@
             class="feishu-input"
             :placeholder="t('notify.testChatIdPh')"
           />
+        </div>
+        <div class="feishu-row feishu-row-check">
+          <label class="feishu-check-label">
+            <input v-model="docCreateInUserSpace" type="checkbox" @change="saveConfigDebounced" />
+            <span>{{ t('notify.docCreateInUserSpace') }}</span>
+          </label>
         </div>
         <div class="feishu-row feishu-row-check">
           <label class="feishu-check-label">
@@ -91,6 +120,15 @@
         <button class="feishu-btn primary" :disabled="saving" @click="saveConfig">
           <Loader v-if="saving" :size="13" class="spin" />
           {{ saving ? t('notify.saving') : t('notify.saveConfig') }}
+        </button>
+        <button
+          class="feishu-btn"
+          :disabled="authorizingUserToken || !canAuthorizeUserToken"
+          :title="canAuthorizeUserToken ? '' : t('notify.authorizeUserTokenDisabledReason')"
+          @click="authorizeUserToken"
+        >
+          <Loader v-if="authorizingUserToken" :size="13" class="spin" />
+          {{ authorizingUserToken ? t('notify.authorizingUserToken') : t('notify.authorizeUserToken') }}
         </button>
         <button
           class="feishu-btn"
@@ -260,11 +298,15 @@ const activePlatform = ref('feishu')
 const appId = ref('')
 const appSecret = ref('')
 const defaultChatId = ref('')
+const oauthRedirectUri = ref('http://127.0.0.1:14579/feishu/oauth/callback')
+const feishuUserAccessToken = ref('')
+const docCreateInUserSpace = ref(false)
 const notifyOnComplete = ref(false)
 const streamingReplyEnabled = ref(true)
 const receiveEnabled = ref(false)
 const receiveRunning = ref(false)
 const receiveStarting = ref(false)
+const authorizingUserToken = ref(false)
 const receiveError = ref('')
 const saving = ref(false)
 const sending = ref(false)
@@ -273,6 +315,11 @@ const result = ref(null)
 const defaultChatIdTrimmed = computed(() => (defaultChatId.value || '').trim())
 const testChatId = ref('')
 const sendTestChatId = computed(() => defaultChatIdTrimmed.value || (testChatId.value || '').trim())
+const canAuthorizeUserToken = computed(() => {
+  return !!String(appId.value || '').trim()
+    && !!String(appSecret.value || '').trim()
+    && !!String(oauthRedirectUri.value || '').trim()
+})
 
 // Telegram（消息通知内子平台）
 const telegramBotToken = ref('')
@@ -305,6 +352,9 @@ async function loadConfig() {
     appId.value = res.app_id || ''
     appSecret.value = res.app_secret || ''
     defaultChatId.value = res.default_chat_id || ''
+    oauthRedirectUri.value = res.oauth_redirect_uri || 'http://127.0.0.1:14579/feishu/oauth/callback'
+    feishuUserAccessToken.value = res.user_access_token || ''
+    docCreateInUserSpace.value = res.doc_create_in_user_space === true
     notifyOnComplete.value = res.notify_on_complete === true
     streamingReplyEnabled.value = res.streaming_reply_enabled !== false
     receiveEnabled.value = res.receive_enabled === true
@@ -413,6 +463,9 @@ async function saveConfig() {
       app_id: appId.value?.trim() || '',
       app_secret: appSecret.value?.trim() || '',
       default_chat_id: defaultChatIdTrimmed.value,
+      oauth_redirect_uri: (oauthRedirectUri.value || '').trim() || 'http://127.0.0.1:14579/feishu/oauth/callback',
+      user_access_token: (feishuUserAccessToken.value || '').trim(),
+      doc_create_in_user_space: docCreateInUserSpace.value,
       notify_on_complete: notifyOnComplete.value,
       streaming_reply_enabled: streamingReplyEnabled.value,
       receive_enabled: receiveEnabled.value
@@ -431,6 +484,29 @@ let saveDebounceTimer = null
 function saveConfigDebounced() {
   clearTimeout(saveDebounceTimer)
   saveDebounceTimer = setTimeout(saveConfig, 400)
+}
+
+async function authorizeUserToken() {
+  if (!api()?.authorizeUserToken) return
+  authorizingUserToken.value = true
+  result.value = null
+  try {
+    const res = await api().authorizeUserToken()
+    if (res?.success) {
+      await loadConfig()
+      if (!docCreateInUserSpace.value) {
+        await api().setConfig({ doc_create_in_user_space: true })
+        await loadConfig()
+      }
+      result.value = { ok: true, message: t('notify.authorizeUserTokenSuccess') }
+    } else {
+      result.value = { ok: false, message: res?.message || t('notify.authorizeUserTokenFailed') }
+    }
+  } catch (e) {
+    result.value = { ok: false, message: e?.message || t('notify.authorizeUserTokenFailed') }
+  } finally {
+    authorizingUserToken.value = false
+  }
 }
 
 async function sendTest() {
@@ -581,6 +657,12 @@ onMounted(() => {
 .feishu-row label {
   font-size: 12px;
   color: var(--ou-text-muted);
+}
+.feishu-oauth-tip {
+  max-width: 720px;
+  font-size: 11px;
+  color: var(--ou-text-muted);
+  line-height: 1.4;
 }
 .feishu-row-check { margin-top: 4px; }
 .feishu-check-label {

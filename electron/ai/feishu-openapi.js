@@ -1,5 +1,6 @@
 const https = require('https')
 const feishuNotify = require('./feishu-notify')
+const openultronConfig = require('../openultron-config')
 
 function requestJson({ method = 'GET', path, body, token }) {
   return new Promise((resolve, reject) => {
@@ -36,8 +37,35 @@ async function withTenantToken() {
   return await feishuNotify.getTenantAccessToken()
 }
 
-module.exports = {
-  requestJson,
-  withTenantToken
+function getConfiguredUserAccessToken() {
+  try {
+    const cfg = openultronConfig.getFeishu()
+    return String(cfg?.user_access_token || '').trim()
+  } catch (_) {
+    return ''
+  }
 }
 
+async function withFeishuToken(options = {}) {
+  const preferUser = options && options.preferUser === true
+  const allowTenantFallback = !(options && options.allowTenantFallback === false)
+  const userToken = getConfiguredUserAccessToken()
+  if (preferUser) {
+    if (userToken) {
+      return { token: userToken, tokenType: 'user', source: 'config:user_access_token' }
+    }
+    if (!allowTenantFallback) {
+      const err = new Error('未配置 feishu.user_access_token，无法以用户身份创建到个人空间')
+      err.code = 'FEISHU_USER_TOKEN_MISSING'
+      throw err
+    }
+  }
+  const tenantToken = await withTenantToken()
+  return { token: tenantToken, tokenType: 'tenant', source: 'tenant_access_token' }
+}
+
+module.exports = {
+  requestJson,
+  withTenantToken,
+  withFeishuToken
+}

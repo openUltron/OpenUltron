@@ -95,7 +95,7 @@ class Orchestrator {
   }
 
   // ---------- 启动 Agent 对话循环 ----------
-  async startChat({ sessionId, messages, model, tools, sender, config: externalConfig, projectPath, panelId, feishuChatId, feishuTenantKey, feishuDocHost }) {
+  async startChat({ sessionId, messages, model, tools, sender, config: externalConfig, projectPath, panelId, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId }) {
     const config = externalConfig || this.getConfig()
     if (!config.apiKey || !String(config.apiKey).trim()) {
       const baseUrl = (config.apiBaseUrl || '').trim()
@@ -113,7 +113,9 @@ class Orchestrator {
       projectPath: projectPath || '',
       feishuChatId: feishuChatId || '',
       feishuTenantKey: feishuTenantKey || '',
-      feishuDocHost: feishuDocHost || ''
+      feishuDocHost: feishuDocHost || '',
+      feishuSenderOpenId: feishuSenderOpenId || '',
+      feishuSenderUserId: feishuSenderUserId || ''
     })
 
     // 用 panelId 操作 session-registry（panelId 在页面生命周期内稳定）
@@ -222,6 +224,10 @@ class Orchestrator {
       // 0.66 桌面原生通知（prompts/desktop-notification.md）
       const desktopNotifText = loadPrompt('desktop-notification')
       if (desktopNotifText) memParts.push(desktopNotifText)
+
+      // 0.67 通用工具缺口兜底（prompts/tool-gap-fallback.md）
+      const toolGapFallbackText = loadPrompt('tool-gap-fallback')
+      if (toolGapFallbackText) memParts.push(toolGapFallbackText)
 
       // 1. 全局偏好文件 MEMORY.md
       const globalMd = readGlobalMemoryMd()
@@ -1606,7 +1612,9 @@ class Orchestrator {
       remoteId: session?.feishuChatId || '',
       feishuChatId: session?.feishuChatId || '',
       feishuTenantKey: session?.feishuTenantKey || '',
-      feishuDocHost: session?.feishuDocHost || ''
+      feishuDocHost: session?.feishuDocHost || '',
+      feishuSenderOpenId: session?.feishuSenderOpenId || '',
+      feishuSenderUserId: session?.feishuSenderUserId || ''
     })
   }
 }

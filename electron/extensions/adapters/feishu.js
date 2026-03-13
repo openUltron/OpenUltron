@@ -70,6 +70,32 @@ function extractFeishuDocHost(text = '') {
   return m && m[1] ? String(m[1]).trim().toLowerCase() : ''
 }
 
+function normalizeDocHost(host = '') {
+  const s = String(host || '').trim().toLowerCase()
+  if (/^[a-z0-9.-]+\.(?:feishu\.cn|larksuite\.com)$/.test(s)) return s
+  return ''
+}
+
+function extractDocHostFromConversation(conv) {
+  const msgs = Array.isArray(conv?.messages) ? conv.messages : []
+  for (const m of msgs) {
+    if (!m) continue
+    const parts = []
+    if (typeof m.content === 'string') parts.push(m.content)
+    else if (Array.isArray(m.content)) {
+      for (const c of m.content) {
+        if (typeof c === 'string') parts.push(c)
+        else if (c && typeof c.text === 'string') parts.push(c.text)
+      }
+    }
+    const text = parts.join('\n')
+    const host = normalizeDocHost(extractFeishuDocHost(text))
+    if (!host) continue
+    if (!/^(docs\.feishu\.cn|www\.feishu\.cn|applink\.feishu\.cn)$/i.test(host)) return host
+  }
+  return ''
+}
+
 function parseConfirmDecision(text) {
   const t = compactText(text).toLowerCase()
   if (!t) return null
@@ -235,10 +261,13 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
   async function handleIncomingMessage(inbound) {
     const chatId = inbound && inbound.chatId
     const tenantKey = String((inbound && inbound.tenantKey) || '').trim()
+    const senderOpenId = String((inbound && inbound.senderOpenId) || '').trim()
+    const senderUserId = String((inbound && inbound.senderUserId) || '').trim()
     const text = (inbound && inbound.text) || ''
+    const configuredDocHost = normalizeDocHost(getChannelConfig ? (getChannelConfig('feishu')?.doc_host || '') : '')
     const textHost = extractFeishuDocHost(text)
     if (chatId && textHost) chatDocHostByChatId.set(String(chatId), textHost)
-    const docHost = (chatId && chatDocHostByChatId.get(String(chatId))) || ''
+    let docHost = normalizeDocHost((chatId && chatDocHostByChatId.get(String(chatId))) || configuredDocHost || '')
     const messageId = inbound && inbound.messageId
     const chatType = String((inbound && inbound.chatType) || '').toLowerCase()
     const requireMention = !!(inbound && inbound.requireMention)
@@ -369,6 +398,13 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
     }
     sessionId = feishuSessionState.getOrCreateCurrentSessionId(chatId)
     const conv = conversationFile.loadConversation(feishuProjectKey, sessionId)
+    if (!docHost) {
+      const hostFromHistory = normalizeDocHost(extractDocHostFromConversation(conv))
+      if (hostFromHistory) {
+        docHost = hostFromHistory
+        if (chatId) chatDocHostByChatId.set(String(chatId), hostFromHistory)
+      }
+    }
     if (!conv) {
       const now = new Date().toISOString()
       conversationFile.updateConversationMeta(feishuProjectKey, sessionId, {
@@ -473,11 +509,15 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
       displayText,
       attachments: normalizedAttachments,
       tenantKey,
-      feishuDocHost: docHost
+      feishuDocHost: docHost,
+      senderOpenId,
+      senderUserId
     }
     const binding = createSessionBinding(sessionId, FEISHU_PROJECT, 'feishu', chatId, chatId)
     if (tenantKey) binding.feishuTenantKey = tenantKey
     if (docHost) binding.feishuDocHost = docHost
+    if (senderOpenId) binding.feishuSenderOpenId = senderOpenId
+    if (senderUserId) binding.feishuSenderUserId = senderUserId
     eventBus.emit('chat.message.received', { message, binding })
   }
 

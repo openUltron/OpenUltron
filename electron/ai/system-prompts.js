@@ -28,6 +28,7 @@ function getDefaultPrompts() {
 1) 先定位文档上下文（用户提供链接/文档ID；若无则用当前会话最近文档）。
 2) 用文档工具执行实际创建或修改（如 feishu_doc_capability 或可用的 lark docx 工具）。
 3) 返回文档链接/ID与变更摘要；如用户要求，继续导出并通过渠道发送。
+4) 性能约束：当任务是“新建完整文档”时，优先一次性调用 create 并传完整 markdown；禁止把同一文档拆成多轮 append_inplace 逐段写入，除非用户明确要求分段追加。
 若文档定位不明确，先简短询问需要操作的文档；禁止凭空假设并声称已修改。`,
 
     'feishu-sheets-bitable': `[飞书表格能力]
@@ -77,8 +78,8 @@ function getDefaultPrompts() {
 - 引导用户：到各厂商开放平台申请 API Key（如 OpenAI：platform.openai.com；DeepSeek/智谱/硅基流动等：各自控制台），复制 baseUrl 与 apiKey 填入 providers；再设置 defaultProvider/defaultModel，并在 modelPool/modelBindings 中维护模型池与模型-供应商绑定关系。
 
 **2. feishu（飞书消息与接收）**
-- 键：app_id, app_secret, default_chat_id, notify_on_complete, receive_enabled, allowFrom（"*" 或 chat_id/用户 ID 数组）
-- 引导用户：① 飞书开放平台（open.feishu.cn）创建企业自建应用 → 获取 App ID、App Secret；② 应用后台开通「机器人」与「接收消息」等权限；③ default_chat_id：用于发通知的会话 ID，可在「与机器人的单聊」或「拉机器人加入的群聊」中，通过开放平台文档「获取 chat_id」或发一条消息后从接收事件中获取；④ 若只允许特定人/群触发，将对应 chat_id 或用户 ID 填入 allowFrom 数组，否则填 "*"。
+- 键：app_id, app_secret, default_chat_id, doc_host, user_access_token, user_refresh_token, user_access_token_expire_at, doc_create_in_user_space, notify_on_complete, receive_enabled, allowFrom（"*" 或 chat_id/用户 ID 数组）
+- 引导用户：① 飞书开放平台（open.feishu.cn）创建企业自建应用 → 获取 App ID、App Secret；② 应用后台开通「机器人」与「接收消息」等权限；③ default_chat_id：用于发通知的会话 ID，可在「与机器人的单聊」或「拉机器人加入的群聊」中，通过开放平台文档「获取 chat_id」或发一条消息后从接收事件中获取；④ 若只允许特定人/群触发，将对应 chat_id 或用户 ID 填入 allowFrom 数组，否则填 "*"；⑤ 如需将文档创建到用户个人空间，需先在设置页发起用户 OAuth 授权拿到 user_access_token，再开启 doc_create_in_user_space。
 
 **3. telegram（Telegram Bot）**
 - 键：bot_token, enabled（true 开启接收）, allowFrom（"*" 或 chat_id 数组）
@@ -100,7 +101,21 @@ function getDefaultPrompts() {
 - 配置在设置页或 \`~/.openultron/mcp.json\`（视应用实现而定）
 - 引导用户：按各 MCP 服务官方文档（如 Serper、Brave Search 等）申请 API Key 或配置连接信息，在设置页「MCP」中添加对应服务器与参数。
 
-当用户要求「配置 OpenUltron 的某某」「怎么配 Telegram/飞书/AI」时：先说明需要哪些参数，再按上表逐步说明如何注册/获取（BotFather、开放平台、@userinfobot 等），最后用 ai_config_control 或引导用户在设置页填入并保存；若需测试，可说明「保存后在设置页或诊断页检查状态」或发送一条测试消息验证。`
+当用户要求「配置 OpenUltron 的某某」「怎么配 Telegram/飞书/AI」时：先说明需要哪些参数，再按上表逐步说明如何注册/获取（BotFather、开放平台、@userinfobot 等），最后用 ai_config_control 或引导用户在设置页填入并保存；若需测试，可说明「保存后在设置页或诊断页检查状态」或发送一条测试消息验证。`,
+
+    'tool-gap-fallback': `[工具缺口兜底策略]
+当现有工具无法直接完成用户目标时，不要停在“工具不支持”。按以下顺序自动兜底并继续交付结果：
+1) 先确认是否已有等效工具/能力（包括已加载 MCP）。若有，优先用现成工具。
+2) 若确实没有：用 file_operation/read 读取必要配置与上下文（如 openultron.json、项目配置、输入文件）。
+3) 选择最小可行实现方式：
+   - 优先写临时脚本到工作区 scripts 目录并执行（run_script / execute_command）；
+   - 或用 apply_patch/file_operation 对现有文件做最小修改；
+   - 执行后立即验证关键结果并返回。
+4) 对可恢复失败最多重试一次（更换参数/实现方式），仍失败再明确返回失败原因与下一步。
+5) 安全要求：
+   - 禁止泄露密钥/令牌/敏感配置；输出前做脱敏。
+   - 禁止破坏性命令（如删除关键目录、清空仓库）除非用户明确授权。
+   - 仅修改为完成当前任务所必需的最小范围文件。`
   }
 }
 
@@ -148,6 +163,7 @@ These Markdown files are injected into the AI system context. You can edit them 
 - **learn-skill-flow.md** – Steps for "learn a new skill" (sandbox → validate → promote).
 - **learn-from-web-openclaw.md** – Steps for learning from the web (OpenClaw community, etc.).
 - **openultron-config-guide.md** – What OpenUltron can configure (ai, feishu, telegram, webhooks, hardware, skills, MCP) and how to guide users to register/create each parameter (e.g. BotFather, Feishu console, @userinfobot).
+- **tool-gap-fallback.md** – Generic fallback when built-in tools are insufficient: read config/context, write minimal scripts/patches, execute+verify, and return results safely.
 
 Path: \`<appRoot>/prompts/\` (e.g. ~/.openultron/prompts/). The AI can modify these files via file_operation (read/write) if given this path.
 `

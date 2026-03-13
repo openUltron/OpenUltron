@@ -370,6 +370,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   feishu: {
     getConfig: () => ipcRenderer.invoke('feishu-get-config'),
     setConfig: (payload) => ipcRenderer.invoke('feishu-set-config', payload),
+    authorizeUserToken: () => ipcRenderer.invoke('feishu-authorize-user-token'),
     sendMessage: (options) => ipcRenderer.invoke('feishu-send-message', options),
     receiveStatus: () => ipcRenderer.invoke('feishu-receive-status'),
     receiveStart: () => ipcRenderer.invoke('feishu-receive-start'),

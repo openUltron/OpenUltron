@@ -86,6 +86,10 @@ function hasAtMention(msg, contentObj, rawContentStr) {
 function parseMessageEvent(data) {
   const msg = data && (data.message || (data.data && data.data.message))
   if (!msg) return null
+  const senderObj = data && (data.sender || (data.event && data.event.sender) || (data.data && data.data.sender))
+  const senderIdObj = senderObj && (senderObj.sender_id || senderObj.senderId || {})
+  const senderOpenId = String((senderIdObj && (senderIdObj.open_id || senderIdObj.openId)) || '').trim()
+  const senderUserId = String((senderIdObj && (senderIdObj.user_id || senderIdObj.userId)) || '').trim()
   const tenantKey = String((data && (data.tenant_key || (data.header && data.header.tenant_key))) || '').trim()
   const chatId = msg.chat_id || (msg.chat && msg.chat.chat_id) || msg.open_chat_id
   const messageId = msg.message_id || msg.open_message_id
@@ -164,6 +168,8 @@ function parseMessageEvent(data) {
   }
   return {
     tenantKey,
+    senderOpenId,
+    senderUserId,
     chatId,
     messageId,
     text,

@@ -3712,7 +3712,7 @@ function buildDelegatedTaskWithParentContext(task = '', { projectPath = '', pare
   }
 }
 
-async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider, eventSink, feishuChatId, capability }, subSessionId) {
+async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider, eventSink, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId, capability }, subSessionId) {
   const messages = []
   const rolePrompt = roleName && String(roleName).trim()
     ? `你当前扮演的角色是「${String(roleName).trim()}」。请严格按该角色完成任务，并仅输出该角色应给出的结果。`
@@ -3758,7 +3758,11 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
     config: resolvedConfig,
     projectPath: projectPath || '__main_chat__',
     panelId: undefined,
-    feishuChatId: feishuChatId && String(feishuChatId).trim() ? String(feishuChatId).trim() : undefined
+    feishuChatId: feishuChatId && String(feishuChatId).trim() ? String(feishuChatId).trim() : undefined,
+    feishuTenantKey: feishuTenantKey && String(feishuTenantKey).trim() ? String(feishuTenantKey).trim() : undefined,
+    feishuDocHost: feishuDocHost && String(feishuDocHost).trim() ? String(feishuDocHost).trim() : undefined,
+    feishuSenderOpenId: feishuSenderOpenId && String(feishuSenderOpenId).trim() ? String(feishuSenderOpenId).trim() : undefined,
+    feishuSenderUserId: feishuSenderUserId && String(feishuSenderUserId).trim() ? String(feishuSenderUserId).trim() : undefined
   })
   if (!result.success) {
     return { success: false, error: result.error || '子 Agent 执行失败', subSessionId, runtime: 'internal' }
@@ -3775,7 +3779,7 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
 
 // 多 Agent：派生子 Agent 执行任务并返回结果（sessions_spawn）
 async function runSubChat(opts) {
-  const { task, systemPrompt, roleName, model, projectPath, provider, runtime, parentSessionId, feishuChatId, stream } = opts || {}
+  const { task, systemPrompt, roleName, model, projectPath, provider, runtime, parentSessionId, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId, stream } = opts || {}
   const subSessionId = `sub-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const route = resolveCapabilityRoute({ text: String(task || ''), runtime: String(runtime || '') })
   let delegatedTask = buildDelegatedTaskWithParentContext(task, {
@@ -3926,7 +3930,11 @@ async function runSubChat(opts) {
           projectPath,
           provider,
           eventSink: internalEventSink,
-          feishuChatId
+          feishuChatId,
+          feishuTenantKey,
+          feishuDocHost,
+          feishuSenderOpenId,
+          feishuSenderUserId
         }, subSessionId)
         if (out.success) {
           pushCommandLog('[meta] attempt internal success')
@@ -5204,6 +5212,32 @@ function stripToolExecutionFromMessages(messages) {
   if (!Array.isArray(messages)) return messages
   const sessionSpawnCallIds = new Set()
   const out = []
+  const normalizeForDedupe = (content) =>
+    String(content || '')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+  const mergeArtifactsMeta = (baseMsg, dupMsg) => {
+    const baseMeta = (baseMsg && typeof baseMsg.metadata === 'object' && baseMsg.metadata) ? baseMsg.metadata : {}
+    const dupMeta = (dupMsg && typeof dupMsg.metadata === 'object' && dupMsg.metadata) ? dupMsg.metadata : {}
+    const baseArtifacts = Array.isArray(baseMeta.artifacts) ? baseMeta.artifacts : []
+    const dupArtifacts = Array.isArray(dupMeta.artifacts) ? dupMeta.artifacts : []
+    if (dupArtifacts.length === 0) return baseMsg
+    const merged = new Map()
+    for (const a of [...baseArtifacts, ...dupArtifacts]) {
+      if (!a) continue
+      const key = a.artifactId ? `id:${a.artifactId}` : `${a.kind || ''}:${a.path || ''}:${a.name || ''}`
+      merged.set(key, a)
+    }
+    return {
+      ...baseMsg,
+      metadata: {
+        ...baseMeta,
+        artifacts: [...merged.values()]
+      }
+    }
+  }
   const toText = (content) => {
     if (typeof content === 'string') return stripRawToolCallXml(content).trim()
     if (Array.isArray(content)) return stripRawToolCallXml(content.map(x => (x && x.text) || '').join('')).trim()
@@ -5244,6 +5278,15 @@ function stripToolExecutionFromMessages(messages) {
     if (item.role === 'assistant') {
       const txt = toText(item.content)
       if (!txt) continue
+      const prev = out[out.length - 1]
+      if (prev && prev.role === 'assistant') {
+        const prevNorm = normalizeForDedupe(toText(prev.content))
+        const currNorm = normalizeForDedupe(txt)
+        if (prevNorm && currNorm && prevNorm === currNorm) {
+          out[out.length - 1] = mergeArtifactsMeta(prev, item)
+          continue
+        }
+      }
     }
     out.push(item)
   }
@@ -7116,7 +7159,11 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
   })
   const earlyToSave = stripToolExecutionFromMessages(historyMessages)
   const earlySavePayload = { id: mainSessionId, messages: earlyToSave, projectPath }
-  if (binding.channel === 'feishu') earlySavePayload.feishuChatId = chatId
+  if (binding.channel === 'feishu') {
+    earlySavePayload.feishuChatId = chatId
+    if (binding.feishuTenantKey) earlySavePayload.feishuTenantKey = String(binding.feishuTenantKey).trim()
+    if (binding.feishuDocHost) earlySavePayload.feishuDocHost = String(binding.feishuDocHost).trim()
+  }
   conversationFile.saveConversation(projectKey, earlySavePayload)
   if (userMessageId && inboundArtifactRefs.length > 0) {
     try {
@@ -7346,8 +7393,15 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       runChatPayload.feishuChatId = chatId
       const tenantKey = String(binding.feishuTenantKey || message?.metadata?.tenantKey || '').trim()
       if (tenantKey) runChatPayload.feishuTenantKey = tenantKey
-      const docHost = String(binding.feishuDocHost || message?.metadata?.feishuDocHost || '').trim()
+      const cfgDocHost = (() => {
+        try { return String(require('./openultron-config').getFeishu()?.doc_host || '').trim() } catch (_) { return '' }
+      })()
+      const docHost = String(binding.feishuDocHost || message?.metadata?.feishuDocHost || cfgDocHost || '').trim()
       if (docHost) runChatPayload.feishuDocHost = docHost
+      const senderOpenId = String(binding.feishuSenderOpenId || message?.metadata?.senderOpenId || '').trim()
+      if (senderOpenId) runChatPayload.feishuSenderOpenId = senderOpenId
+      const senderUserId = String(binding.feishuSenderUserId || message?.metadata?.senderUserId || '').trim()
+      if (senderUserId) runChatPayload.feishuSenderUserId = senderUserId
     }
     aiGateway.runChat(runChatPayload, fakeSender).catch(reject)
   })
@@ -7539,7 +7593,11 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     const merged = attachArtifactsToLatestAssistant(normalizedMerged, artifacts)
     const messagesToSave = stripToolExecutionFromMessages(merged)
     const savePayload = { id: mainSessionId, messages: messagesToSave, projectPath }
-    if (binding.channel === 'feishu') savePayload.feishuChatId = chatId
+    if (binding.channel === 'feishu') {
+      savePayload.feishuChatId = chatId
+      if (binding.feishuTenantKey) savePayload.feishuTenantKey = String(binding.feishuTenantKey).trim()
+      if (binding.feishuDocHost) savePayload.feishuDocHost = String(binding.feishuDocHost).trim()
+    }
     conversationFile.saveConversation(projectKey, savePayload)
     if (binding.channel === 'feishu' && mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('feishu-session-updated', { sessionId: mainSessionId })
@@ -8530,6 +8588,98 @@ registerChannel('feishu-set-config', (event, payload) => {
   } catch (e) {
     return { success: false, message: e.message }
   }
+})
+registerChannel('feishu-authorize-user-token', async () => {
+  const http = require('http')
+  const crypto = require('crypto')
+  const cfg = feishuNotify.getConfig ? feishuNotify.getConfig() : {}
+  if (!String(cfg?.app_id || '').trim() || !String(cfg?.app_secret || '').trim()) {
+    return { success: false, message: '请先在飞书配置中填写 App ID 与 App Secret' }
+  }
+  const redirectUri = String(cfg?.oauth_redirect_uri || 'http://127.0.0.1:14579/feishu/oauth/callback').trim()
+  let redirect = null
+  try {
+    redirect = new URL(redirectUri)
+  } catch (_) {
+    return { success: false, message: `oauth_redirect_uri 配置非法：${redirectUri}` }
+  }
+  if (!/^https?:$/.test(String(redirect.protocol || ''))) {
+    return { success: false, message: `oauth_redirect_uri 协议非法，仅支持 http/https：${redirectUri}` }
+  }
+  const host = String(redirect.hostname || '').trim() || '127.0.0.1'
+  const port = Number(redirect.port || (redirect.protocol === 'https:' ? 443 : 80))
+  const callbackPath = String(redirect.pathname || '/').trim() || '/'
+  if (!port || Number.isNaN(port)) {
+    return { success: false, message: `oauth_redirect_uri 缺少端口：${redirectUri}` }
+  }
+  const state = crypto.randomBytes(16).toString('hex')
+  const result = await new Promise(async (resolve) => {
+    let done = false
+    let timeoutId = null
+    const finish = (payload) => {
+      if (done) return
+      done = true
+      if (timeoutId) clearTimeout(timeoutId)
+      try { server.close() } catch (_) {}
+      resolve(payload)
+    }
+    const server = http.createServer(async (req, res) => {
+      try {
+        const base = `http://${req.headers.host || '127.0.0.1'}`
+        const parsed = new URL(req.url || '/', base)
+        if (parsed.pathname !== callbackPath) {
+          res.statusCode = 404
+          res.end('Not Found')
+          return
+        }
+        const qState = String(parsed.searchParams.get('state') || '').trim()
+        const code = String(parsed.searchParams.get('code') || '').trim()
+        const err = String(parsed.searchParams.get('error') || '').trim()
+        const errDesc = String(parsed.searchParams.get('error_description') || '').trim()
+        if (!code || err || qState !== state) {
+          res.statusCode = 400
+          res.setHeader('Content-Type', 'text/html; charset=utf-8')
+          res.end('<html><body><h3>飞书授权失败，请返回应用重试</h3></body></html>')
+          finish({ success: false, message: errDesc || err || '授权失败或 state 校验失败' })
+          return
+        }
+        const tokenRes = await feishuNotify.exchangeUserAccessTokenByCode({ code, redirectUri })
+        res.statusCode = 200
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.end('<html><body><h3>飞书授权成功，可返回应用继续操作。</h3></body></html>')
+        finish({
+          success: true,
+          message: '飞书用户授权成功',
+          expires_in: tokenRes?.expires_in || 0,
+          expire_at: tokenRes?.expire_at || 0
+        })
+      } catch (e) {
+        const errMsg = String(e?.message || '授权处理失败')
+        try {
+          res.statusCode = 500
+          res.setHeader('Content-Type', 'text/html; charset=utf-8')
+          res.end(`<html><body><h3>处理授权回调失败，请返回应用重试</h3><pre style="white-space:pre-wrap;">${errMsg}</pre></body></html>`)
+        } catch (_) {}
+        finish({ success: false, message: errMsg || '授权处理失败' })
+      }
+    })
+    server.listen(port, host, async () => {
+      try {
+        const authUrl = feishuNotify.buildUserAuthorizeUrl({ redirectUri, state })
+        await shell.openExternal(authUrl)
+        timeoutId = setTimeout(() => {
+          finish({ success: false, message: '授权超时，请重试' })
+        }, 180000)
+      } catch (e) {
+        finish({ success: false, message: e?.message || '拉起授权失败' })
+      }
+    })
+    server.on('error', (e) => finish({
+      success: false,
+      message: `${e?.message || '本地回调服务启动失败'}；请确认回调地址已在飞书后台配置：${redirectUri}`
+    }))
+  })
+  return result
 })
 registerChannel('feishu-send-message', async (event, options) => {
   try {

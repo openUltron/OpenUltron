@@ -18,6 +18,9 @@ const AUTH_URL = 'open.feishu.cn'
 const EDGE_TTS_VOICE_HOST = 'speech.platform.bing.com'
 const EDGE_TTS_VOICE_PATH = '/consumer/speech/synthesize/readaloud/voices/list?trustedclienttoken=6A5AA1D4EAFF4E9FB37E23D68491D6F4'
 const AUTH_PATH = '/open-apis/auth/v3/tenant_access_token/internal'
+const AUTH_APP_PATH = '/open-apis/auth/v3/app_access_token/internal'
+const AUTH_USER_AUTHORIZE_PATH = '/open-apis/authen/v1/index'
+const AUTH_USER_TOKEN_PATH = '/open-apis/authen/v1/access_token'
 const MESSAGE_PATH = '/open-apis/im/v1/messages'
 const IMAGE_UPLOAD_PATH = '/open-apis/im/v1/images'
 const FILE_UPLOAD_PATH = '/open-apis/im/v1/files'
@@ -26,6 +29,8 @@ const VOICE_CACHE_PATH = path.join(path.dirname(CONFIG_PATH), 'edge-tts-voices-c
 
 let cachedToken = null
 let tokenExpireAt = 0
+let cachedAppToken = null
+let appTokenExpireAt = 0
 const EXPIRE_BUFFER_MS = 60 * 1000 // 提前 1 分钟刷新
 
 function detectImageExtFromBuffer(buf) {
@@ -72,6 +77,8 @@ function setConfig(payload) {
   openultronConfig.setFeishu(payload)
   cachedToken = null
   tokenExpireAt = 0
+  cachedAppToken = null
+  appTokenExpireAt = 0
 }
 
 function httpsPost(host, pathName, body, token) {
@@ -568,6 +575,69 @@ async function getTenantAccessToken() {
   return cachedToken
 }
 
+async function getAppAccessToken() {
+  if (cachedAppToken && Date.now() < appTokenExpireAt - EXPIRE_BUFFER_MS) {
+    return cachedAppToken
+  }
+  const config = getConfig()
+  if (!config.app_id || !config.app_secret) {
+    throw new Error('请先配置飞书 app_id 与 app_secret（AI 管理 → 飞书通知）')
+  }
+  const res = await httpsPost(AUTH_URL, AUTH_APP_PATH, {
+    app_id: config.app_id,
+    app_secret: config.app_secret
+  })
+  if (!res.app_access_token) {
+    throw new Error(res.msg || '获取飞书 app_access_token 失败')
+  }
+  cachedAppToken = res.app_access_token
+  appTokenExpireAt = Date.now() + (res.expire || 7200) * 1000
+  return cachedAppToken
+}
+
+function buildUserAuthorizeUrl({ redirectUri, state }) {
+  const config = getConfig()
+  if (!config.app_id || !config.app_secret) {
+    throw new Error('请先配置飞书 app_id 与 app_secret（AI 管理 → 飞书通知）')
+  }
+  const params = new URLSearchParams({
+    app_id: String(config.app_id).trim(),
+    redirect_uri: String(redirectUri || '').trim(),
+    state: String(state || '').trim()
+  })
+  return `https://${AUTH_URL}${AUTH_USER_AUTHORIZE_PATH}?${params.toString()}`
+}
+
+async function exchangeUserAccessTokenByCode({ code, redirectUri }) {
+  const config = getConfig()
+  if (!config.app_id || !config.app_secret) {
+    throw new Error('请先配置飞书 app_id 与 app_secret（AI 管理 → 飞书通知）')
+  }
+  const appAccessToken = await getAppAccessToken()
+  const payload = {
+    grant_type: 'authorization_code',
+    code: String(code || '').trim()
+  }
+  const res = await httpsPost(AUTH_URL, AUTH_USER_TOKEN_PATH, payload, appAccessToken)
+  const accessToken = String(res?.data?.access_token || res?.access_token || '').trim()
+  if (!accessToken) throw new Error(res?.msg || '获取 user_access_token 失败')
+  const refreshToken = String(res?.data?.refresh_token || res?.refresh_token || '').trim()
+  const expire = Number(res?.data?.expires_in || res?.expires_in || 0) || 0
+  const expireAt = expire > 0 ? Math.floor(Date.now() / 1000) + expire : 0
+  setConfig({
+    user_access_token: accessToken,
+    user_refresh_token: refreshToken,
+    user_access_token_expire_at: expireAt
+  })
+  return {
+    success: true,
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expires_in: expire,
+    expire_at: expireAt
+  }
+}
+
 /**
  * 发送文本消息到指定会话（群或私聊）
  */
@@ -1047,6 +1117,8 @@ module.exports = {
   getConfig,
   setConfig,
   getTenantAccessToken,
+  buildUserAuthorizeUrl,
+  exchangeUserAccessTokenByCode,
   sendText,
   sendImage,
   sendPost,

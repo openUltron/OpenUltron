@@ -156,6 +156,8 @@ function saveConversation(projectKey, session) {
           projectPath,
           apiBaseUrl: apiBaseUrl || existingRoot.apiBaseUrl || undefined,
           feishuChatId: session.feishuChatId ?? existingRoot.feishuChatId,
+          feishuTenantKey: session.feishuTenantKey ?? existingRoot.feishuTenantKey,
+          feishuDocHost: session.feishuDocHost ?? existingRoot.feishuDocHost,
           createdAt: session.createdAt || existingRoot.createdAt || now,
           updatedAt: now,
           messages: chunks[k],

@@ -416,6 +416,12 @@ export function useAIChat() {
   // 后端保存格式：assistant 用 tool_calls（蛇形），tool 结果在单独的 role:'tool' 消息里；需合并为前端格式 toolCalls + result
   const loadMessages = (savedMessages) => {
     if (!savedMessages || savedMessages.length === 0) return
+    const normalizeForDedupe = (content) =>
+      String(content || '')
+        .replace(/\r/g, '\n')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
     const raw = savedMessages.map((m) => {
       const list = m.toolCalls || m.tool_calls || []
       const toolCalls = list.map((tc) => ({
@@ -445,7 +451,22 @@ export function useAIChat() {
         }
       }
     }
-    messages.value = raw.filter((m) => m.role !== 'tool')
+    const filtered = raw.filter((m) => m.role !== 'tool')
+    const deduped = []
+    for (const item of filtered) {
+      const prev = deduped[deduped.length - 1]
+      if (
+        prev &&
+        prev.role === 'assistant' &&
+        item.role === 'assistant' &&
+        normalizeForDedupe(prev.content) &&
+        normalizeForDedupe(prev.content) === normalizeForDedupe(item.content)
+      ) {
+        continue
+      }
+      deduped.push(item)
+    }
+    messages.value = deduped
   }
 
   // 供飞书会话等外部驱动：绑定当前会话 ID 并添加 assistant 占位，以接收主进程转发的 token/tool 事件

@@ -294,6 +294,7 @@ export function installBrowserPolyfill(baseUrl = DEFAULT_API_BASE) {
     feishu: {
       getConfig: () => invoke('feishu-get-config', []),
       setConfig: (payload) => invoke('feishu-set-config', [payload]),
+      authorizeUserToken: () => invoke('feishu-authorize-user-token', []),
       sendMessage: (options) => invoke('feishu-send-message', [options]),
       receiveStatus: () => invoke('feishu-receive-status', []),
       receiveStart: () => invoke('feishu-receive-start', []),

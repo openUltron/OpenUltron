@@ -73,6 +73,10 @@ function createSessionsSpawnTool(runSubChat) {
         runtime: runtime != null && String(runtime).trim() !== '' ? String(runtime).trim() : undefined,
         parentSessionId,
         feishuChatId: context.feishuChatId || context.remoteId || '',
+        feishuTenantKey: context.feishuTenantKey || '',
+        feishuDocHost: context.feishuDocHost || '',
+        feishuSenderOpenId: context.feishuSenderOpenId || '',
+        feishuSenderUserId: context.feishuSenderUserId || '',
         stream,
         provider: provider != null && String(provider).trim() !== '' ? String(provider).trim() : undefined,
         model: model && String(model).trim() ? String(model).trim() : undefined,
@@ -108,4 +112,3 @@ function createSessionsSpawnTool(runSubChat) {
 }
 
 module.exports = { definition, createSessionsSpawnTool }
-

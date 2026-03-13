@@ -53,6 +53,18 @@ const DEFAULT_FEISHU = {
   app_id: '',
   app_secret: '',
   default_chat_id: '',
+  // 可选：文档链接域名（如 imeipian.feishu.cn），用于统一生成租户可访问文档链接
+  doc_host: '',
+  // 可选：用户 access token（用于以用户身份创建文档到个人空间）
+  user_access_token: '',
+  // 可选：用户 refresh token（用于后续刷新 user_access_token）
+  user_refresh_token: '',
+  // 可选：用户 access token 过期时间戳（秒）
+  user_access_token_expire_at: 0,
+  // OAuth 回调地址（需与飞书后台安全设置中的 Redirect URL 完全一致）
+  oauth_redirect_uri: 'http://127.0.0.1:14579/feishu/oauth/callback',
+  // 文档创建是否优先使用 user_access_token（创建到用户空间）
+  doc_create_in_user_space: false,
   notify_on_complete: false,
   receive_enabled: false,
   // 是否在同一条消息中流式更新 AI 输出（支持思考/命令过程）
@@ -270,6 +282,18 @@ function setFeishu(partial) {
     app_id: partial && partial.app_id !== undefined ? String(partial.app_id).trim() : cur.app_id,
     app_secret: partial && partial.app_secret !== undefined ? String(partial.app_secret).trim() : cur.app_secret,
     default_chat_id: partial && partial.default_chat_id !== undefined ? String(partial.default_chat_id).trim() : cur.default_chat_id,
+    doc_host: partial && partial.doc_host !== undefined ? String(partial.doc_host).trim() : String(cur.doc_host || ''),
+    user_access_token: partial && partial.user_access_token !== undefined ? String(partial.user_access_token).trim() : String(cur.user_access_token || ''),
+    user_refresh_token: partial && partial.user_refresh_token !== undefined ? String(partial.user_refresh_token).trim() : String(cur.user_refresh_token || ''),
+    user_access_token_expire_at: partial && partial.user_access_token_expire_at !== undefined
+      ? Number(partial.user_access_token_expire_at || 0) || 0
+      : Number(cur.user_access_token_expire_at || 0) || 0,
+    oauth_redirect_uri: partial && partial.oauth_redirect_uri !== undefined
+      ? String(partial.oauth_redirect_uri).trim()
+      : String(cur.oauth_redirect_uri || 'http://127.0.0.1:14579/feishu/oauth/callback'),
+    doc_create_in_user_space: partial && partial.doc_create_in_user_space !== undefined
+      ? !!partial.doc_create_in_user_space
+      : !!cur.doc_create_in_user_space,
     notify_on_complete: partial && partial.notify_on_complete !== undefined ? !!partial.notify_on_complete : cur.notify_on_complete,
     receive_enabled: partial && partial.receive_enabled !== undefined ? !!partial.receive_enabled : cur.receive_enabled,
     streaming_reply_enabled: partial && partial.streaming_reply_enabled !== undefined ? !!partial.streaming_reply_enabled : (cur.streaming_reply_enabled !== false),
