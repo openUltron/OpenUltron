@@ -22,6 +22,13 @@ export function useAIChat() {
     }
   }
 
+  const normalizeForDedupe = (content) =>
+    String(content || '')
+      .replace(/\r/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+
   // 生成唯一会话 ID
   const genSessionId = () => `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
@@ -416,12 +423,6 @@ export function useAIChat() {
   // 后端保存格式：assistant 用 tool_calls（蛇形），tool 结果在单独的 role:'tool' 消息里；需合并为前端格式 toolCalls + result
   const loadMessages = (savedMessages) => {
     if (!savedMessages || savedMessages.length === 0) return
-    const normalizeForDedupe = (content) =>
-      String(content || '')
-        .replace(/\r/g, '\n')
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim()
     const raw = savedMessages.map((m) => {
       const list = m.toolCalls || m.tool_calls || []
       const toolCalls = list.map((tc) => ({
@@ -457,8 +458,8 @@ export function useAIChat() {
       const prev = deduped[deduped.length - 1]
       if (
         prev &&
-        prev.role === 'assistant' &&
-        item.role === 'assistant' &&
+        prev.role === item.role &&
+        (item.role === 'assistant' || item.role === 'user') &&
         normalizeForDedupe(prev.content) &&
         normalizeForDedupe(prev.content) === normalizeForDedupe(item.content)
       ) {
@@ -484,6 +485,12 @@ export function useAIChat() {
   const getCurrentSessionId = () => currentSessionId
   const startStreamingPlaceholder = () => {
     ensureListeners()
+    const last = messages.value[messages.value.length - 1]
+    if (last && last.role === 'assistant' && !String(last.content || '').trim() && !(last.toolCalls?.length)) {
+      currentStreamContent.value = ''
+      isStreaming.value = true
+      return
+    }
     messages.value.push({ role: 'assistant', content: '', toolCalls: [] })
     currentStreamContent.value = ''
     isStreaming.value = true

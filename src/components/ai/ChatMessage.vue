@@ -10,97 +10,9 @@
     </div>
   </div>
 
-  <!-- assistant：拆分为文字块 + 工具调用块 -->
+  <!-- assistant：统一为机器人气泡（头像 + 命令卡 + 文本结果） -->
   <template v-else-if="message.role === 'assistant'">
-    <div
-      v-for="tc in toolCallsToRender"
-      :key="tc.id"
-      class="tool-card"
-      :class="tcStatus(tc)"
-    >
-      <div class="tc-header" @click="tc._expanded = !tc._expanded">
-        <div class="tc-left">
-          <div class="tc-status-dot"></div>
-          <component :is="toolIcon(tc.name)" :size="12" class="tc-type-icon" />
-          <div class="tc-texts">
-            <div class="tc-topline">
-              <span class="tc-name">{{ toolLabel(tc.name) }}</span>
-              <!-- 执行命令时始终在标题行显示命令内容，执行过程中也能看到 -->
-              <span v-if="tc.name === 'execute_command' && (commandOf(tc) || cwdOf(tc))" class="tc-summary-text tc-command-inline">
-                <code v-if="commandOf(tc)" class="tc-cmd-inline">{{ commandOf(tc) }}</code>
-                <span v-if="cwdOf(tc)" class="tc-cwd-inline"> ({{ cwdOf(tc) }})</span>
-              </span>
-              <span v-else class="tc-summary-text">{{ toolSummary(tc) }}</span>
-            </div>
-            <div v-if="runningSubtitle(tc)" class="tc-subtitle">{{ runningSubtitle(tc) }}</div>
-          </div>
-        </div>
-        <div class="tc-right">
-          <span v-if="tc.name === 'execute_command'" class="tc-metrics-compact">
-            {{ elapsedSecondsOf(tc) }}s / {{ timeoutSecondsOf(tc) }}s
-          </span>
-          <span v-if="isToolRunning(tc)" class="tc-spinner"></span>
-          <template v-else>
-            <span class="tc-result-badge" :class="tcResultClass(tc)">{{ tcResultText(tc) }}</span>
-            <ChevronRight :size="11" class="tc-chevron" :class="{ rotated: tc._expanded }" />
-          </template>
-        </div>
-      </div>
-      <!-- 展开详情：执行中也可展开看命令；有 result 时显示截图或输出 -->
-      <div v-if="tc._expanded && (tc.result || tc.name === 'execute_command')" class="tc-detail">
-        <template v-if="tc.result && screenshotFromResult(tc.result)">
-          <img
-            v-if="screenshotFromResult(tc.result).url"
-            class="chat-image tc-screenshot"
-            :src="screenshotFromResult(tc.result).url"
-            :alt="t('chatMessage.screenshot')"
-          />
-          <img
-            v-else-if="screenshotFromResult(tc.result).base64"
-            class="chat-image tc-screenshot"
-            :src="'data:image/png;base64,' + screenshotFromResult(tc.result).base64"
-            :alt="t('chatMessage.screenshot')"
-          />
-        </template>
-        <div v-if="tc.name === 'execute_command'" class="tc-command-meta">
-          <div class="tc-command-line" v-if="commandOf(tc)">
-            <span class="tc-command-label">{{ t('chatMessage.command') }}</span>
-            <code class="tc-command-code">{{ commandOf(tc) }}</code>
-          </div>
-          <div class="tc-command-line" v-if="cwdOf(tc)">
-            <span class="tc-command-label">{{ t('chatMessage.cwd') }}</span>
-            <code class="tc-command-code">{{ cwdOf(tc) }}</code>
-          </div>
-          <div class="tc-command-line">
-            <span class="tc-command-label">{{ t('chatMessage.timeout') }}</span>
-            <code class="tc-command-code">{{ timeoutSecondsOf(tc) }}s</code>
-          </div>
-          <div class="tc-command-line">
-            <span class="tc-command-label">{{ t('chatMessage.elapsed') }}</span>
-            <code class="tc-command-code">{{ elapsedSecondsOf(tc) }}s</code>
-          </div>
-        </div>
-        <template v-if="tc.name === 'execute_command'">
-          <pre v-if="tc.result" class="tc-pre">{{ formatResult(tc.result, tc.name) }}</pre>
-          <pre v-else class="tc-pre tc-running">{{ t('chatMessage.running') }}</pre>
-        </template>
-        <pre v-else-if="tc.result" class="tc-pre">{{ formatResult(tc.result, tc.name) }}</pre>
-      </div>
-    </div>
-
-    <!-- 本条消息中的截图直接展示在列表里（不依赖展开） -->
-    <div v-if="screenshotsInMessage.length" class="message-screenshots">
-      <img
-        v-for="(src, idx) in screenshotsInMessage"
-        :key="idx"
-        class="chat-image message-screenshot-img"
-        :src="src"
-        :alt="t('chatMessage.screenshot')"
-      />
-    </div>
-
-    <!-- AI 文字回复（有内容才显示） -->
-    <div v-if="message.content?.trim()" class="chat-bubble assistant">
+    <div v-if="toolCallsToRender.length || message.content?.trim()" class="chat-bubble assistant">
       <div class="bubble-avatar ai-avatar"><img :src="logoUrl" :alt="agentDisplayName || 'Ultron'" class="avatar-logo" /></div>
       <div class="bubble-body">
         <div class="bubble-name">
@@ -110,6 +22,98 @@
             <Copy v-else :size="11" />
           </button>
         </div>
+
+        <div
+          v-for="(tc, idx) in toolCallsToRender"
+          :key="tc?.id || `tc-${idx}`"
+          class="tool-card"
+          :class="tcStatus(tc)"
+        >
+          <div class="tc-header" @click="tc._expanded = !tc._expanded">
+            <div class="tc-left">
+              <div class="tc-status-dot"></div>
+              <component :is="toolIcon(tc.name)" :size="12" class="tc-type-icon" />
+              <div class="tc-texts">
+                <div class="tc-topline">
+                  <span class="tc-name">{{ toolLabel(tc.name) }}</span>
+                  <!-- 执行命令时始终在标题行显示命令内容，执行过程中也能看到 -->
+                  <span v-if="tc.name === 'execute_command' && (commandOf(tc) || cwdOf(tc))" class="tc-summary-text tc-command-inline">
+                    <code v-if="commandOf(tc)" class="tc-cmd-inline">{{ commandOf(tc) }}</code>
+                    <span v-if="cwdOf(tc)" class="tc-cwd-inline"> ({{ cwdOf(tc) }})</span>
+                  </span>
+                  <span v-else class="tc-summary-text">{{ toolSummary(tc) }}</span>
+                </div>
+                <div v-if="runningSubtitle(tc)" class="tc-subtitle">{{ runningSubtitle(tc) }}</div>
+                <div v-else-if="resultPreview(tc)" class="tc-subtitle tc-subtitle-result">{{ resultPreview(tc) }}</div>
+              </div>
+            </div>
+            <div class="tc-right">
+              <span v-if="tc.name === 'execute_command'" class="tc-metrics-compact">
+                {{ elapsedSecondsOf(tc) }}s / {{ timeoutSecondsOf(tc) }}s
+              </span>
+              <span v-if="isToolRunning(tc)" class="tc-spinner"></span>
+              <template v-else>
+                <span class="tc-result-badge" :class="tcResultClass(tc)">{{ tcResultText(tc) }}</span>
+                <ChevronRight :size="11" class="tc-chevron" :class="{ rotated: tc._expanded }" />
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <!-- 展开详情：执行中也可展开看命令；有 result 时显示截图或输出 -->
+        <template v-for="(tc, idx) in toolCallsToRender" :key="`d-${tc?.id || idx}`">
+          <div v-if="tc && tc._expanded && (tc.result || tc.name === 'execute_command')" class="tc-detail">
+            <template v-if="tc.result && screenshotFromResult(tc.result)">
+              <img
+                v-if="screenshotFromResult(tc.result).url"
+                class="chat-image tc-screenshot"
+                :src="screenshotFromResult(tc.result).url"
+                :alt="t('chatMessage.screenshot')"
+              />
+              <img
+                v-else-if="screenshotFromResult(tc.result).base64"
+                class="chat-image tc-screenshot"
+                :src="'data:image/png;base64,' + screenshotFromResult(tc.result).base64"
+                :alt="t('chatMessage.screenshot')"
+              />
+            </template>
+            <div v-if="tc.name === 'execute_command'" class="tc-command-meta">
+              <div class="tc-command-line" v-if="commandOf(tc)">
+                <span class="tc-command-label">{{ t('chatMessage.command') }}</span>
+                <code class="tc-command-code">{{ commandOf(tc) }}</code>
+              </div>
+              <div class="tc-command-line" v-if="cwdOf(tc)">
+                <span class="tc-command-label">{{ t('chatMessage.cwd') }}</span>
+                <code class="tc-command-code">{{ cwdOf(tc) }}</code>
+              </div>
+              <div class="tc-command-line">
+                <span class="tc-command-label">{{ t('chatMessage.timeout') }}</span>
+                <code class="tc-command-code">{{ timeoutSecondsOf(tc) }}s</code>
+              </div>
+              <div class="tc-command-line">
+                <span class="tc-command-label">{{ t('chatMessage.elapsed') }}</span>
+                <code class="tc-command-code">{{ elapsedSecondsOf(tc) }}s</code>
+              </div>
+            </div>
+            <template v-if="tc.name === 'execute_command'">
+              <pre v-if="tc.result" class="tc-pre">{{ formatResult(tc.result, tc.name) }}</pre>
+              <pre v-else class="tc-pre tc-running">{{ t('chatMessage.running') }}</pre>
+            </template>
+            <pre v-else-if="tc.result" class="tc-pre">{{ formatResult(tc.result, tc.name) }}</pre>
+          </div>
+        </template>
+
+        <!-- 本条消息中的截图直接展示在列表里（不依赖展开） -->
+        <div v-if="screenshotsInMessage.length" class="message-screenshots">
+          <img
+            v-for="(src, idx) in screenshotsInMessage"
+            :key="idx"
+            class="chat-image message-screenshot-img"
+            :src="src"
+            :alt="t('chatMessage.screenshot')"
+          />
+        </div>
+
         <!-- 思维链（<think> 块） -->
         <div v-if="thinkContent" class="think-block">
           <div class="think-header" @click="thinkExpanded = !thinkExpanded">
@@ -424,6 +428,14 @@ const runningSubtitle = (tc) => {
   return ''
 }
 
+const resultPreview = (tc) => {
+  if (!tc || isToolRunning(tc)) return ''
+  if (!tc.result) return t('chatMessage.successNoOutput')
+  const txt = String(formatResult(tc.result, tc.name) || '').replace(/\s+/g, ' ').trim()
+  if (!txt) return t('chatMessage.successNoOutput')
+  return shortenLine(txt, 120)
+}
+
 const formatResult = (resultStr, toolName) => {
   try {
     const obj = JSON.parse(resultStr)
@@ -501,22 +513,120 @@ const renderMarkdown = (raw) => {
   })
 
   text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+  const codePlaceholders = []
   text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    return `<pre class="code-block"><code class="lang-${lang}">${code.trim()}</code></pre>`
+    const idx = codePlaceholders.length
+    const safeLang = String(lang || '').trim()
+    codePlaceholders.push(`<pre class="code-block"><code class="lang-${safeLang}">${String(code || '').trim()}</code></pre>`)
+    return `__CODE_PLACEHOLDER_${idx}__`
   })
-  text = text.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
-  text = text.replace(/^### (.+)$/gm, '<div class="md-h3">$1</div>')
-  text = text.replace(/^## (.+)$/gm, '<div class="md-h2">$1</div>')
-  text = text.replace(/^# (.+)$/gm, '<div class="md-h1">$1</div>')
-  text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  text = text.replace(/^&gt; (.+)$/gm, '<div class="md-blockquote">$1</div>')
-  text = text.replace(/^[*-] (.+)$/gm, '<div class="md-list-item"><span class="md-bullet">•</span>$1</div>')
-  text = text.replace(/^\d+\. (.+)$/gm, '<div class="md-list-item md-ordered">$1</div>')
-  text = text.replace(/^---$/gm, '<hr class="md-hr">')
-  text = text.replace(/\n+(<(?:div|pre|hr)\b)/g, '$1')
-  text = text.replace(/((?:<\/div>|<\/pre>|<hr[^>]*>))\n+/g, '$1')
-  text = text.replace(/\n{2,}/g, '<br>')
-  text = text.replace(/\n/g, '<br>')
+
+  const applyInline = (line) => {
+    let s = String(line || '')
+    s = s.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>')
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    return s
+  }
+
+  const lines = text.split('\n')
+  const blocks = []
+  let paragraphLines = []
+  let listType = null
+  let listItems = []
+
+  const flushParagraph = () => {
+    if (!paragraphLines.length) return
+    blocks.push(`<div class="md-p">${paragraphLines.map(applyInline).join('<br>')}</div>`)
+    paragraphLines = []
+  }
+
+  const flushList = () => {
+    if (!listType || !listItems.length) return
+    const tag = listType === 'ol' ? 'ol' : 'ul'
+    const items = listItems.map((x) => `<li class="md-list-item">${applyInline(x)}</li>`).join('')
+    blocks.push(`<${tag} class="md-list ${listType === 'ol' ? 'md-ordered-list' : 'md-unordered-list'}">${items}</${tag}>`)
+    listType = null
+    listItems = []
+  }
+
+  for (const rawLine of lines) {
+    const line = String(rawLine || '')
+    const t = line.trim()
+    if (!t) {
+      flushParagraph()
+      flushList()
+      continue
+    }
+    if (/^__CODE_PLACEHOLDER_\d+__$/.test(t)) {
+      flushParagraph()
+      flushList()
+      blocks.push(t)
+      continue
+    }
+    const h3 = t.match(/^###\s+(.+)$/)
+    if (h3) {
+      flushParagraph()
+      flushList()
+      blocks.push(`<div class="md-h3">${applyInline(h3[1])}</div>`)
+      continue
+    }
+    const h2 = t.match(/^##\s+(.+)$/)
+    if (h2) {
+      flushParagraph()
+      flushList()
+      blocks.push(`<div class="md-h2">${applyInline(h2[1])}</div>`)
+      continue
+    }
+    const h1 = t.match(/^#\s+(.+)$/)
+    if (h1) {
+      flushParagraph()
+      flushList()
+      blocks.push(`<div class="md-h1">${applyInline(h1[1])}</div>`)
+      continue
+    }
+    const bq = t.match(/^&gt;\s+(.+)$/)
+    if (bq) {
+      flushParagraph()
+      flushList()
+      blocks.push(`<div class="md-blockquote">${applyInline(bq[1])}</div>`)
+      continue
+    }
+    if (/^---$/.test(t)) {
+      flushParagraph()
+      flushList()
+      blocks.push('<hr class="md-hr">')
+      continue
+    }
+    const ul = t.match(/^[*-]\s+(.+)$/)
+    if (ul) {
+      flushParagraph()
+      if (listType && listType !== 'ul') flushList()
+      listType = 'ul'
+      listItems.push(ul[1])
+      continue
+    }
+    const ol = t.match(/^\d+\.\s+(.+)$/)
+    if (ol) {
+      flushParagraph()
+      if (listType && listType !== 'ol') flushList()
+      listType = 'ol'
+      listItems.push(ol[1])
+      continue
+    }
+    flushList()
+    paragraphLines.push(t)
+  }
+  flushParagraph()
+  flushList()
+  text = blocks.join('')
+
+  if (codePlaceholders.length) {
+    text = text.replace(/__CODE_PLACEHOLDER_(\d+)__/g, (_, idx) => {
+      const i = parseInt(idx, 10)
+      return codePlaceholders[i] || ''
+    })
+  }
 
   // 还原图片占位符为 <img> 标签
   if (imagePlaceholders.length) {
@@ -659,7 +769,7 @@ const renderThink = (text) => renderMarkdown(text)
 
 /* ── 工具调用卡片 ── */
 .tool-card {
-  margin: 3px 16px;
+  margin: 6px 0;
   border-radius: 6px;
   overflow: hidden;
   border: 1px solid var(--ou-border);
@@ -705,6 +815,9 @@ const renderThink = (text) => renderMarkdown(text)
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tc-subtitle-result {
+  color: color-mix(in srgb, var(--ou-text) 74%, transparent);
 }
 .tc-right {
   display: flex;
@@ -787,7 +900,7 @@ const renderThink = (text) => renderMarkdown(text)
 .tc-chevron.rotated { transform: rotate(90deg); }
 
 /* 展开详情 */
-.tc-detail { border-top: 1px solid var(--ou-border); padding-top: 8px; }
+.tc-detail { border-top: 1px solid var(--ou-border); padding-top: 8px; margin-top: -1px; }
 .tc-screenshot { max-width: 100%; height: auto; border-radius: 6px; display: block; margin-bottom: 8px; }
 .message-screenshots { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; }
 .message-screenshot-img { max-width: 100%; max-height: 320px; width: auto; height: auto; border-radius: 8px; object-fit: contain; cursor: pointer; }
@@ -863,13 +976,16 @@ const renderThink = (text) => renderMarkdown(text)
 .bubble-text :deep(.chat-link:hover) {
   text-decoration: underline;
 }
+.bubble-text :deep(.md-p) { margin: 0 0 10px; line-height: 1.72; }
+.bubble-text :deep(.md-p:last-child) { margin-bottom: 0; }
 .bubble-text :deep(.md-h1) { font-size: 16px; font-weight: 700; color: var(--ou-text); margin: 12px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--ou-border); }
 .bubble-text :deep(.md-h2) { font-size: 14px; font-weight: 600; color: var(--ou-text); margin: 10px 0 5px; }
 .bubble-text :deep(.md-h3) { font-size: 13px; font-weight: 600; color: var(--ou-text); margin: 8px 0 4px; }
-.bubble-text :deep(.md-blockquote) { border-left: 3px solid var(--ou-border); padding: 2px 0 2px 10px; margin: 3px 0; color: var(--ou-text-muted); font-style: italic; }
-.bubble-text :deep(.md-list-item)  { display: flex; gap: 6px; padding: 1px 0; line-height: 1.6; }
-.bubble-text :deep(.md-bullet)     { color: var(--ou-text-muted); flex-shrink: 0; width: 12px; text-align: center; }
-.bubble-text :deep(.md-list-item.md-ordered) { padding-left: 18px; }
+.bubble-text :deep(.md-blockquote) { border-left: 3px solid var(--ou-border); padding: 4px 0 4px 10px; margin: 8px 0; color: var(--ou-text-muted); font-style: italic; }
+.bubble-text :deep(.md-list) { margin: 6px 0 10px 0; padding-left: 20px; }
+.bubble-text :deep(.md-list-item)  { margin: 3px 0; line-height: 1.66; }
+.bubble-text :deep(.md-list.md-ordered-list) { list-style-type: decimal; }
+.bubble-text :deep(.md-list.md-unordered-list) { list-style-type: disc; }
 .bubble-text :deep(.md-hr)  { border: none; border-top: 1px solid var(--ou-border); margin: 6px 0; }
 .bubble-text :deep(strong)  { color: var(--ou-text); font-weight: 600; }
 

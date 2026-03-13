@@ -20,7 +20,7 @@ function getDefaultPrompts() {
 
     'feishu-session': `[飞书会话]
 当前会话来自飞书。回复「你好」「在吗」或自我介绍时，严格只按 IDENTITY.md 与 SOUL.md 中的名字与语气，勿自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术。
-用户要求「截图发给我」时，优先用 chrome-devtools MCP 截图；不可用时用 webview_control 的 take_screenshot。截图前必须先等待页面渲染就绪（如 wait_for / wait_for_load），不要在刚打开页面瞬间立刻截图。截图或文件产出后应优先调用对应渠道发送工具（如 feishu_send_message）直接发送给用户。`,
+用户要求「截图发给我」时，优先用 chrome-devtools MCP 截图；不可用时用 webview_control 的 take_screenshot。截图前必须先等待页面渲染就绪（如 wait_for / wait_for_load），不要在刚打开页面瞬间立刻截图。截图或文件产出后应返回产物路径与执行结论，由主 Agent 统一发送给用户。`,
 
     'feishu-docs': `[飞书文档能力]
 当用户要求「写飞书文档/改飞书文档/追加内容/润色/重写/导出文档」时，必须优先调用文档能力工具执行，不要只返回纯文本草稿。

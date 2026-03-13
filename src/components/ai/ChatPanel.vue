@@ -222,6 +222,7 @@ const useAIChatInstance = useAIChat()
 const { messages, isStreaming, error, pendingConfirm, sendMessage, stopChat, loadMessages, respondConfirm } = useAIChatInstance
 const seenFeishuMessageIds = new Set()
 const seenFeishuContentMap = new Map() // key=sessionId|content -> timestamp
+const feishuReloadPending = ref(false)
 
 // 带输入框的确认弹框
 const confirmInputText = ref('')
@@ -1550,11 +1551,11 @@ onMounted(async () => {
       attachmentText = lines.join('\n')
     }
     const userContent = [text, attachmentText].filter(Boolean).join('\n')
-    const normalizedUserContent = userContent || '[附件]'
-    const dedupeKey = `${incomingSessionId}|${userContent || '[附件]'}`
+    const normalizedUserContent = String(userContent || '[附件]').replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
+    const dedupeKey = `${incomingSessionId}|${normalizedUserContent}`
     const now = Date.now()
     const lastTs = seenFeishuContentMap.get(dedupeKey) || 0
-    if (!incomingMsgId && now - lastTs < 8000) return
+    if (now - lastTs < 8000) return
     seenFeishuContentMap.set(dedupeKey, now)
     if (seenFeishuContentMap.size > 500) {
       const entries = Array.from(seenFeishuContentMap.entries()).slice(-250)
@@ -1563,9 +1564,11 @@ onMounted(async () => {
     }
     const lastLoaded = messages.value[messages.value.length - 1]
     const alreadyInHistory = !!(
-      needSwitch &&
       lastLoaded?.role === 'user' &&
-      String(lastLoaded.content || '').trim() === String(normalizedUserContent).trim()
+      String(lastLoaded.content || '').replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim() === normalizedUserContent
+    ) || messages.value.slice(-6).some((m) =>
+      m && m.role === 'user' &&
+      String(m.content || '').replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim() === normalizedUserContent
     )
     if (!alreadyInHistory) {
       messages.value.push({ role: 'user', content: normalizedUserContent })
@@ -1579,7 +1582,11 @@ onMounted(async () => {
     if (!data?.sessionId || props.projectPath !== '__feishu__') return
     loadConversationList()
     if (currentSessionId.value === data.sessionId) {
-      persistLoad()
+      if (isStreaming.value) {
+        feishuReloadPending.value = true
+      } else {
+        persistLoad()
+      }
     }
   })
   window.electronAPI?.ai?.onGatewaySessionUpdated?.((data) => {
@@ -1681,6 +1688,10 @@ watch(isStreaming, (streaming) => {
   } else {
     clearInterval(scrollTimer)
     scrollToBottom()
+    if (props.projectPath === '__feishu__' && feishuReloadPending.value) {
+      feishuReloadPending.value = false
+      persistLoad()
+    }
   }
 })
 

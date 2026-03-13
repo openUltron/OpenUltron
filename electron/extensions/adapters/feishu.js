@@ -706,6 +706,15 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
         fileSent,
         fileFailed
       })
+      return {
+        success: !!(textResult && textResult.success),
+        textSuccess: !!(textResult && textResult.success),
+        textMessage: textResult && textResult.message ? String(textResult.message) : '',
+        imageSent,
+        imageFailed,
+        fileSent,
+        fileFailed
+      }
     }
   }
 }

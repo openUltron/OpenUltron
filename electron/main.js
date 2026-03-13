@@ -3510,18 +3510,11 @@ async function scanExternalSubAgents(force = false) {
   return list
 }
 
-function getChannelSendToolByProjectPath(projectPath = '') {
-  const p = String(projectPath || '').trim()
-  if (p === '__feishu__') return 'feishu_send_message'
-  if (p === '__telegram__') return 'telegram_send_message'
-  if (p === '__dingtalk__') return 'dingtalk_send_message'
-  return ''
-}
-
 function buildSubAgentDeliveryPrompt(projectPath = '') {
   return [
     '[产物回传规则]',
     '子 Agent 只负责执行与产出，不直接向外部渠道发送消息。',
+    '严禁调用任何 send_message 类工具或 IM 发送接口（例如 feishu_send_message / telegram_send_message / dingtalk_send_message / lark.im_v1_message_create）。',
     '当任务产出图片/截图/文件时，返回：产物绝对路径 + 简洁执行结论。',
     '是否对外发送由主 Agent 统一处理。'
   ].join('\n')
@@ -3775,6 +3768,12 @@ async function runByInternalSubAgent({ task, systemPrompt, roleName, model, proj
     if (typeof lastAssistant.content === 'string') resultText = lastAssistant.content.trim()
     else if (Array.isArray(lastAssistant.content)) resultText = lastAssistant.content.map(c => (c && c.text) || '').join('').trim()
   }
+  if (!resultText) {
+    // 子Agent有时将结论留在 tool 结果中，兜底提取可见文本避免“success但空结果”。
+    const visible = String(extractLatestVisibleText(msgs) || '').trim()
+    resultText = stripToolProtocolAndJsonNoise(visible, { dropJsonEnvelope: true }).trim()
+  }
+  if (looksLikeNoResultPlaceholderText(resultText)) resultText = ''
   return { success: true, result: resultText, subSessionId, messages: msgs, runtime: 'internal' }
 }
 
@@ -4177,7 +4176,7 @@ const aiGateway = createGateway({
     list.push(...items)
     sessionScreenshots.set(sessionId, list)
   },
-  onChatCompleteAny: (sessionId, projectPath, data, fromAppWindow) => {
+  onChatCompleteAny: async (sessionId, projectPath, data, fromAppWindow) => {
     if (!fromAppWindow || projectPath !== '__feishu__') return
     const feishuProjectKey = conversationFile.hashProjectPath('__feishu__')
     const conv = conversationFile.loadConversation(feishuProjectKey, sessionId)
@@ -4251,17 +4250,29 @@ const aiGateway = createGateway({
       docHost: feishuDocHost,
       role: 'assistant'
     })
-    const delegatedToolNames = new Set(['feishu_send_message'])
-    const aiAlreadySentFeishu = Array.isArray(data.messages) && data.messages.some(m =>
+    const hasSpawnCall = Array.isArray(data.messages) && data.messages.some(m =>
       m && m.role === 'assistant' && Array.isArray(m.tool_calls) &&
-      m.tool_calls.some(tc => tc && tc.function && delegatedToolNames.has(tc.function.name))
+      m.tool_calls.some(tc => tc?.function?.name === 'sessions_spawn')
     )
-    if (aiAlreadySentFeishu && !cleanedFeishu && !cleanedSpawn && imageItems.length === 0 && fileItems.length === 0) return
-    const rawTextToSend = cleanedFeishu || cleanedSpawn || latestVisibleText || (
+    const visibleResultText = String(cleanedFeishu || cleanedSpawn || latestVisibleText || '').trim()
+    let rawTextToSend = visibleResultText || (
       imageItems.length > 0
         ? '截图已发至当前会话。'
         : (fileItems.length > 0 ? '文件已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
     )
+    if (hasSpawnCall && imageItems.length === 0 && fileItems.length === 0 && !hasUsefulVisibleResult(visibleResultText)) {
+      const userText = (() => {
+        const msgs = Array.isArray(conv?.messages) ? conv.messages : []
+        const u = [...msgs].reverse().find((m) => m && m.role === 'user')
+        return u ? String(u.content || '').trim() : ''
+      })()
+      const rescued = await rescueReplyByMasterAgent({
+        userText,
+        channel: 'feishu',
+        hintText: String(visibleResultText || '').trim()
+      })
+      rawTextToSend = String(rescued || '').trim() || '任务仍在处理中，请稍后再试。'
+    }
     const safeRawTextToSend = stripToolProtocolAndJsonNoise(rawTextToSend, { dropJsonEnvelope: true })
     const textToSend = stripFalseDeliveredClaims(safeRawTextToSend, {
       hasImages: imageItems.length > 0,
@@ -4274,6 +4285,29 @@ const aiGateway = createGateway({
     )
     const outBinding = { sessionId, projectPath: '__feishu__', channel: 'feishu', remoteId: chatId, feishuChatId: chatId }
     const outPayload = { text: textToSend, images: imageItems, files: fileItems }
+    try {
+      const feishuProjectKey = conversationFile.hashProjectPath('__feishu__')
+      const current = conversationFile.loadConversation(feishuProjectKey, sessionId)
+      const existing = Array.isArray(current?.messages) ? current.messages : []
+      const artifacts = normalizeArtifactsFromItems(imageItems, fileItems)
+      const assistantMsg = {
+        role: 'assistant',
+        content: textToSend,
+        ...(artifacts.length > 0 ? { metadata: { artifacts } } : {})
+      }
+      conversationFile.saveConversation(feishuProjectKey, {
+        id: sessionId,
+        messages: stripToolExecutionFromMessages([...existing, assistantMsg]),
+        projectPath: '__feishu__',
+        feishuChatId: String(chatId || ''),
+        ...(feishuDocHost ? { feishuDocHost } : {})
+      })
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('feishu-session-updated', { sessionId })
+      }
+    } catch (e) {
+      appLogger?.warn?.('[Feishu] 应用内会话落库失败', { sessionId: String(sessionId || ''), error: e.message || String(e) })
+    }
     appLogger?.info?.('[Feishu] 回发载荷', {
       sessionId: String(sessionId || ''),
       chatId: String(chatId || ''),
@@ -4991,22 +5025,16 @@ function getToolsForChat() {
 function getToolsForSubChat() {
   return getToolsForChat().filter((t) => {
     const name = String(t?.function?.name || '').trim()
-    return !CHANNEL_SEND_TOOL_REGEX.test(name)
+    if (CHANNEL_SEND_TOOL_REGEX.test(name)) return false
+    // 子 Agent 禁止继续派发，强制一级派发约束
+    if (name === 'sessions_spawn') return false
+    return true
   })
 }
 
-const COORDINATOR_TOOL_ALLOWLIST = new Set([
-  'sessions_spawn',
-  'sessions_send',
-  'stop_previous_task',
-  'wait_for_previous_run',
-  'verify_provider_model',
-  'list_providers_and_models',
-  'list_configured_models'
-])
-
 function getToolsForCoordinatorChat() {
-  return getToolsForChat().filter(t => COORDINATOR_TOOL_ALLOWLIST.has(t.function?.name || ''))
+  // 主 Agent 可直接执行业务工具；仅屏蔽渠道发送工具，最终统一由主流程回传
+  return getToolsForSubChat()
 }
 
 function getCoordinatorSystemPrompt(channel = '') {
@@ -5014,14 +5042,17 @@ function getCoordinatorSystemPrompt(channel = '') {
     ? '飞书'
     : (channel === 'telegram' ? 'Telegram' : (channel === 'dingtalk' ? '钉钉' : '当前渠道'))
   return [
-    '[主 Agent 协调模式]',
-    `你是 ${channelName} 主 Agent，只负责：接收消息、派发子任务、管理状态、向用户汇报。`,
-    '除纯问候或进度询问外，用户的实际任务必须调用 sessions_spawn 交给子 Agent 执行。',
+    '[协调 Agent 模式]',
+    `你是 ${channelName} 的入口协调 Agent。每次收到用户消息时，当前会话实例就是“主协调者”（不是全局唯一主控）。`,
+    '你负责：接收消息、决定是否派发、管理任务状态、向用户汇报结果。',
+    '你应优先直接调用可用工具完成用户任务；仅当任务较复杂、耗时较长、需要并行或需要隔离执行上下文时，再调用 sessions_spawn 派发子 Agent。',
     '默认使用 sessions_spawn(runtime="auto")，其默认走 internal。仅当用户明确指定外部子 Agent（如“用 codex”“用 claude”）时，才使用 external:<name>。',
     '若用户明确指定某子 Agent（如“用 codex”“用 claude”），必须把 runtime 设为 external:<name>（例如 external:codex）；若不可用再按系统回退链执行，并在回复里说明已回退。',
-    '当用户要求飞书文档编写/改写/追加时，必须派发子 Agent 执行，并优先要求子 Agent 使用文档能力工具（如 feishu_doc_capability 或 lark docx 相关工具），不要只给纯文本答案。',
-    '当用户要求飞书电子表格或多维表格操作时，必须优先使用内置能力工具：feishu_sheets_capability / feishu_bitable_capability。禁止只回复操作步骤而不执行。',
-    '主 Agent 不直接调用业务工具、不直接执行具体任务。',
+    '可使用 stop_previous_task / wait_for_previous_run 管理当前会话任务池中的其他运行任务。',
+    '仅允许一级派发：子 Agent 不得再派发子 Agent。',
+    '当用户要求飞书文档编写/改写/追加时，优先直接使用文档能力工具（如 feishu_doc_capability 或 lark docx 相关工具）执行；仅在明显需要长流程/并行时再派发子 Agent。',
+    '当用户要求飞书电子表格或多维表格操作时，优先直接使用内置能力工具：feishu_sheets_capability / feishu_bitable_capability。禁止只回复操作步骤而不执行。',
+    '禁止只回复“已派发/处理中”而不执行。若未派发子 Agent，必须由主 Agent 直接执行并返回结果。',
     '收到子 Agent 结果后，简洁向用户回复结论与必要说明。'
   ].join('\n')
 }
@@ -6170,6 +6201,20 @@ function looksLikeGenericGreeting(text = '') {
   return patterns.some((re) => re.test(s))
 }
 
+function stripDispatchBoilerplateText(text = '') {
+  let s = String(text || '')
+  if (!s.trim()) return s
+  const linePatterns = [
+    /^\s*我来派发子\s*Agent.*$/gim,
+    /^\s*我会派发子\s*Agent.*$/gim,
+    /^\s*正在派发子\s*Agent.*$/gim,
+    /^\s*已派发子\s*Agent.*$/gim,
+    /^\s*我来分配子\s*Agent.*$/gim
+  ]
+  for (const re of linePatterns) s = s.replace(re, '')
+  return s.replace(/\n{3,}/g, '\n\n').trim()
+}
+
 function extractLatestVisibleText(messages = []) {
   if (!Array.isArray(messages) || messages.length === 0) return ''
   const pickText = (content) => {
@@ -6269,7 +6314,153 @@ async function refineReplyByMasterAgent({
   }
 }
 
-// 主 Agent + 子 Agent：新消息到达时派生子 Agent，不直接停前一个；子 Agent 可调 stop_previous_task 停掉前边，或 wait_for_previous_run 等待前边完成再继续
+async function rescueReplyByMasterAgent({
+  userText = '',
+  channel = '',
+  hintText = ''
+} = {}) {
+  const q = String(userText || '').trim()
+  if (!q) return ''
+  try {
+    const channelName = channel === 'feishu' ? '飞书' : (channel === 'telegram' ? 'Telegram' : (channel === 'dingtalk' ? '钉钉' : '当前渠道'))
+    const prompt = [
+      `用户请求：${q}`,
+      hintText ? `已知上下文：${String(hintText || '').trim().slice(0, 800)}` : '',
+      `渠道：${channelName}`,
+      '请直接给出可执行结果，不要说“我来/我会/稍等/正在处理”。',
+      '若信息不足，请明确列出最少需要的补充信息（不超过3条）。',
+      '禁止输出工具调用协议、JSON、代码块。'
+    ].filter(Boolean).join('\n')
+    const out = await aiOrchestrator.generateText({
+      prompt,
+      systemPrompt: '你是主Agent执行兜底器。仅输出可直接发给用户的最终文本。'
+    })
+    return stripToolProtocolAndJsonNoise(String(out || ''), { dropJsonEnvelope: true }).trim()
+  } catch (_) {
+    return ''
+  }
+}
+
+async function runMainAgentDirectRetry({
+  aiGateway,
+  baseRunSessionId,
+  messages = [],
+  projectPath = '',
+  binding = {},
+  chatId = '',
+  appendCommandLine = () => {},
+  scheduleStreamFlush = () => {}
+} = {}) {
+  if (!aiGateway || typeof aiGateway.runChat !== 'function') {
+    return { success: false, error: 'aiGateway 不可用' }
+  }
+  const retryRunSessionId = `${baseRunSessionId}-direct-${Date.now()}`
+  const collectedScreenshots = []
+  const completePromise = new Promise((resolve, reject) => {
+    const fakeSender = {
+      send: (channel, data) => {
+        if (channel === 'ai-chat-complete' && data && data.messages) return resolve(data.messages)
+        if (channel === 'ai-chat-error') return reject(new Error((data && data.error) || 'AI 出错'))
+        if (channel === 'ai-chat-tool-call' && data && data.toolCall) {
+          appendCommandLine(formatCommandFromToolCall(data.toolCall))
+          scheduleStreamFlush()
+        }
+        if (channel === 'ai-chat-tool-result' && data) {
+          const raw = data.result != null ? (typeof data.result === 'string' ? data.result : JSON.stringify(data.result)) : ''
+          if (raw) {
+            for (const item of parseScreenshotFromToolResult(raw)) collectedScreenshots.push(item)
+          }
+        }
+      }
+    }
+    const retryMessages = [
+      ...messages,
+      {
+        role: 'system',
+        content: '上一轮子Agent返回空结果。请由主Agent直接调用工具完成任务。禁止调用 sessions_spawn。'
+      }
+    ]
+    const runChatPayload = {
+      sessionId: retryRunSessionId,
+      messages: retryMessages,
+      model: undefined,
+      tools: getToolsForSubChat(),
+      projectPath
+    }
+    if (binding.channel === 'feishu') {
+      runChatPayload.feishuChatId = chatId
+      const tenantKey = String(binding.feishuTenantKey || '').trim()
+      if (tenantKey) runChatPayload.feishuTenantKey = tenantKey
+      const docHost = String(binding.feishuDocHost || '').trim()
+      if (docHost) runChatPayload.feishuDocHost = docHost
+      const senderOpenId = String(binding.feishuSenderOpenId || '').trim()
+      if (senderOpenId) runChatPayload.feishuSenderOpenId = senderOpenId
+      const senderUserId = String(binding.feishuSenderUserId || '').trim()
+      if (senderUserId) runChatPayload.feishuSenderUserId = senderUserId
+    }
+    aiGateway.runChat(runChatPayload, fakeSender).catch(reject)
+  })
+  try {
+    const finalMessages = await completePromise
+    const getMsgText = (m) => {
+      if (!m) return ''
+      if (typeof m.content === 'string') return m.content.trim()
+      if (Array.isArray(m.content)) return m.content.map((x) => (x && x.text) || '').join('').trim()
+      return ''
+    }
+    const latestAssistant = [...finalMessages]
+      .reverse()
+      .find((m) => m && m.role === 'assistant' && getAssistantText(m).trim())
+    const toSend = latestAssistant ? getAssistantText(latestAssistant) : ''
+    const currentRound = getCurrentRoundMessages(finalMessages)
+    const fallbackVisible = String(extractLatestVisibleText(currentRound) || '').trim()
+    const rawText = toSend || fallbackVisible
+    const { cleanedText: cleanedRaw, filePaths: pathFromText } = extractLocalResourceScreenshots(rawText)
+    const screenshotsFromTools = extractScreenshotsFromMessages(currentRound)
+    const cleanedText = stripFeishuScreenshotMisfireText(cleanedRaw)
+    const fileResolveBase = (projectPath && path.isAbsolute(projectPath)) ? projectPath : getWorkspaceRoot()
+    const images = []
+    const files = []
+    const seenImagePath = new Set()
+    const seenFilePath = new Set()
+    const seenBase64Head = new Set()
+    for (const item of [...collectedScreenshots, ...screenshotsFromTools]) {
+      if (item.path) {
+        if (seenImagePath.has(item.path)) continue
+        seenImagePath.add(item.path)
+        images.push({ path: item.path })
+      } else if (item.base64) {
+        const head = item.base64.slice(0, 80)
+        if (seenBase64Head.has(head)) continue
+        seenBase64Head.add(head)
+        images.push({ base64: item.base64 })
+      }
+    }
+    for (const p of pathFromText) {
+      if (seenImagePath.has(p)) continue
+      seenImagePath.add(p)
+      images.push({ path: p })
+    }
+    for (const p of extractLocalFilesFromText(cleanedText, fileResolveBase)) {
+      if (isImageFilePath(p)) {
+        if (seenImagePath.has(p)) continue
+        seenImagePath.add(p)
+        images.push({ path: p })
+      } else {
+        if (seenFilePath.has(p)) continue
+        seenFilePath.add(p)
+        files.push({ path: p })
+      }
+    }
+    return { success: true, text: cleanedText, images, files }
+  } catch (e) {
+    return { success: false, error: e.message || String(e) }
+  }
+}
+
+// 协调 Agent + 子 Agent：
+// 每条“用户入口消息”都会创建一个协调 run（即该入口的主协调者），并可管理同会话任务池；
+// 派发出去的是子 Agent，且只允许一级派发（子 Agent 不可继续 sessions_spawn）。
 function channelSessionKey(binding) {
   return `${binding.projectPath}:${binding.sessionId}`
 }
@@ -6583,44 +6774,46 @@ function attachArtifactsToLatestAssistant(messages = [], artifacts = []) {
   return next
 }
 
-function isProgressQueryText(text) {
+function hasResultSignals(text = '') {
   const t = String(text || '').trim()
   if (!t) return false
-  if (/(任务|当前|这个|刚才|前一个|子agent|子 agent|主agent|主 agent).{0,8}(进度|进展|状态|怎么样|如何|完成了吗|到哪)/i.test(t)) return true
-  if (/(进度|进展|状态).{0,6}(怎么样|如何|如何了|到哪|完成了吗|更新一下)/i.test(t)) return true
-  if (/(progress|status|update|how(?:'| i)?s it going)/i.test(t)) return true
+  if (t.length >= 90) return true
+  if (/(https?:\/\/|\/Users\/|[A-Za-z]:\\|file:\/\/|\.html\b|\.md\b|\.png\b|\.jpg\b|\.zip\b)/i.test(t)) return true
+  const lines = t.split('\n').map(x => x.trim()).filter(Boolean)
+  if (lines.length >= 3) return true
+  const listLike = lines.filter((x) => /^[-*]\s+/.test(x) || /^\d+\.\s+/.test(x)).length
+  if (listLike >= 2) return true
+  if (/^#{1,3}\s+/.test(t)) return true
   return false
 }
 
-function hasTaskIntentText(text) {
-  const t = String(text || '').trim()
-  if (!t) return false
-  if (isProgressQueryText(t)) return false
-  if (isPureScreenshotRequestText(t)) return false
-  if (/^(你好|您好|hello|hi|在吗|在不在|谢谢|thanks?)$/i.test(t)) return false
-  if (/(帮我|帮忙|请你|请帮|继续|重新|再|复现|排查|检查|查看|分析|修复|改|生成|创建|写|做|发布|部署|上线|执行|跑|打开|发送|导出|打包|截图|截屏|优化)/i.test(t)) return true
-  if (t.length >= 12) return true
-  return false
+function isLowInformationReply(text = '') {
+  const t = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!t) return true
+  if (/[?？]\s*$/.test(t)) return false // 明确在追问用户信息时，不强制补派发
+  if (hasResultSignals(t)) return false
+  return t.length <= 60
 }
 
-function looksLikeInterimAckText(text) {
+function looksLikeNoResultPlaceholderText(text = '') {
   const t = String(text || '').replace(/\s+/g, ' ').trim()
   if (!t) return false
-  if (/(请提供|请告诉我|需要你提供|还需要|先确认|无法执行|不能执行|权限不足|缺少|未配置)/i.test(t)) return false
-  if (/(我来|我会|我先|马上|稍等|请稍等|让我|正在|先去)/i.test(t) && !/(已完成|完成了|成功|失败|结果|原因|报告|详情|链接|文档ID|构建号)/i.test(t)) {
-    return true
-  }
-  return false
+  const patterns = [
+    /任务已执行完成，但未生成可展示的文本结果/,
+    /未生成可展示的文本结果/,
+    /未生成可展示结果/,
+    /无回复内容/,
+    /无可展示结果/
+  ]
+  return patterns.some((re) => re.test(t))
 }
 
-function shouldAutoInternalFallbackDispatch({ userText = '', assistantText = '', hasSpawnCall = false, aiAlreadySent = false } = {}) {
-  if (hasSpawnCall || aiAlreadySent) return false
-  if (!hasTaskIntentText(userText)) return false
-  const a = String(assistantText || '').trim()
-  if (!a) return true
-  if (looksLikeGenericGreeting(a)) return true
-  if (looksLikeInterimAckText(a)) return true
-  return false
+function hasUsefulVisibleResult(text = '') {
+  const t = String(text || '').trim()
+  if (!t) return false
+  if (looksLikeNoResultPlaceholderText(t)) return false
+  if (isLowInformationReply(t)) return false
+  return true
 }
 
 function isScreenshotFollowupText(text) {
@@ -6939,43 +7132,6 @@ function humanizeLastAction(action) {
   return a
 }
 
-function buildChannelProgressSummary(key) {
-  const runs = (channelCurrentRun.get(key) || []).slice().sort((a, b) => a.startTime - b.startTime)
-  if (runs.length === 0) return ''
-  const snapshot = sessionRegistry.getSnapshot()
-  const byId = new Map(snapshot.map(s => [s.sessionId, s]))
-  const lines = [`当前有 ${runs.length} 个任务在进行：`]
-  for (let i = 0; i < runs.length; i++) {
-    const r = runs[i]
-    const s = byId.get(r.runSessionId)
-    const status = statusTextForUser(s?.status || 'running')
-    const progressPct = computeDisplayProgress(s?.progress?.progress || 0, r.startTime, s?.status || 'running')
-    const phase = s?.progress?.phase ? phaseTextForUser(String(s.progress.phase)) : ''
-    const lastAction = s?.progress?.last_action ? String(s.progress.last_action) : ''
-    const eta = s?.progress?.eta ? String(s.progress.eta) : ''
-    const duration = formatRunningDuration(r.startTime)
-    const taskText = summarizeTaskText(r.delegatedTask || r.userTask || '')
-    let tail = ''
-    if (taskText) {
-      tail = `，任务：${taskText}`
-    }
-    const actionText = humanizeLastAction(lastAction)
-    if (actionText) {
-      tail += `，当前：${actionText}`
-    } else if (s?.lastToolCall?.name) {
-      tail += `，当前：${s.lastToolCall.name}`
-    } else if (s?.lastContent) {
-      const shortContent = String(s.lastContent).replace(/\s+/g, ' ').trim().slice(0, 28)
-      if (shortContent) tail += `，最近输出：${shortContent}`
-    }
-    const phaseText = phase ? `，阶段：${phase}` : ''
-    const progressText = `，进度：${Math.max(0, Math.min(100, progressPct))}%`
-    const etaText = eta ? `，预计剩余：${eta}` : ''
-    lines.push(`${i + 1}. （${status}${phaseText}${progressText}，已运行 ${duration}${etaText}${tail}）`)
-  }
-  return lines.join('\n')
-}
-
 function computeDisplayProgress(rawProgress, startTime, status) {
   const raw = Number(rawProgress || 0)
   if (status === 'completed') return 100
@@ -7076,19 +7232,6 @@ async function processMessageReplace(payload) {
   const key = channelSessionKey(binding)
   const mainSessionId = binding.sessionId
   const messageText = String(payload?.message?.text || '').trim()
-  const progressQuery = isProgressQueryText(messageText)
-  if (progressQuery) {
-    const summary = buildChannelProgressSummary(key)
-    if (summary) {
-      const projectPath = binding.channel === 'feishu'
-        ? FEISHU_PROJECT
-        : (binding.channel === 'telegram' ? TELEGRAM_PROJECT : DINGTALK_PROJECT)
-      const chatId = binding.remoteId
-      const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
-      eventBus.emit('chat.session.completed', { binding: outBinding, payload: { text: summary } })
-      return
-    }
-  }
   const projectPath = binding.channel === 'feishu'
     ? FEISHU_PROJECT
     : (binding.channel === 'telegram' ? TELEGRAM_PROJECT : DINGTALK_PROJECT)
@@ -7159,12 +7302,16 @@ async function processMessageReplace(payload) {
     })
     return
   }
-  // 同一会话收到新消息时，默认中止之前仍在运行的子任务，避免并发串话/错答
+  // 平铺并发策略：同一会话新消息直接派生新 run，不自动中止已有 run。
+  // 若需中止/等待，由模型显式调用 stop_previous_task / wait_for_previous_run。
   const existingRuns = channelCurrentRun.get(key) || []
-  for (const r of existingRuns) {
-    abortedRunSessionIds.add(r.runSessionId)
-    aiOrchestrator.stopChat(r.runSessionId)
-  }
+  try {
+    appLogger?.info?.('[SubAgentDispatch] 平铺并发派发', {
+      sessionKey: key,
+      runningCount: existingRuns.length,
+      incomingMessageId: payload?.message?.messageId || ''
+    })
+  } catch (_) {}
   const runId = Date.now()
   const runSessionId = `${mainSessionId}-run-${runId}`
   const startTime = Date.now()
@@ -7347,6 +7494,25 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     commandLines: [],
     lastSentText: '',
     flushTimer: null
+  }
+  const emitUiToolCall = (toolCall = {}) => {
+    if (!mainWindow || !mainWindow.webContents) return
+    try {
+      mainWindow.webContents.send('ai-chat-tool-call', {
+        sessionId: mainSessionId,
+        toolCall
+      })
+    } catch (_) {}
+  }
+  const emitUiToolResult = (name, resultPayload) => {
+    if (!mainWindow || !mainWindow.webContents) return
+    try {
+      mainWindow.webContents.send('ai-chat-tool-result', {
+        sessionId: mainSessionId,
+        name: String(name || ''),
+        result: typeof resultPayload === 'string' ? resultPayload : JSON.stringify(resultPayload || {})
+      })
+    } catch (_) {}
   }
   const appendCommandLine = (line) => {
     if (!streamState.enabled) return
@@ -7656,7 +7822,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       name: x.filename || '',
       ts: x.createdAt || new Date().toISOString()
     }))
-    const allRefs = [...regResult.refs, ...refArtifacts]
+    let allRefs = [...regResult.refs, ...refArtifacts]
     if (userMessageId && allRefs.length > 0) {
       try {
         artifactRegistry.bindArtifactsToMessage({
@@ -7669,14 +7835,6 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
         appLogger?.warn?.('[ArtifactRegistry] bind assistant message failed', { error: e.message || String(e) })
       }
     }
-    // 检查 AI 是否已通过工具主动发送过消息，或派生子 agent 处理（无需再补发）
-    const channelSendTools = { feishu: 'feishu_send_message', telegram: 'telegram_send_message', dingtalk: 'dingtalk_send_message' }
-    const sendToolName = channelSendTools[binding.channel]
-    const delegatedTools = new Set([sendToolName].filter(Boolean))
-    const aiAlreadySent = delta.some(m =>
-      m && m.role === 'assistant' && Array.isArray(m.tool_calls) &&
-      m.tool_calls.some(tc => tc && tc.function && delegatedTools.has(tc.function.name))
-    )
     let hasSpawnCall = currentRound.some((m) =>
       m && m.role === 'assistant' && Array.isArray(m.tool_calls) &&
       m.tool_calls.some((tc) => tc?.function?.name === 'sessions_spawn')
@@ -7687,50 +7845,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       : ((spawnResultText && String(spawnResultText).trim())
           ? String(spawnResultText).trim()
           : ((latestVisibleText && String(latestVisibleText).trim()) ? String(latestVisibleText).trim() : ''))
-    let autoFallbackResultText = ''
-    let autoFallbackError = ''
-    const needAutoFallback = shouldAutoInternalFallbackDispatch({
-      userText: String(message?.text || ''),
-      assistantText: seedFallbackText,
-      hasSpawnCall,
-      aiAlreadySent
-    })
-    if (needAutoFallback) {
-      try {
-        appLogger?.warn?.('[SubAgentDispatch] 主Agent未触发 sessions_spawn，自动补一次 internal 派发', {
-          runSessionId,
-          messageId: userMessageId || '',
-          taskPreview: summarizeTaskText(String(message?.text || ''), 80)
-        })
-      } catch (_) {}
-      appendCommandLine('- 主Agent未触发 sessions_spawn，自动补派发 internal')
-      scheduleStreamFlush()
-      const fallbackOut = await runSubChat({
-        task: String(message?.text || ''),
-        systemPrompt: '这是主Agent自动补派发任务。请直接执行，不要先回复“我来检查/我会处理”之类过渡话术；返回可直接给用户的结果。',
-        roleName: '执行助手',
-        projectPath,
-        runtime: 'internal',
-        parentSessionId: mainSessionId,
-        feishuChatId: chatId,
-        feishuTenantKey: String(binding.feishuTenantKey || '').trim() || undefined,
-        feishuDocHost: String(binding.feishuDocHost || '').trim() || undefined,
-        feishuSenderOpenId: String(binding.feishuSenderOpenId || '').trim() || undefined,
-        feishuSenderUserId: String(binding.feishuSenderUserId || '').trim() || undefined
-      })
-      if (fallbackOut?.success && String(fallbackOut.result || '').trim()) {
-        autoFallbackResultText = String(fallbackOut.result || '').trim()
-        hasSpawnCall = true
-        appendCommandLine('- 自动补派发执行完成')
-      } else {
-        autoFallbackError = String(fallbackOut?.error || '自动补派发失败').trim()
-        appendCommandLine(`- 自动补派发失败：${autoFallbackError}`)
-      }
-      scheduleStreamFlush()
-    }
-    const rawFallbackText = (autoFallbackResultText && String(autoFallbackResultText).trim())
-      ? String(autoFallbackResultText).trim()
-      : seedFallbackText
+    const rawFallbackText = seedFallbackText
     const safeRawFallbackText = stripToolProtocolAndJsonNoise(rawFallbackText, { dropJsonEnvelope: true })
     const cleanedTextTrim = String(cleanedText || '').trim()
     const cleanedSpawnTrim = String(cleanedSpawnText || '').trim()
@@ -7743,24 +7858,126 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       ? cleanedSpawnTrim
       : (cleanedTextTrim || cleanedSpawnTrim || (rawFallbackText || (imageItems.length > 0 ? '截图已发至当前会话。' : null)))
     const safeBaseTextToSend = stripToolProtocolAndJsonNoise(baseTextToSend, { dropJsonEnvelope: true })
+    let rescuedMainText = ''
+    const shouldRescueByMain = !hasSpawnCall &&
+      imageItems.length === 0 && fileItems.length === 0 &&
+      (!safeBaseTextToSend || looksLikeNoResultPlaceholderText(safeBaseTextToSend))
+    if (shouldRescueByMain) {
+      rescuedMainText = await rescueReplyByMasterAgent({
+        userText: String(message?.text || ''),
+        channel: binding.channel,
+        hintText: String(seedFallbackText || '')
+      })
+      if (looksLikeNoResultPlaceholderText(rescuedMainText)) rescuedMainText = ''
+      if (rescuedMainText) {
+        try {
+          appLogger?.info?.('[MainAgent] 主Agent兜底生成成功', {
+            runSessionId,
+            messageId: userMessageId || '',
+            length: rescuedMainText.length
+          })
+        } catch (_) {}
+      }
+    }
     let textToSend = stripFalseDeliveredClaims(safeBaseTextToSend, {
       hasImages: imageItems.length > 0,
       hasFiles: fileItems.length > 0,
       channel: binding.channel
-    }) || (safeRawFallbackText || (imageItems.length > 0
+    }) || (rescuedMainText || safeRawFallbackText || (imageItems.length > 0
       ? '截图已发至当前会话。'
       : '任务已执行完成，但未生成可展示的文本结果。'))
-    if (!textToSend && autoFallbackError) {
-      textToSend = `执行失败：${autoFallbackError}`
-    } else if (autoFallbackError && !autoFallbackResultText) {
-      textToSend = `${textToSend}\n\n自动补派发失败：${autoFallbackError}`
+    let directRetryAddedArtifacts = false
+    const noArtifacts = imageItems.length === 0 && fileItems.length === 0
+    const visibleResultText = String(cleanedSpawnTrim || cleanedTextTrim || safeRawFallbackText || '').trim()
+    const noUsefulResult = !hasUsefulVisibleResult(visibleResultText)
+    if (hasSpawnCall && noArtifacts && noUsefulResult) {
+      appendCommandLine('- 子Agent空结果，主Agent直执行重试')
+      scheduleStreamFlush()
+      const directRetry = await runMainAgentDirectRetry({
+        aiGateway,
+        baseRunSessionId: runSessionId,
+        messages,
+        projectPath,
+        binding,
+        chatId,
+        appendCommandLine,
+        scheduleStreamFlush
+      })
+      if (directRetry && directRetry.success) {
+        const retryText = String(directRetry.text || '').trim()
+        if (retryText) textToSend = retryText
+        const seenImagePath = new Set(imageItems.map(x => String(x?.path || '')).filter(Boolean))
+        const seenFilePath = new Set(fileItems.map(x => String(x?.path || '')).filter(Boolean))
+        for (const it of (Array.isArray(directRetry.images) ? directRetry.images : [])) {
+          if (it && it.path) {
+            const p = String(it.path).trim()
+            if (!p || seenImagePath.has(p)) continue
+            seenImagePath.add(p)
+            imageItems.push({ path: p })
+            directRetryAddedArtifacts = true
+          } else if (it && it.base64) {
+            imageItems.push({ base64: String(it.base64) })
+            directRetryAddedArtifacts = true
+          }
+        }
+        for (const it of (Array.isArray(directRetry.files) ? directRetry.files : [])) {
+          if (!it || !it.path) continue
+          const p = String(it.path).trim()
+          if (!p || seenFilePath.has(p)) continue
+          seenFilePath.add(p)
+          fileItems.push({ path: p })
+          directRetryAddedArtifacts = true
+        }
+        appendCommandLine('- 主Agent直执行重试完成')
+      } else {
+        const retryErr = String(directRetry?.error || '主Agent直执行失败').trim()
+        textToSend = `执行失败：子Agent未返回结果，且主Agent直执行失败（${retryErr}）`
+      }
+      try {
+        appLogger?.warn?.('[SubAgentDispatch] 子Agent返回空结果', {
+          runSessionId,
+          messageId: userMessageId || '',
+          taskPreview: summarizeTaskText(String(message?.text || ''), 80)
+        })
+      } catch (_) {}
+    }
+    if (directRetryAddedArtifacts) {
+      const retryReg = registerArtifactsFromItems({
+        images: imageItems,
+        files: fileItems,
+        context: {
+          source: `${binding.channel}_assistant`,
+          channel: binding.channel,
+          sessionId: mainSessionId,
+          runSessionId,
+          messageId: userMessageId || '',
+          chatId: chatId || '',
+          role: 'assistant'
+        }
+      })
+      imageItems = retryReg.images
+      fileItems = retryReg.files
+      allRefs = [...allRefs, ...(Array.isArray(retryReg.refs) ? retryReg.refs : [])]
+      if (userMessageId && Array.isArray(retryReg.refs) && retryReg.refs.length > 0) {
+        try {
+          artifactRegistry.bindArtifactsToMessage({
+            sessionId: mainSessionId,
+            messageId: userMessageId,
+            role: 'assistant',
+            artifactIds: retryReg.refs.map((x) => x.artifactId).filter(Boolean)
+          })
+        } catch (e) {
+          appLogger?.warn?.('[ArtifactRegistry] bind assistant message failed (retry)', { error: e.message || String(e) })
+        }
+      }
     }
     if (hasSpawnCall && !cleanedSpawnTrim && looksLikeGenericGreeting(textToSend)) {
       const delegated = summarizeTaskText(String(message?.text || ''), 60)
       textToSend = delegated
-        ? `已派发子 Agent 执行：${delegated}\n当前正在处理中，完成后会回传结果。`
-        : '已派发子 Agent 执行，当前正在处理中，完成后会回传结果。'
+        ? `任务已开始处理：${delegated}\n完成后会第一时间回传结果。`
+        : '任务已开始处理，完成后会第一时间回传结果。'
     }
+    textToSend = stripDispatchBoilerplateText(textToSend)
     // 暂停主 Agent 二次改写：保留主流程原始结果，避免风格/语义偏移
     if (streamState.enabled) {
       streamState.thinkingText = textToSend || streamState.thinkingText
@@ -7786,10 +8003,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     if (binding.channel === 'feishu' && mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('feishu-session-updated', { sessionId: mainSessionId })
     }
-    // AI 已主动发消息且没有额外文本/图片要补发，跳过自动回复
-    if (aiAlreadySent && !textToSend && imageItems.length === 0 && fileItems.length === 0) {
-      return
-    }
+    // 统一主流程回发：即使模型内部尝试发送，也不走提前 return
     const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
     const outPayload = {
       text: textToSend || (imageItems.length > 0 ? '截图已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。'),
@@ -7877,7 +8091,7 @@ async function waitForPreviousRuns(currentRunSessionId) {
 
 eventBus.on('chat.message.received', processMessageReplace)
 
-function handleChatSessionCompleted(payload) {
+async function handleChatSessionCompleted(payload) {
   const { binding, payload: outPayload } = payload || {}
   if (!binding || !binding.channel) return
   if (binding.sessionId && outPayload && (Array.isArray(outPayload.images) || Array.isArray(outPayload.files))) {
@@ -7908,7 +8122,41 @@ function handleChatSessionCompleted(payload) {
   } catch (_) {}
   const adapter = chatChannelRegistry.get(binding.channel)
   if (adapter && adapter.send) {
-    adapter.send(binding, outPayload || {}).catch(e => console.error('[ChatChannel] send failed:', e.message))
+    const maxAttempts = 2
+    let lastErr = null
+    for (let i = 1; i <= maxAttempts; i++) {
+      try {
+        const res = await adapter.send(binding, outPayload || {})
+        if (res && res.success === false) {
+          throw new Error(res.message || res.textMessage || 'channel_send_failed')
+        }
+        return
+      } catch (e) {
+        lastErr = e
+        appLogger?.warn?.('[ChatChannel] send failed', {
+          channel: binding.channel,
+          attempt: i,
+          maxAttempts,
+          remoteId: String(binding.remoteId || ''),
+          error: e?.message || String(e)
+        })
+        if (i < maxAttempts) {
+          await new Promise((r) => setTimeout(r, 900))
+        }
+      }
+    }
+    if (binding.channel === 'feishu') {
+      try {
+        const chatId = String(binding.remoteId || '').trim()
+        if (chatId) {
+          await feishuNotify.sendMessage({
+            chat_id: chatId,
+            text: `系统提示：本次结果同步到飞书失败（${String(lastErr?.message || '未知错误').slice(0, 160)}）。请稍后重试。`
+          })
+        }
+      } catch (_) {}
+    }
+    console.error('[ChatChannel] send failed:', lastErr?.message || String(lastErr || 'unknown'))
   }
 }
 eventBus.on('chat.session.completed', handleChatSessionCompleted)
