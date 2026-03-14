@@ -4,7 +4,7 @@
  */
 
 const definition = {
-  description: '获取当前全局配置的模型信息：主模型(default_model)、模型池(model_pool)、模型与供应商绑定(model_bindings)。当用户问“你现在用什么模型”“你可以使用哪些模型”且未明确要求按供应商展开时，优先调用本工具并严格按返回结果回答。',
+  description: '获取当前全局配置的模型信息：主模型(default_model)、模型池(model_pool)、模型与供应商绑定(model_bindings)。用户问当前/可用模型时，可调用本工具并依据返回结果回答。',
   parameters: {
     type: 'object',
     properties: {},

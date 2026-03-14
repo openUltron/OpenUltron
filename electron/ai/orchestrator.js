@@ -37,33 +37,6 @@ function extractScreenshotPathFromResult(result) {
   return null
 }
 
-/** 根据工具名返回「回复文本若包含这些词则视为与该工具相关」的关键词（用于判断模型只说了没做） */
-function getToolReplyKeywords(toolName) {
-  if (!toolName || typeof toolName !== 'string') return []
-  const n = String(toolName).toLowerCase().replace(/^mcp__[^_]+__/, '')
-  if (n.includes('screenshot') || n.includes('截图')) return ['截图', '截屏', 'screenshot', '已截']
-  if (n.includes('navigate') || n.includes('new_page') || n.includes('open')) return ['打开', '导航', '访问', '已打开', '已访问', 'navigate']
-  if (n.includes('click')) return ['点击', '已点击', 'click']
-  if (n.includes('fill') || n.includes('input')) return ['填写', '输入', '已填', 'fill']
-  if (n.includes('execute_command') || n.includes('command')) return ['执行', '命令', '已执行', '运行']
-  return []
-}
-
-/** 若回复文本未带 tool_calls 但内容涉及某一携带工具（关键词匹配），返回该工具信息，用于动态注入「请先调用该工具」提示 */
-function findToolMentionedInContent(content, tools) {
-  if (!content || typeof content !== 'string' || !Array.isArray(tools) || tools.length === 0) return null
-  const text = String(content).trim()
-  if (!text) return null
-  for (const t of tools) {
-    const name = t.function?.name || t.name || ''
-    if (!name) continue
-    const keywords = getToolReplyKeywords(name)
-    if (keywords.length === 0) continue
-    if (keywords.some(kw => text.includes(kw))) return { name, displayName: name.replace(/^mcp__[^_]+__/, '') }
-  }
-  return null
-}
-
 /** 仅当 sender 存在且未销毁时才可推送（sender 可能非 WebContents，无 isDestroyed） */
 function canSend(sender) {
   if (!sender) return false
@@ -220,9 +193,9 @@ class Orchestrator {
       memParts.push(
         '[当前应用]\n' +
         '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
-        '当用户要求修改或配置**本机其他项目**、某仓库或用户提到的任意名称时：自行决定用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不得未执行就称找不到或向用户索要路径。可先调用 query_command_log 查看当前项目下已执行命令的成功/失败与已查看路径，再决定本次命令，实现自我进化。具体项目名称、常见路径与配置文件名由你自行检索或根据用户表述判断，提示词中不预设。\n' +
-        '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：先判断是否存在内置工具可完成任务；若有内置工具必须优先使用，禁止安装依赖。仅当确实不存在内置替代方案时，才可执行最小化安装步骤并继续任务；安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
-        'TTS/语音场景是强制例外：必须优先使用内置工具，不要安装依赖。先用 tts_voice_manager(list_voices/list_aliases) 获取音色与别名，再用 tts_voice_manager(set_alias/set_default) 记录用户选择；飞书发送用 feishu_send_message 的 audio_* 参数，Telegram 发送用 telegram_send_message 的 audio_* 参数；不要执行 npm/brew/pip 安装 node-edge-tts 或其他 TTS 依赖。\n' +
+        '当用户要求修改或配置**本机其他项目**、某仓库或用户提到的任意名称时：自行决定用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不要未执行就称找不到或向用户索要路径。可先调用 query_command_log 查看当前项目下已执行命令的成功/失败与已查看路径，再决定本次命令，实现自我进化。具体项目名称、常见路径与配置文件名由你自行检索或根据用户表述判断，提示词中不预设。\n' +
+        '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：先判断是否存在内置工具可完成任务；若有内置工具建议优先使用，避免安装依赖。仅当确实不存在内置替代方案时，再执行最小化安装步骤并继续任务；安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
+        'TTS/语音场景建议优先使用内置工具，不要安装依赖。先用 tts_voice_manager(list_voices/list_aliases) 获取音色与别名，再用 tts_voice_manager(set_alias/set_default) 记录用户选择；飞书发送用 feishu_send_message 的 audio_* 参数，Telegram 发送用 telegram_send_message 的 audio_* 参数；不要执行 npm/brew/pip 安装 node-edge-tts 或其他 TTS 依赖。\n' +
         `默认工作空间：${getWorkspaceRoot()}。\n` +
         `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
         '**回复风格**：不要写「我来帮你…」「让我执行…」等固定话术；不要输出「可能的原因和建议」「请提供以下任一信息」等模板式列表。直接执行、根据结果继续或简短说明已尝试与下一步。未明确要求修改外部项目时，默认在 OpenUltron 内完成。'
@@ -244,8 +217,8 @@ class Orchestrator {
         memParts.push(
           '[飞书附件处理规则]\n' +
           '当用户消息中已包含附件的 local_path（例如 [Inbound Attachment Paths] 或 local_path: /...）时：\n' +
-          '1) 必须优先使用这些路径读取/分析；\n' +
-          '2) 不要在 ~/Downloads 或其他目录盲目搜索同名文件；\n' +
+          '1) 请优先使用这些路径读取/分析；\n' +
+          '2) 避免在 ~/Downloads 或其他目录盲目搜索同名文件；\n' +
           '3) 若路径读取失败，再明确说明失败原因并给出下一步。'
         )
       }
@@ -280,13 +253,13 @@ class Orchestrator {
       // 回复与自我介绍：仅用 IDENTITY/SOUL，禁止通用话术（尤其飞书等渠道）
       memParts.push(
         '[回复与自我介绍]\n' +
-        '打招呼、回复「你好」「在吗」或自我介绍时，**严格只按 IDENTITY.md 与 SOUL.md** 中的名字、语气与身份来回复。禁止自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术；若 IDENTITY 里已有名字与 vibe，就用该名字与语气，不要额外套用上述模板。'
+        '打招呼、回复「你好」「在吗」或自我介绍时，请按 IDENTITY.md 与 SOUL.md 中的名字、语气与身份来回复。不要自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术；若 IDENTITY 里已有名字与 vibe，就用该名字与语气，不要额外套用上述模板。'
       )
       // 上下文消歧 + 正确路径：名字/身份指本应用；文件在应用根目录，非 prompts 下
       memParts.push(
         '[名字与身份修改]\n' +
         '当用户说「改名字」「改身份」「修改角色」「你可以修改名字/身份吗」等且**未明确说是某外部项目**时，指**本应用（OpenUltron）**的身份配置。\n' +
-        '**正确路径**：IDENTITY.md、SOUL.md 位于**应用根目录**（与 prompts 目录同级），例如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md。文件名必须为**大写** IDENTITY.md、SOUL.md，**不要**写入 prompts/ 目录，**不要**使用 identity.md（小写）。修改时请用 file_operation 写入上述路径，或引导用户点击「编辑我的名字与角色」打开正确文件。'
+        '**正确路径**：IDENTITY.md、SOUL.md 位于**应用根目录**（与 prompts 目录同级），例如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md。文件名请使用**大写** IDENTITY.md、SOUL.md，请勿写入 prompts/ 目录或使用 identity.md（小写）。修改时请用 file_operation 写入上述路径，或引导用户点击「编辑我的名字与角色」打开正确文件。'
       )
 
       // 2.2 USER.md（用户信息：姓名、时区、工作、偏好等）
@@ -318,7 +291,7 @@ class Orchestrator {
       // 2.8 可用供应商与模型（主会话 vs 子任务；先验证再切换）
       memParts.push(
         '[可用供应商与模型]\n' +
-        '**主会话**的供应商与模型由用户在设置页配置。为**子任务**指定模型请用 sessions_spawn(provider=..., model=...)，勿用 ai_config_control 改主会话以免错配。若必须改主会话：先调用 verify_provider_model(provider=..., model=...) 验证该供应商+模型可用，仅当返回 success 后再调用 ai_config_control 的 switch_provider 或 switch_model（switch_model 切到别家模型时须同时传 provider）。\n' +
+        '**主会话**的供应商与模型由用户在设置页配置。为**子任务**指定模型请用 sessions_spawn(provider=..., model=...)，勿用 ai_config_control 改主会话以免错配。若需改主会话：先调用 verify_provider_model(provider=..., model=...) 验证该供应商+模型可用，仅当返回 success 后再调用 ai_config_control 的 switch_provider 或 switch_model（switch_model 切到别家模型时请同时传 provider）。\n' +
         '用户问当前/可用模型时，可选用 list_configured_models 或 list_providers_and_models 获取配置后回答，也可根据上下文自然回答。\n' +
         '派生子 Agent：可先 verify_provider_model(provider, model) 确认可用，再 sessions_spawn(task=..., provider=..., model=...)。'
       )
@@ -414,7 +387,6 @@ class Orchestrator {
     }
 
     try {
-      let toolNudgeCount = 0
       while (iteration < safeMax) {
         if (abortController.signal.aborted) break
 
@@ -669,23 +641,6 @@ class Orchestrator {
         // 模型本轮未返回 tool_calls，仅文本回复
         const contentPreview = response?.content ? String(response.content).trim().slice(0, 120) : ''
         appLogger?.info?.('[AI] 本轮模型未返回工具调用，仅文本回复', { contentPreview: contentPreview || '(空)' })
-        // 若回复文本「属于」当前携带的某一工具（关键词匹配），说明模型在说但未调用，注入一次动态提示要求先调用该工具
-        const lastRoundHadTools = currentMessages.some(m => m.role === 'tool')
-        const matchedTool = findToolMentionedInContent(response?.content, sanitizedTools)
-        if (matchedTool && lastRoundHadTools && toolNudgeCount < 1) {
-          toolNudgeCount++
-          appLogger?.info?.('[AI] 回复内容涉及工具但未调用，注入提示后继续', { toolName: matchedTool.name })
-          currentMessages.push({
-            role: 'assistant',
-            content: response ? normalizeAssistantContent(response.content || null) : null
-          })
-          currentMessages.push({
-            role: 'user',
-            content: `[系统] 你上条回复涉及「${matchedTool.displayName}」相关操作，但未实际调用该工具。请先调用工具 ${matchedTool.name} 执行后再用文字总结。`,
-            _hideInUI: true
-          })
-          continue
-        }
         currentMessages.push({
           role: 'assistant',
           content: response ? normalizeAssistantContent(response.content || null) : null

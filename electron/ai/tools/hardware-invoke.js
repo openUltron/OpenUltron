@@ -6,7 +6,7 @@ const hardwareRegistry = require('../../extensions/hardware-registry')
 const openultronConfig = require('../../openultron-config')
 
 const definition = {
-  description: '调用本机硬件能力。用户要求「桌面原生通知」「本机系统通知」「桌面弹窗」时，必须用本工具：capabilityId=notify, method=show, args={ title, body }（可选 silent）。另支持 screen.capture 截取内置浏览器截图。参数 capabilityId 与 method 必填；各能力可在 openultron.json 的 hardware 下开关。',
+  description: '调用本机硬件能力。用户要求「桌面原生通知」「本机系统通知」「桌面弹窗」时，请使用本工具：capabilityId=notify, method=show, args={ title, body }（可选 silent）。另支持 screen.capture 截取内置浏览器截图。参数 capabilityId 与 method 必填；各能力可在 openultron.json 的 hardware 下开关。',
   parameters: {
     type: 'object',
     properties: {

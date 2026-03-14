@@ -3781,10 +3781,10 @@ function buildDelegatedTaskWithParentContext(task = '', { projectPath = '', pare
 async function runByInternalSubAgent({ task, systemPrompt, roleName, model, projectPath, provider, eventSink, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId, capability }, subSessionId) {
   const messages = []
   const rolePrompt = roleName && String(roleName).trim()
-    ? `你当前扮演的角色是「${String(roleName).trim()}」。请严格按该角色完成任务，并仅输出该角色应给出的结果。`
+    ? `你当前扮演的角色是「${String(roleName).trim()}」。请按该角色完成任务，并仅输出该角色应给出的结果。`
     : ''
   const capabilityPrompt = capability === 'docs'
-    ? '本任务属于飞书文档写作/修改能力。你必须优先调用文档能力工具（feishu_doc_capability 或可用的 lark docx 工具）执行真实创建/修改；不要只返回纯文本草稿。完成后返回文档链接/ID与变更摘要。'
+    ? '本任务属于飞书文档写作/修改能力。请优先调用文档能力工具（feishu_doc_capability 或可用的 lark docx 工具）执行真实创建/修改；不要只返回纯文本草稿。完成后返回文档链接/ID与变更摘要。'
     : ''
   const deliveryPrompt = buildSubAgentDeliveryPrompt(projectPath || '')
   const mergedSystemPrompt = [rolePrompt, capabilityPrompt, systemPrompt && String(systemPrompt).trim() ? String(systemPrompt).trim() : '', deliveryPrompt]

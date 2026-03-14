@@ -3,7 +3,7 @@
  */
 
 const definition = {
-  description: '获取当前可用的 AI 供应商及其「测试过可用」的模型列表。当用户问「有哪些模型可以用」「能使用哪些模型」「配置了哪些供应商/模型」时必须调用本工具并依据返回结果逐项列出，不得只回复需配置 API Key。仅包含：已配置 API Key 且至少有一个已验证模型的供应商。也可用于派生子 Agent（sessions_spawn）时选择 provider 与 model。',
+  description: '获取当前可用的 AI 供应商及其「测试过可用」的模型列表。用户问可用模型、供应商/模型配置时，可调用本工具并依据返回结果回答。仅包含：已配置 API Key 且至少有一个已验证模型的供应商。也可用于派生子 Agent（sessions_spawn）时选择 provider 与 model。',
   parameters: {
     type: 'object',
     properties: {},

@@ -1,7 +1,7 @@
 // AI 配置控制工具：让 AI 可切换模型、修改 API Key、切换供应商（主会话配置；子任务用 sessions_spawn 指定 provider/model）
 
 const definition = {
-  description: '修改主会话的 AI 配置：切换供应商、切换模型、或设置某供应商的 API Key。切换前应先调用 verify_provider_model(provider=..., model=...) 确认该组合可用，再调用本工具，否则错配会导致主会话无法对话。为子任务指定模型请用 sessions_spawn，勿用本工具改主会话。switch_provider 会同时切换默认模型；switch_model 可同时传 provider 以连带切换供应商。',
+  description: '修改主会话的 AI 配置：切换供应商、切换模型、或设置某供应商的 API Key。切换前建议先调用 verify_provider_model(provider=..., model=...) 确认该组合可用，再调用本工具，否则错配可能导致主会话无法对话。为子任务指定模型请用 sessions_spawn，勿用本工具改主会话。switch_provider 会同时切换默认模型；switch_model 可同时传 provider 以连带切换供应商。',
   parameters: {
     type: 'object',
     properties: {

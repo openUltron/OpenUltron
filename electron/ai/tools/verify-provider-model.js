@@ -1,9 +1,9 @@
 /**
- * 验证某供应商下某模型是否可用（发一次最小 chat 请求）。AI 在切换主会话模型/供应商前应先调用本工具确认可用再切换。
+ * 验证某供应商下某模型是否可用（发一次最小 chat 请求）。切换主会话模型/供应商前可先调用本工具确认可用再切换。
  */
 
 const definition = {
-  description: '验证指定供应商下的某模型是否可用（发送一次最小请求测试）。仅用于 OpenAI 兼容的对话 API（供应商 base_url + 模型 ID），不适用于 Leonardo、Playground 等生图服务。切换主会话的模型或供应商前应先调用本工具确认可用再调用 ai_config_control；若用户要求「验证 Leonardo / Playground / 生图 Key」，请直接说明当前不支持，勿反复调用本工具。',
+  description: '验证指定供应商下的某模型是否可用（发送一次最小请求测试）。仅用于 OpenAI 兼容的对话 API（供应商 base_url + 模型 ID），不适用于 Leonardo、Playground 等生图服务。切换主会话的模型或供应商前可先调用本工具确认可用再调用 ai_config_control；若用户要求「验证 Leonardo / Playground / 生图 Key」，请直接说明当前不支持，勿反复调用本工具。',
   parameters: {
     type: 'object',
     properties: {

@@ -6,7 +6,7 @@ const openultronConfig = require('../../openultron-config')
 const hardwareRegistry = require('../../extensions/hardware-registry')
 
 const definition = {
-  description: '在用户桌面显示一条系统原生通知（操作系统通知中心/角标弹窗）。用户要求「桌面原生通知」「本机系统通知」「桌面弹窗」时必须用本工具，不要用飞书、浏览器或 webview_control 模拟。',
+  description: '在用户桌面显示一条系统原生通知（操作系统通知中心/角标弹窗）。用户要求「桌面原生通知」「本机系统通知」「桌面弹窗」时请使用本工具，不要用飞书、浏览器或 webview_control 模拟。',
   parameters: {
     type: 'object',
     properties: {
