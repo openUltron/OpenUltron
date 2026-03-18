@@ -631,6 +631,13 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
         }
       }
       if (payload.files && payload.files.length > 0) {
+        const AUDIO_EXTS = new Set(['.opus', '.mp3', '.wav', '.m4a', '.aac', '.ogg', '.flac', '.aiff', '.caf', '.webm', '.mp4'])
+        // 仅在“明确要飞书语音消息”时才把音频附件按语音发送；否则保持默认（音频当文件发送）。
+        // 这样既能满足「发语音消息」诉求，也避免「转成mp3发我」被误判成语音。
+        const wantsVoiceMessage = /\bvoice\s*message\b/i.test(textRaw)
+          || /(发|给我发|发个|发一条).{0,6}语音消息/.test(textRaw)
+          || /(用|发).{0,6}语音(介绍|回复|说|说一下|发一下)/.test(textRaw)
+        const mentionsMp3 = /\bmp3\b/i.test(textRaw) || /转成\s*mp3/.test(textRaw)
         for (const f of payload.files) {
           const p = String((f && f.path) || '').trim()
           if (!p || !fs.existsSync(p)) continue
@@ -641,13 +648,39 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
             continue
           }
           const ext = path.extname(p).toLowerCase()
+          const fileName = (f && f.name) ? String(f.name) : path.basename(p)
+          if (!mentionsMp3 && wantsVoiceMessage && AUDIO_EXTS.has(ext)) {
+            const audioResult = await feishuNotify.sendMessage({
+              chat_id: chatId,
+              audio_file_path: p,
+              audio_file_name: fileName
+            })
+            appLogger?.info?.('[Feishu] 语音(由文件触发)发送结果', {
+              chatId: chatId || '',
+              path: p,
+              fileName,
+              success: !!(audioResult && audioResult.success),
+              message: audioResult && audioResult.message ? String(audioResult.message).slice(0, 200) : ''
+            })
+            if (audioResult && audioResult.success) {
+              fileSent++
+              continue
+            }
+            // 语音发送失败时，降级为文件发送一次，避免出现“无限尝试”
+            appLogger?.warn?.('[Feishu] 语音(由文件触发)发送失败，降级为文件发送', {
+              chatId: chatId || '',
+              path: p,
+              fileName,
+              reason: (audioResult && audioResult.message) || '未知'
+            })
+          }
           if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) {
             const buf = fs.readFileSync(p)
             if (!buf || buf.length === 0) continue
             const imgResult = await feishuNotify.sendMessage({
               chat_id: chatId,
               image_base64: buf.toString('base64'),
-              image_filename: (f && f.name) ? String(f.name) : path.basename(p)
+              image_filename: fileName
             })
             if (!imgResult || !imgResult.success) {
               imageFailed++
@@ -660,12 +693,12 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
           const result = await feishuNotify.sendMessage({
             chat_id: chatId,
             file_path: p,
-            file_name: (f && f.name) ? String(f.name) : path.basename(p)
+            file_name: fileName
           })
           appLogger?.info?.('[Feishu] 文件发送结果', {
             chatId: chatId || '',
             path: p,
-            fileName: (f && f.name) ? String(f.name) : path.basename(p),
+            fileName,
             success: !!(result && result.success),
             message: result && result.message ? String(result.message).slice(0, 200) : ''
           })

@@ -202,6 +202,27 @@ function createDefaultRegistry(options = {}) {
     console.warn('加载 feishu_send_message 工具失败:', e.message)
   }
 
+  // 飞书语音消息：专用工具（自动转 OPUS、上传、发送）
+  try {
+    registry.register('feishu_send_voice_message', require('./tools/feishu-send-voice-message'))
+  } catch (e) {
+    console.warn('加载 feishu_send_voice_message 工具失败:', e.message)
+  }
+
+  // 飞书文件/图片消息：专用工具（图片自动按图片发送，其它按文件发送）
+  try {
+    registry.register('feishu_send_file_message', require('./tools/feishu-send-file-message'))
+  } catch (e) {
+    console.warn('加载 feishu_send_file_message 工具失败:', e.message)
+  }
+
+  // 飞书语音消息：专用工具（自动转 OPUS、上传、发送）
+  try {
+    registry.register('feishu_send_voice_message', require('./tools/feishu-send-voice-message'))
+  } catch (e) {
+    console.warn('加载 feishu_send_voice_message 工具失败:', e.message)
+  }
+
   // 飞书文档能力：创建/读取/追加改写副本
   try {
     registry.register('feishu_doc_capability', require('./tools/feishu-doc-capability'))

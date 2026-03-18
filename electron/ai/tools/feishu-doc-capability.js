@@ -618,6 +618,9 @@ async function execute(args = {}, context = {}) {
     const createLikeActions = new Set(['create', 'append_copy', 'rewrite_copy'])
     const preferUserSpaceForCreate = createLikeActions.has(action)
       && (createInUserSpaceByArg != null ? createInUserSpaceByArg : !!feishuCfg.doc_create_in_user_space)
+    // 若用户显式要求「用户空间创建」，则不允许降级到 tenant token（因为这会改变写入归属空间）。
+    // 否则，user token 缺失/失效时允许降级到 tenant token，并在结果中显式告知“已降级写入应用空间”。
+    const requireUserForThisAction = createLikeActions.has(action) && createInUserSpaceByArg === true
     const tenantKey = String(context?.feishuTenantKey || '').trim()
     let docHost = normalizeDocHost(String(context?.feishuDocHost || '').trim())
     log?.info?.('[FeishuDocCapability] 执行开始', {
@@ -628,12 +631,15 @@ async function execute(args = {}, context = {}) {
       doc_host: docHost || '',
       prefer_user_space: preferUserSpaceForCreate
     })
+    const authPreferUser = preferUserSpaceForCreate
     const auth = await withFeishuToken({
-      preferUser: preferUserSpaceForCreate,
-      allowTenantFallback: true
+      preferUser: authPreferUser,
+      allowTenantFallback: !requireUserForThisAction
     })
-    const token = String(auth?.token || '').trim()
-    const tokenType = String(auth?.tokenType || 'tenant').trim()
+    let token = String(auth?.token || '').trim()
+    let tokenType = String(auth?.tokenType || 'tenant').trim()
+    let tokenSource = String(auth?.source || '').trim()
+    let degradedToTenant = authPreferUser && tokenType === 'tenant' && !requireUserForThisAction
     // 优先公司域名：当上下文域名为空或为通用域时，tenant.query 始终用应用权限调用。
     if (!docHost || isGenericFeishuHost(docHost)) {
       try {
@@ -649,6 +655,27 @@ async function execute(args = {}, context = {}) {
       }
     }
     const urlOptions = { tenantKey, docHost }
+
+    function shouldRetryByTenant(err) {
+      if (!err) return false
+      if (err && err.code === 'FEISHU_USER_TOKEN_MISSING') return false
+      // 文档 API 常见错误：token 失效/不支持、权限不足、scope 不足、HTTP 401/403 等。
+      const msg = String(err?.message || err || '').toLowerCase()
+      return (
+        msg.includes('invalid access token') ||
+        msg.includes('access token') ||
+        msg.includes('unauthorized') ||
+        msg.includes('forbidden') ||
+        msg.includes('permission') ||
+        msg.includes('scope') ||
+        /9999166\d/.test(msg) ||
+        /http\s*(401|403)/.test(msg)
+      )
+    }
+
+    const tenantDegradeNotice = '⚠️ 检测到用户 token 不可用或不具备调用权限，已降级为应用身份（tenant token）执行文档操作：写入将落在应用/机器人可访问的空间中。'
+
+    const run = async () => {
 
     if (action === 'create') {
     const markdown = String(args.markdown || '').trim()
@@ -673,6 +700,8 @@ async function execute(args = {}, context = {}) {
       success: true,
       action,
       token_type: tokenType,
+      token_source: tokenSource,
+      degraded_to_tenant: degradedToTenant,
       document_id: documentId || '',
       url,
       message: documentId
@@ -683,6 +712,7 @@ async function execute(args = {}, context = {}) {
       raw: res,
       grant_result: grant
     }
+    if (degradedToTenant) result.notice = tenantDegradeNotice
     if (write_result) {
       result.content_lines = Number(write_result?.lines || 0)
       result.write_block_id = String(write_result?.block_id || '')
@@ -704,11 +734,14 @@ async function execute(args = {}, context = {}) {
       success: true,
       action,
       token_type: tokenType,
+      token_source: tokenSource,
+      degraded_to_tenant: degradedToTenant,
       document_id: pickDocumentId(args.document_id),
       content,
       message: content ? '读取成功' : '读取成功，但内容为空',
       raw: res
     }
+    if (degradedToTenant) result.notice = tenantDegradeNotice
     log?.info?.('[FeishuDocCapability] 执行完成', {
       action,
       success: true,
@@ -925,9 +958,12 @@ async function execute(args = {}, context = {}) {
         success: true,
         action,
         token_type: tokenType,
+        token_source: tokenSource,
+        degraded_to_tenant: degradedToTenant,
         document_id: sourceId,
         message: '文档已删除',
-        raw: del
+        raw: del,
+        ...(degradedToTenant ? { notice: tenantDegradeNotice } : {})
       }
     }
 
@@ -946,7 +982,8 @@ async function execute(args = {}, context = {}) {
       return {
         success: true,
         action,
-        token_type: 'user',
+        token_type: String(searchAuth?.tokenType || 'tenant'),
+        token_source: String(searchAuth?.source || ''),
         query: String(args.query || '').trim(),
         total: Number(searchRes?.data?.total || searchRes?.data?.count || items.length || 0),
         count: items.length,
@@ -971,7 +1008,8 @@ async function execute(args = {}, context = {}) {
       return {
         success: true,
         action,
-        token_type: 'user',
+        token_type: String(searchAuth?.tokenType || 'tenant'),
+        token_source: String(searchAuth?.source || ''),
         query: String(args.query || '').trim(),
         count: items.length,
         page_token: String(searchRes?.data?.page_token || '').trim(),
@@ -982,6 +1020,41 @@ async function execute(args = {}, context = {}) {
     }
 
     return { success: false, error: `不支持的 action: ${action}` }
+    }
+
+    try {
+      const out = await run()
+      if (degradedToTenant && out && out.success && !out.notice) out.notice = tenantDegradeNotice
+      return out
+    } catch (e) {
+      // preferUser 且当前拿到的确实是 user token 时，若调用失败则尝试用 tenant token 再跑一遍（除非强制用户空间）。
+      if (authPreferUser && tokenType === 'user' && !requireUserForThisAction && shouldRetryByTenant(e)) {
+        log?.warn?.('[FeishuDocCapability] user token 调用失败，降级 tenant token 重试', {
+          action,
+          error: String(e?.message || e || '').slice(0, 200)
+        })
+        const firstErr = e
+        try {
+          token = await withTenantToken()
+          tokenType = 'tenant'
+          tokenSource = 'tenant_access_token'
+          degradedToTenant = true
+          const out = await run()
+          if (out && typeof out === 'object') {
+            out.degraded_to_tenant = true
+            out.token_type = 'tenant'
+            out.token_source = tokenSource
+            if (!out.notice) out.notice = tenantDegradeNotice
+            out.user_attempt_error = String(firstErr?.message || firstErr || '')
+          }
+          return out
+        } catch (_) {
+          // tenant 重试仍失败则抛原错误（更贴近用户真实问题）
+          throw firstErr
+        }
+      }
+      throw e
+    }
   } catch (e) {
     if (e && e.code === 'FEISHU_USER_TOKEN_MISSING') {
       return {

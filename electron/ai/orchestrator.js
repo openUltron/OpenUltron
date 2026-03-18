@@ -196,7 +196,7 @@ class Orchestrator {
         '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
         '当用户要求修改或配置**本机其他项目**、某仓库或用户提到的任意名称时：自行决定用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不要未执行就称找不到或向用户索要路径。可先调用 query_command_log 查看当前项目下已执行命令的成功/失败与已查看路径，再决定本次命令，实现自我进化。具体项目名称、常见路径与配置文件名由你自行检索或根据用户表述判断，提示词中不预设。\n' +
         '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：先判断是否存在内置工具可完成任务；若有内置工具建议优先使用，避免安装依赖。仅当确实不存在内置替代方案时，再执行最小化安装步骤并继续任务；安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
-        'TTS/语音场景建议优先使用内置工具，不要安装依赖。先用 tts_voice_manager(list_voices/list_aliases) 获取音色与别名，再用 tts_voice_manager(set_alias/set_default) 记录用户选择；飞书发送用 feishu_send_message 的 audio_* 参数，Telegram 发送用 telegram_send_message 的 audio_* 参数；不要执行 npm/brew/pip 安装 node-edge-tts 或其他 TTS 依赖。\n' +
+        'TTS/语音场景建议优先使用内置工具，不要安装依赖。先用 tts_voice_manager(list_voices/list_aliases) 获取音色与别名，再用 tts_voice_manager(set_alias/set_default) 记录用户选择；飞书「语音消息」优先用 feishu_send_voice_message（audio_text 或 audio_file_path，会自动转 OPUS 上传发送），也可用 feishu_send_message 的 audio_* 参数；Telegram 发送用 telegram_send_message 的 audio_* 参数；不要执行 npm/brew/pip 安装 node-edge-tts 或其他 TTS 依赖。\n' +
         '**用户明确要求「用语音」「语音介绍」「发语音」时，必须实际调用工具**（如 feishu_send_message 的 audio_text、或 execute_command 生成音频后 audio_file_path 发送），不得仅用文字回复声称已完成而未调用任何工具。\n' +
         `默认工作空间：${getWorkspaceRoot()}。\n` +
         `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
