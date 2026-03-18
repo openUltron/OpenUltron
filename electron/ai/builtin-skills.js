@@ -17,7 +17,7 @@ function loadAgentBrowserPrompt() {
 
 Browser automation CLI for AI agents. Source: https://github.com/vercel-labs/agent-browser
 
-Use when the user needs to interact with websites: navigate, fill forms, click buttons, take screenshots, scrape data, test web apps, or automate browser tasks. Run via \`execute_command\`: \`npx agent-browser open <url>\`, \`agent-browser snapshot -i\`, \`agent-browser click @e1\`, etc. If agent-browser CLI is not available, use webview_control or chrome-devtools MCP as fallback.`
+Use when the user needs to interact with websites: navigate, fill forms, click buttons, take screenshots, scrape data, test web apps, or automate browser tasks. Run via \`execute_command\`: \`npx agent-browser open <url>\`, \`agent-browser snapshot -i\`, \`agent-browser click @e1\`, etc. If agent-browser CLI is not available, use chrome-devtools MCP (preferred; no built-in webview).`
 }
 
 const BUILTIN_SKILLS = [

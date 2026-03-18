@@ -5141,7 +5141,7 @@ function getToolsForChat(opts = {}) {
   const rest = all.filter(t => !CHROME_DEVTOOLS_TOOL_PREFIX_REGEX.test(t.function?.name || ''))
   if (chromeDevtools.length === 0 && !_loggedNoChromeDevtoolsOnce) {
     _loggedNoChromeDevtoolsOnce = true
-    appLogger?.info?.('[MCP] getToolsForChat: chrome-devtools 未提供工具（可能未就绪或启动失败），截图将不可用或请用 webview_control。可查看上方 [MCP] 启动日志。')
+    appLogger?.info?.('[MCP] getToolsForChat: chrome-devtools 未提供工具（可能未就绪或启动失败），浏览器自动化将不可用，请确保 chrome-devtools MCP 已启用。可查看上方 [MCP] 启动日志。')
   }
   return [...chromeDevtools, ...rest]
 }

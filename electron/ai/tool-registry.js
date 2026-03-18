@@ -92,12 +92,7 @@ function createDefaultRegistry(options = {}) {
     }
   }
 
-  // webview_control：主进程 BrowserWindow，直接注册（不再依赖渲染进程）
-  try {
-    registry.register('webview_control', require('./tools/webview-control'))
-  } catch (e) {
-    console.warn('加载 webview_control 工具失败:', e.message)
-  }
+  // 浏览器自动化已统一走 chrome-devtools MCP，不再注册内置 webview_control
 
   // get_skill 需要 getSkills、可选 getSkillsSources、getSandboxSkills（沙箱列表）
   if (options.getSkills) {

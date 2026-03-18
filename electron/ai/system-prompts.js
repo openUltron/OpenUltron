@@ -20,7 +20,7 @@ function getDefaultPrompts() {
 
     'feishu-session': `[飞书会话]
 当前会话来自飞书。回复「你好」「在吗」或自我介绍时，请按 IDENTITY.md 与 SOUL.md 中的名字与语气，勿自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术。
-用户要求「截图发给我」时，优先用 chrome-devtools MCP 截图；不可用时用 webview_control 的 take_screenshot。截图前建议先等待页面渲染就绪（如 wait_for / wait_for_load），避免在刚打开页面瞬间立刻截图。截图或文件产出后应返回产物路径与执行结论，由主 Agent 统一发送给用户。`,
+用户要求「截图发给我」时，必须用 chrome-devtools MCP（take_snapshot 等）截图。截图前建议先等待页面渲染就绪（如 wait_for / wait_for_load），避免在刚打开页面瞬间立刻截图。截图或文件产出后应返回产物路径与执行结论，由主 Agent 统一发送给用户。`,
 
     'feishu-docs': `[飞书文档能力]
 当用户要求「写飞书文档/改飞书文档/追加内容/润色/重写/导出文档」时，建议优先调用文档能力工具执行，不要只返回纯文本草稿。
@@ -43,8 +43,8 @@ function getDefaultPrompts() {
 建议避免对同一问题重复多次调用；获得结果后即可作答。`,
 
     'browser-automation': `[浏览器自动化]
-需要打开网页、截图、点击、填表、执行 JS、多标签、网络/控制台调试等时：建议首先使用 chrome-devtools MCP 提供的工具（工具名称以 mcp__chrome_devtools__ 开头，如 navigate_page、take_snapshot、click、fill 等）。仅当该 MCP 不可用或调用报错时，再使用内置 webview_control（导航、截图、execute_js、click_element、fill、take_snapshot、wait_for、handle_dialog 等）。建议先尝试 chrome-devtools 再考虑 webview_control。
-截图前建议先等待页面渲染完成：先执行 wait_for / wait_for_load（或等到目标文本出现），再 take_screenshot，避免白板图。
+需要打开网页、截图、点击、填表、执行 JS、多标签、网络/控制台调试等时：必须使用 chrome-devtools MCP 提供的工具（工具名称以 mcp__chrome_devtools__ 开头，如 navigate_page、take_snapshot、click、fill 等）。无内置 webview 兜底，请优先使用 Chrome（chrome-devtools）。若 MCP 未就绪，请提示用户启用 chrome-devtools MCP 后重试。
+截图前建议先等待页面渲染完成：先执行 wait_for / wait_for_load（或等到目标文本出现），再 take_snapshot 或截图，避免白板图。
 处理文档（如 ppt/pptx/pdf/docx/xlsx/zip）时：不要在浏览器中直接打开二进制下载链接，不要触发下载按钮；优先读取本地文件路径并用脚本/工具提取内容。`,
 
     'desktop-notification': `[桌面原生通知]
@@ -158,7 +158,7 @@ These Markdown files are injected into the AI system context. You can edit them 
 - **feishu-sheets-bitable.md** – Feishu sheets/bitable execution behavior.
 - **realtime-info.md** – When to use web_fetch / web_search for live information.
 - **feishu-docs.md** – Feishu doc authoring/editing behavior.
-- **browser-automation.md** – chrome-devtools MCP vs webview_control.
+- **browser-automation.md** – chrome-devtools MCP only (no built-in webview).
 - **desktop-notification.md** – When to use show_desktop_notification.
 - **learn-skill-flow.md** – Steps for "learn a new skill" (sandbox → validate → promote).
 - **learn-from-web-openclaw.md** – Steps for learning from the web (OpenClaw community, etc.).

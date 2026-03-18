@@ -552,7 +552,7 @@ const buildSystemPrompt = () => {
   parts.push(
     '## 联网与实时信息\n' +
     '1) 搜索：当用户询问天气、新闻、股价、实时事件、技术文档等时，**必须调用已配置的 MCP 搜索工具**（如 Serper、Brave Search 等）。若未配置任何搜索 MCP，告知用户需在设置中添加搜索类 MCP（如 serper-mcp）。禁止对同一问题重复多次调用；获得结果后立即作答。\n' +
-    '2) 抓取链接：当用户给出具体 URL 时，优先用 `web_fetch` 抓取正文；需登录或动态渲染时，**优先使用 chrome-devtools MCP**（已内置，能力最强）；chrome-devtools 失败或不可用时再用内置 `webview_control`（打开/截屏/点击/填表/执行 JS 等）。两者互补，webview 扩展 Chrome 不可用时的能力。'
+    '2) 抓取链接：当用户给出具体 URL 时，优先用 `web_fetch` 抓取正文；需登录或动态渲染时，**必须使用 chrome-devtools MCP**（打开/截屏/点击/填表/执行 JS 等）。无内置 webview 兜底，请确保 chrome-devtools MCP 已启用。'
   )
   parts.push(
     '## 经验总结与知识库\n' +
