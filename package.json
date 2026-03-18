@@ -1,7 +1,7 @@
 {
   "name": "openultron",
   "private": true,
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "OpenUltron - AI-first desktop app, enhanced OpenClaw with memory import",
   "author": "OpenUltron",
   "license": "MIT",
