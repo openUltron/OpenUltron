@@ -4,12 +4,12 @@
 const conversationFile = require('../conversation-file')
 
 const definition = {
-  description: '读取指定会话的完整对话历史（消息列表）。需提供 sessionId；projectPath 不传时默认为 __main_chat__。返回 messages 数组（role + content）。',
+  description: '读取指定会话的完整对话历史（消息列表）。需提供 sessionId；projectPath 不传时默认为 __main_chat__。可读取任意项目下的任意会话，无隔离限制。返回 messages 数组（role + content）。',
   parameters: {
     type: 'object',
     properties: {
       sessionId: { type: 'string', description: '会话 ID' },
-      projectPath: { type: 'string', description: '可选。项目路径，如 __feishu__、__gateway__', default: '__main_chat__' }
+      projectPath: { type: 'string', description: '可选。项目路径，如 __main_chat__、__feishu__、__gateway__', default: '__main_chat__' }
     },
     required: ['sessionId']
   }
@@ -21,11 +21,7 @@ async function execute(args, context = {}) {
     return { success: false, error: '缺少 sessionId' }
   }
   try {
-    const ctxProjectPath = context.projectPath && String(context.projectPath).trim() ? String(context.projectPath).trim() : ''
-    const targetProjectPath = projectPath && String(projectPath).trim() ? String(projectPath).trim() : (ctxProjectPath || '__main_chat__')
-    if (ctxProjectPath && targetProjectPath !== ctxProjectPath) {
-      return { success: false, error: `禁止跨项目会话读取：当前 ${ctxProjectPath}，目标 ${targetProjectPath}` }
-    }
+    const targetProjectPath = projectPath && String(projectPath).trim() ? String(projectPath).trim() : '__main_chat__'
     const projectKey = conversationFile.hashProjectPath(targetProjectPath)
     const conv = conversationFile.loadConversation(projectKey, String(sessionId).trim())
     if (!conv) {

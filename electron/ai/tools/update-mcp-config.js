@@ -2,14 +2,14 @@
 function createUpdateMcpConfigTool(store, mcpManager) {
   return {
     definition: {
-      description: '更新 MCP 服务器配置。可以添加、修改或删除 MCP 服务器。配置格式与 Claude Desktop 一致。',
+      description: '更新 MCP 服务器配置，或查询各 MCP 运行状态。可添加、修改、删除服务器；用 status 验证各服务器是否就绪、工具数量及错误信息。',
       parameters: {
         type: 'object',
         properties: {
           action: {
             type: 'string',
-            enum: ['add', 'update', 'remove', 'get'],
-            description: 'add=添加/更新服务器, remove=删除服务器, get=获取当前配置'
+            enum: ['add', 'update', 'remove', 'get', 'status'],
+            description: 'add=添加/更新服务器, remove=删除, get=获取当前配置, status=查询各 MCP 运行状态与可用性'
           },
           name: {
             type: 'string',
@@ -30,6 +30,11 @@ function createUpdateMcpConfigTool(store, mcpManager) {
 
       if (action === 'get') {
         return { config: mcpConfig }
+      }
+
+      if (action === 'status') {
+        const status = mcpManager.getStatus()
+        return { status }
       }
 
       if (action === 'remove') {

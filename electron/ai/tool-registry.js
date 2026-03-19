@@ -55,6 +55,9 @@ function createDefaultRegistry(options = {}) {
     registry.register('feishu_send_message', require('./tools/feishu-send-message'))
   } catch (e) { console.warn('加载 feishu_send_message 工具失败:', e.message) }
   try {
+    registry.register('feishu_get_tenant_token', require('./tools/feishu-get-tenant-token'))
+  } catch (e) { console.warn('加载 feishu_get_tenant_token 工具失败:', e.message) }
+  try {
     registry.register('tts_voice_manager', require('./tools/tts-voice-manager'))
   } catch (e) { console.warn('加载 tts_voice_manager 工具失败:', e.message) }
   try {

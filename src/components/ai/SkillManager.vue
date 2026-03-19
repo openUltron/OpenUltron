@@ -84,7 +84,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { Zap, Pencil, Trash2, Rocket, Eye, Wrench } from 'lucide-vue-next'
 
 // ── 状态 ──────────────────────────────────────────────────
@@ -106,8 +106,15 @@ const groupedSkills = computed(() => {
 })
 
 // ── 生命周期 ──────────────────────────────────────────────
+let unsubscribeSkillsChanged = null
 onMounted(() => {
   loadSkills()
+  if (window.electronAPI?.ai?.onSkillsChanged) {
+    unsubscribeSkillsChanged = window.electronAPI.ai.onSkillsChanged(loadSkills)
+  }
+})
+onUnmounted(() => {
+  if (typeof unsubscribeSkillsChanged === 'function') unsubscribeSkillsChanged()
 })
 
 // ── 数据读写 ──────────────────────────────────────────────

@@ -310,6 +310,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getSkills: () => ipcRenderer.invoke('ai-get-skills'),
     saveSkill: (skill) => ipcRenderer.invoke('ai-save-skill', skill),
     deleteSkill: (data) => ipcRenderer.invoke('ai-delete-skill', data),
+    /** 监听技能列表变更（如 AI 安装技能后），返回取消订阅函数 */
+    onSkillsChanged: (cb) => {
+      ipcRenderer.on('ai-skills-changed', cb)
+      return () => ipcRenderer.removeListener('ai-skills-changed', cb)
+    },
     getSoulMdPath: () => ipcRenderer.invoke('ai-get-soul-md-path'),
     openSoulMd: () => ipcRenderer.invoke('ai-open-soul-md'),
     getIdentityMdPath: () => ipcRenderer.invoke('ai-get-identity-md-path'),

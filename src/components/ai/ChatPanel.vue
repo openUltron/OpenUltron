@@ -539,7 +539,7 @@ const buildSystemPrompt = () => {
   parts.push(
     '## 本地检索与命令自我进化\n' +
     '在项目中查找代码、文件、内容时，**由你自行决定**用哪些命令或 file_operation，不提供固定命令示例。\n' +
-    '**命令执行日志**：每次 execute_command 的成功/失败会写入本地记录。你可通过 **query_command_log**（query 取 summary 或 both）查看当前项目下已执行次数、成功/失败统计、已查看过的目录与文件。请据此自我总结：哪些命令有效、哪些失败，避免重复失败、优化后续命令选择，实现自我进化。不要依赖提示词中的命令列表，以实际执行结果与日志为准。'
+    '**命令执行日志**：每次 execute_command 的成功/失败会写入本地记录。你可通过 **query_command_log**（query 取 summary、both 或 recent_successful_commands）查看当前项目下已执行次数、成功/失败统计、已查看过的目录与文件、以及最近执行成功的命令列表。执行安装类命令（npm/pip/brew install）前请先 query=recent_successful_commands，若相同或等价安装已成功过则不要重复执行。请以实际执行结果与日志为准，实现自我进化。'
   )
   parts.push(
     '## 联网与实时信息\n' +
@@ -1262,24 +1262,26 @@ const handleSend = async (opts = {}) => {
   if (isNewCmd) {
     inputText.value = ''
     adjustTextareaHeight()
-    const summary = buildSessionSummary(messages.value)
-    if (summary) carrySummaryForNextSession.value = summary
+    const localSummary = buildSessionSummary(messages.value)
+    if (localSummary) carrySummaryForNextSession.value = localSummary
     if (currentSessionId.value != null && currentSessionId.value !== '') {
       const userMsg = { role: 'user', content: '/new' }
       const assistantMsg = { role: 'assistant', content: '已归档当前会话并开启新会话。历史记忆将自动继承。' }
       messages.value = [...messages.value, userMsg, assistantMsg]
-      if (summary) {
+      if (localSummary) {
         const summaryMessages = stripToolExecutionForSave(JSON.parse(JSON.stringify(messages.value)))
-        await window.electronAPI.ai.saveSessionSummary({
+        const summaryRes = await window.electronAPI.ai.saveSessionSummary({
           projectPath: historyProjectPath(),
           sessionId: currentSessionId.value,
           messages: summaryMessages
-        }).catch(() => {})
+        }).catch(() => null)
+        const aiSummary = String(summaryRes?.summary || '').trim()
+        if (aiSummary) carrySummaryForNextSession.value = aiSummary
       }
       await persistSave()
     }
     startNewConversation()
-    if (summary) {
+    if (carrySummaryForNextSession.value) {
       messages.value = [{ role: 'assistant', content: '新会话已创建，并继承上一会话摘要。可发送 /history 查看历史摘要。' }]
     }
     return

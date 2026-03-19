@@ -617,6 +617,13 @@ async function getTenantAccessToken() {
   return cachedToken
 }
 
+/** 返回当前 tenant_access_token 及其剩余有效秒数，供 AI 脚本调用飞书开放 API 使用 */
+async function getTenantAccessTokenInfo() {
+  const token = await getTenantAccessToken()
+  const expireIn = Math.max(0, Math.floor((tokenExpireAt - Date.now()) / 1000))
+  return { token, expire_in: expireIn }
+}
+
 async function getAppAccessToken() {
   if (cachedAppToken && Date.now() < appTokenExpireAt - EXPIRE_BUFFER_MS) {
     return cachedAppToken
@@ -1033,7 +1040,7 @@ async function sendMessage(options = {}) {
   const config = getConfig()
   const receiveId = id && id.trim() ? id.trim() : (config.default_chat_id && config.default_chat_id.trim())
   if (!receiveId) {
-    return { success: false, message: '请提供 chat_id/receive_id，或在「飞书通知」中配置默认会话；在飞书内与机器人对话时会自动使用当前会话' }
+    return { success: false, message: '请提供 chat_id/receive_id。在飞书内与机器人对话时会自动使用当前会话；其他场景可从 sessions_list 查询飞书会话的 feishuChatId 作为 chat_id 传入' }
   }
   const receiveIdType = options.receive_id_type || 'chat_id'
 
@@ -1273,6 +1280,7 @@ module.exports = {
   getConfig,
   setConfig,
   getTenantAccessToken,
+  getTenantAccessTokenInfo,
   buildUserAuthorizeUrl,
   exchangeUserAccessTokenByCode,
   refreshUserAccessToken,

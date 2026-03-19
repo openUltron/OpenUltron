@@ -2855,34 +2855,49 @@ function ensureSkillsDir() {
   fs.mkdirSync(_skillsDir, { recursive: true })
 }
 
-// 解析 SKILL.md 文件（支持 YAML frontmatter），id 使用目录名
+// 解析 SKILL.md 文件（支持 YAML frontmatter），id 使用目录名；AI 安装的无 frontmatter 也展示
 function parseSkillFile(skillDir) {
   const dirName = path.basename(skillDir)
   const filePath = path.join(skillDir, 'SKILL.md')
-  const raw = fs.readFileSync(filePath, 'utf-8')
+  let raw
+  try {
+    raw = fs.readFileSync(filePath, 'utf-8')
+  } catch {
+    return null
+  }
   const fm = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$/)
   if (fm) {
-    const meta = {}
-    for (const line of fm[1].split('\n')) {
-      const idx = line.indexOf(':')
-      if (idx > 0) meta[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
-    }
-    return {
-      id: dirName,
-      name: meta.name || dirName,
-      description: meta.description || '',
-      category: meta.category || 'custom',
-      projectType: meta.projectType || 'all',
-      builtIn: meta.builtin === 'true',
-      type: meta.type || 'markdown',
-      prompt: fm[2].trim(),
-      source: 'app'
+    try {
+      const meta = {}
+      for (const line of fm[1].split('\n')) {
+        const idx = line.indexOf(':')
+        if (idx > 0) meta[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+      }
+      return {
+        id: dirName,
+        name: meta.name || dirName,
+        description: meta.description || '',
+        category: meta.category || 'custom',
+        projectType: meta.projectType || 'all',
+        builtIn: meta.builtin === 'true',
+        type: meta.type || 'markdown',
+        prompt: (fm[2] || '').trim(),
+        source: 'app'
+      }
+    } catch {
+      // frontmatter 解析异常时仍展示技能，用目录名和全文内容
     }
   }
   return {
-    id: dirName, name: dirName,
-    description: '', category: 'custom', projectType: 'all',
-    builtIn: false, type: 'markdown', prompt: raw.trim(), source: 'app'
+    id: dirName,
+    name: dirName,
+    description: '',
+    category: 'custom',
+    projectType: 'all',
+    builtIn: false,
+    type: 'markdown',
+    prompt: (raw || '').trim(),
+    source: 'app'
   }
 }
 
@@ -2913,7 +2928,10 @@ function readAllSkills() {
     try { if (!fs.statSync(entryPath).isDirectory()) continue } catch { continue }
     const skillFile = path.join(entryPath, 'SKILL.md')
     if (!fs.existsSync(skillFile)) continue
-    try { skills.push(parseSkillFile(entryPath)) } catch {}
+    try {
+      const skill = parseSkillFile(entryPath)
+      if (skill) skills.push(skill)
+    } catch {}
   }
   return skills
 }
@@ -3082,7 +3100,10 @@ const aiToolRegistry = createDefaultRegistry({
   },
   getSandboxSkills: () => readSandboxSkills(),
   getSkillsSources: () => require('./openultron-config').getSkillsSources(),
-  onSkillChanged: () => { _skillsCache = readAllSkills() }
+  onSkillChanged: () => {
+    _skillsCache = readAllSkills()
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ai-skills-changed')
+  }
 })
 /** 将工具返回的 image_base64 注册为产物文件并返回 local-resource URL，避免 base64 进入消息体 */
 async function registerImageBase64ForChat(base64, sessionId) {
@@ -5634,7 +5655,7 @@ function extractMessageTextForSummary(msg) {
   return ''
 }
 
-function buildSessionSummary(messages = []) {
+function buildSessionSummaryFallback(messages = []) {
   const list = (messages || [])
     .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
     .map((m) => ({ role: m.role, text: extractMessageTextForSummary(m) }))
@@ -5665,6 +5686,107 @@ function buildSessionSummary(messages = []) {
   return lines.join('\n')
 }
 
+async function buildSessionSummaryByAI({ projectPath, sessionId, messages, fallbackSummary = '' } = {}) {
+  try {
+    const config = getResolvedAIConfig()
+    if (!config?.apiKey?.trim()) return ''
+
+    const dialogList = (messages || [])
+      .filter((m) => m && (m.role === 'user' || m.role === 'assistant'))
+      .map((m) => {
+        const text = extractMessageTextForSummary(m)
+        return text ? `[${m.role}]: ${text.slice(0, 900)}` : ''
+      })
+      .filter(Boolean)
+      .slice(-40)
+    if (!dialogList.length) return ''
+    const dialogText = dialogList.join('\n\n').slice(0, 16000)
+
+    const cmdSummary = commandExecutionLog.getExecutionSummary(projectPath || '')
+    const cmdViewed = commandExecutionLog.getViewedPaths(projectPath || '')
+    const { entries: recentEntries } = commandExecutionLog.getRecentEntries(projectPath || '', 50, sessionId)
+    const recentCommandsText = recentEntries.length
+      ? recentEntries
+          .map((e) => {
+            const status = e.success ? '成功' : '失败'
+            const cwd = e.cwd ? ` (cwd: ${e.cwd})` : ''
+            const code = !e.success && e.exitCode != null ? ` exit=${e.exitCode}` : ''
+            return `- [${status}]${cwd} ${(e.command || '').trim().slice(0, 200)}${code}`
+          })
+          .join('\n')
+      : '无'
+    const recentSuccessful = recentEntries.filter((e) => e.success).slice(0, 40)
+    const recentSuccessfulText = recentSuccessful.length
+      ? recentSuccessful
+          .map((e) => {
+            const cwd = e.cwd ? ` (cwd: ${e.cwd})` : ''
+            return `- ${cwd} ${(e.command || '').trim().slice(0, 200)}`
+          })
+          .join('\n')
+      : '无'
+    const byToolText = (() => {
+      const byTool = cmdSummary?.byTool && typeof cmdSummary.byTool === 'object' ? cmdSummary.byTool : {}
+      const rows = Object.entries(byTool)
+        .slice(0, 8)
+        .map(([k, v]) => `${k}: total=${v?.total || 0}, ok=${v?.success || 0}, fail=${v?.failed || 0}`)
+      return rows.join(' | ') || '无'
+    })()
+    const viewedDirs = Array.isArray(cmdViewed?.directories) ? cmdViewed.directories.slice(0, 30) : []
+    const viewedFiles = Array.isArray(cmdViewed?.files) ? cmdViewed.files.slice(0, 30) : []
+
+    const workspaceRoot = getWorkspaceRoot()
+    const systemPrompt = '你是会话归档摘要助手。输出高质量中文摘要，必须基于真实对话与命令执行日志，禁止编造。输出纯文本，不要 JSON，不要 markdown 代码块。'
+    const prompt = [
+      `项目：${projectPath || MAIN_CHAT_PROJECT}`,
+      `会话：${sessionId || ''}`,
+      `workspace 根目录：${workspaceRoot}`,
+      `命令统计：总数=${Number(cmdSummary?.total || 0)}，成功=${Number(cmdSummary?.success || 0)}，失败=${Number(cmdSummary?.failed || 0)}`,
+      `按工具统计：${byToolText}`,
+      `最近查看目录（去重，最多30）：${viewedDirs.length ? viewedDirs.join(', ') : '无'}`,
+      `最近查看文件（去重，最多30）：${viewedFiles.length ? viewedFiles.join(', ') : '无'}`,
+      '',
+      '请生成“会话压缩摘要”，结构固定为：',
+      '1) 用户目标与背景（3-6条）',
+      '2) 已完成事项与结果（3-6条，注明关键路径/命令）',
+      '3) 未完成与风险（2-4条）',
+      '4) 命令与安装复盘（必须结合“命令执行日志”：列出安装了哪些、哪些命令成功/失败、后续应复用哪些；并指出哪些“已成功过”下次不要重复安装/重复跑）',
+      '5) Workspace 目录整理与约束（必须给出可执行规则）',
+      '',
+      '其中第 5 部分必须包含以下约束：',
+      `- 每周至少一次清理 ${workspaceRoot} 下临时文件（tmp、临时脚本、过期产物）`,
+      `- scripts 固定放在 ${workspaceRoot}/scripts，项目固定放在 ${workspaceRoot}/projects`,
+      '- 产物按类型分目录（如 presentations、exports、artifacts），禁止散落在根目录',
+      '- 新建文件必须有可读命名（日期_用途_版本），并删除无效 v1/v2 草稿',
+      '- 对长期不用的安装命令，先查历史成功命令，避免重复安装',
+      '',
+      '命令执行日志（本会话最近执行，含成功/失败）：',
+      recentCommandsText,
+      '',
+      '命令执行日志（本会话最近成功，供判断“已安装/已验证”）：',
+      recentSuccessfulText,
+      '',
+      '对话内容：',
+      dialogText,
+      fallbackSummary ? `\n参考（旧版压缩摘要，可纠偏）：\n${fallbackSummary.slice(0, 2000)}` : ''
+    ].filter(Boolean).join('\n')
+
+    const out = await aiOrchestrator.generateText({
+      prompt,
+      systemPrompt,
+      config,
+      model: config.defaultModel || 'deepseek-v3'
+    })
+    const text = String(out || '')
+      .replace(/^```(?:text|markdown)?\s*/i, '')
+      .replace(/\s*```\s*$/i, '')
+      .trim()
+    return text.slice(0, 8000)
+  } catch (e) {
+    try { appLogger?.warn?.('[AI] buildSessionSummaryByAI failed', { error: e.message || String(e) }) } catch (_) {}
+    return ''
+  }
+}
+
 registerChannel('ai-save-chat-history', async (event, { projectPath, messages, sessionId, model, apiBaseUrl }) => {
   try {
     const projectKey = conversationFile.hashProjectPath(projectPath)
@@ -5691,9 +5813,20 @@ registerChannel('ai-save-session-summary', async (event, { projectPath, sessionI
     if (!sid || !Array.isArray(messages) || messages.length === 0) {
       return { success: false, message: 'invalid args' }
     }
-    let summary = buildSessionSummary(messages)
+    const fallbackSummary = buildSessionSummaryFallback(messages)
+    let summary = await buildSessionSummaryByAI({
+      projectPath: proj,
+      sessionId: sid,
+      messages,
+      fallbackSummary
+    })
+    let summarySource = 'ai'
+    if (!summary) {
+      summary = fallbackSummary
+      summarySource = 'fallback'
+    }
     const { entries: recentEntries } = commandExecutionLog.getRecentEntries(proj, 20, sid)
-    if (recentEntries.length > 0) {
+    if (summarySource !== 'ai' && recentEntries.length > 0) {
       const successCount = recentEntries.filter((e) => e.success).length
       const failCount = recentEntries.length - successCount
       const lines = recentEntries.slice(0, 10).map((e) => {
@@ -5710,7 +5843,7 @@ registerChannel('ai-save-session-summary', async (event, { projectPath, sessionI
       projectPath: proj,
       source: 'auto'
     })
-    return { success: true, summary }
+    return { success: true, summary, summary_source: summarySource }
   } catch (e) {
     return { success: false, message: e.message }
   }

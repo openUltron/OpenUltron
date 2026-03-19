@@ -11,7 +11,7 @@ const SESSION_SOURCES = [
 ]
 
 const definition = {
-  description: '列出当前可用的会话列表（主会话、飞书、Gateway），返回 sessionId、projectPath、source、sessionType（main|group）、title、updatedAt。可用于发现其他会话后再用 sessions_history 读取或 sessions_send 发消息。',
+  description: '列出当前可用的会话列表（主会话、飞书、Gateway 等），返回 sessionId、projectPath、source、sessionType、title、updatedAt；飞书会话会带 feishuChatId（可作为发飞书消息的 chat_id）。任意会话都可用 sessions_history(projectPath, sessionId) 读取，无隔离限制。',
   parameters: {
     type: 'object',
     properties: {
@@ -40,7 +40,9 @@ async function execute(args, context = {}) {
       sessionType: s.sessionType === 'group' ? 'group' : 'main',
       label: SESSION_SOURCES.find(x => x.source === s.source)?.label || s.source,
       title: s.title || '',
-      updatedAt: s.updatedAt || s.createdAt || ''
+      updatedAt: s.updatedAt || s.createdAt || '',
+      ...(s.feishuChatId && { feishuChatId: String(s.feishuChatId) }),
+      ...(s.remoteId && { remoteId: String(s.remoteId) })
     }))
     return { success: true, sessions: list, total: raw.length }
   } catch (e) {

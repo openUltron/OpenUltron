@@ -71,37 +71,44 @@ function getDefaultPrompts() {
 
     'openultron-config-guide': `[OpenUltron 可配置能力与引导用户获取参数]
 
-配置文件：\`~/.openultron/openultron.json\`。可通过设置页或 ai_config_control 工具（需用户确认）读写。以下为各模块配置项及**如何引导用户注册/创建并填入参数**。
+配置文件：\`~/.openultron/openultron.json\`。可通过设置页或 ai_config_control 工具（需用户确认）读写。以下为**各模块配置项、用途、以及鉴权/调用方式**（明确到 AI 可据此自写脚本调用未内置的 API）。
 
 **1. ai（AI 与模型）**
-- 键：defaultProvider, defaultModel, modelPool[], modelBindings{}, temperature, maxTokens, providers[]（每项：name, baseUrl, apiKey）
-- 引导用户：到各厂商开放平台申请 API Key（如 OpenAI：platform.openai.com；DeepSeek/智谱/硅基流动等：各自控制台），复制 baseUrl 与 apiKey 填入 providers；再设置 defaultProvider/defaultModel，并在 modelPool/modelBindings 中维护模型池与模型-供应商绑定关系。
+- 配置项及用途：**defaultProvider**（当前使用的 API 根地址，对应 providers[].baseUrl）；**defaultModel**（当前模型名）；**modelPool[]**（可选模型列表）；**modelBindings{}**（模型名 → baseUrl，决定某模型走哪家供应商）；**temperature / maxTokens**（采样参数）；**providers[]**（每项 **name, baseUrl, apiKey**：name 展示用，baseUrl 为 API 根地址，apiKey 为该供应商密钥）。
+- 鉴权与调用（明确）：请求发往 \`<baseUrl>/chat/completions\`（或该厂商等价路径），Header 一般为 \`Authorization: Bearer <该 baseUrl 对应 provider 的 apiKey>\`，请求体为 OpenAI 兼容 JSON。内置对话已使用 defaultProvider 与对应 apiKey；若脚本需调用同厂商其他接口，需使用相同 baseUrl + apiKey（从配置读取，勿在回复中明文输出密钥）。验证：list_providers_and_models 可看当前可用供应商与模型。
+- 引导用户：到各厂商开放平台申请 API Key，将 baseUrl 与 apiKey 填入 providers，设置 defaultProvider/defaultModel 与 modelBindings。
 
 **2. feishu（飞书消息与接收）**
-- 键：app_id, app_secret, default_chat_id, doc_host, user_access_token, user_refresh_token, user_access_token_expire_at, doc_create_in_user_space, notify_on_complete, receive_enabled, allowFrom（"*" 或 chat_id/用户 ID 数组）
-- 引导用户：① 飞书开放平台（open.feishu.cn）创建企业自建应用 → 获取 App ID、App Secret；② 应用后台开通「机器人」与「接收消息」等权限；③ default_chat_id：用于发通知的会话 ID，可在「与机器人的单聊」或「拉机器人加入的群聊」中，通过开放平台文档「获取 chat_id」或发一条消息后从接收事件中获取；④ 若只允许特定人/群触发，将对应 chat_id 或用户 ID 填入 allowFrom 数组，否则填 "*"；⑤ 如需将文档创建到用户个人空间，需先在设置页发起用户 OAuth 授权拿到 user_access_token，再开启 doc_create_in_user_space。user_access_token 约 2 小时过期，refresh_token 也有有效期；应用会在使用时自动刷新，若 user token 或 refresh 均失效则默认使用应用身份（tenant）继续操作，用户可重新授权以恢复用户空间能力。
+- 配置项及用途：**app_id** / **app_secret**（必填，用于计算 tenant_access_token）；**doc_host**（文档域名）；**user_access_token** / **user_refresh_token** / **user_access_token_expire_at**（用户身份，文档创建到用户空间等）；**doc_create_in_user_space**、**notify_on_complete**、**receive_enabled**；**allowFrom**（"*" 或 chat_id/用户 ID 数组，限制可触发 AI 的会话）。
+- 鉴权与调用（明确）：tenant_access_token = \`POST https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal\`，body \`{ "app_id", "app_secret" }\`，响应 \`tenant_access_token\`、\`expire\`（秒）。调用开放平台任意 API 时 Header：\`Authorization: Bearer <tenant_access_token>\`。内置能力已用该 token；未内置的接口可先调工具 **feishu_get_tenant_token** 拿 token，再在 run_script 中请求 \`https://open.feishu.cn/...\` 并带该 Header。
+- 引导用户：飞书开放平台创建应用获取 App ID/Secret，开通机器人与接收消息；发消息目标可从 sessions_list 的 feishuChatId 获取；allowFrom 与 OAuth 按需配置。
 
 **3. telegram（Telegram Bot）**
-- 键：bot_token, enabled（true 开启接收）, allowFrom（"*" 或 chat_id 数组）
-- 引导用户：① **Bot Token**：在 Telegram 中找 @BotFather → 发送 /newbot → 按提示起名，获得 Token（格式如 123456:ABC-DEF...）；② **Chat ID**：私聊时让用户找 @userinfobot 或 @getidsbot 获取自己的数字 user id；群组/频道 ID 为负数（如 -100xxxxxxxxxx），可让用户先拉机器人进群并发一条 @ 机器人的消息，再告知「群 ID 可在 Bot 的 getUpdates 中看到」或由你说明「在群内发一条消息后，把该群的 ID 发给我」；③ enabled 设为 true 开启在 Telegram 侧接收消息；allowFrom 填 "*" 或允许的 chat_id 列表。
+- 配置项及用途：**bot_token**（BotFather 颁发的 token，格式 123456:ABC-DEF...）；**enabled**（是否开启接收消息）；**voice_reply_enabled**（是否语音回复）；**allowFrom**（"*" 或 chat_id 数组，限制可触发的会话）。
+- 鉴权与调用（明确）：Telegram Bot API 根地址为 \`https://api.telegram.org/bot<bot_token>/<method>\`，例如 \`getMe\`、\`sendMessage\`、\`getUpdates\`。脚本调用时用同一 bot_token 拼入 URL 即可；无需额外 Header。内置接收/发送已使用该 token；未内置的方法可自写脚本请求上述 URL（勿在回复中输出完整 token）。
+- 引导用户：@BotFather 创建 Bot 获 token；enabled 设为 true；Chat ID 私聊用 @userinfobot 等获取，群组为负数。
 
-**4. webhooks（外部触发）**
-- 键：webhooks[]，每项 path, secret（可选）, description（可选）
-- 引导用户：path 与 secret 由用户自定（如 path: "ci-build", secret: "随机字符串"），无需第三方注册；调用方 POST 到本机 /api/webhook 时在 body 或 header 中带上 path 与 secret 即可触发一次 Agent；将 path/secret 告知需要触发的系统（如 CI）即可。
+**4. dingtalk（钉钉）**
+- 配置项及用途：**app_key** / **app_secret**（应用凭证）；**default_chat_id** / **default_robot_code**（可选，通知用）；**receive_enabled**、**voice_reply_enabled**；**allowFrom**（"*" 或 conversationId/用户 ID 数组）。
+- 鉴权与调用（明确）：钉钉开放平台 API 通常需 access_token。access_token 获取：\`GET https://oapi.dingtalk.com/gettoken?appkey=<app_key>&appsecret=<app_secret>\`，响应 \`access_token\`。调用业务 API 时在 URL 或 body 中带 \`access_token\`。内置能力已使用；未内置接口可写脚本先 gettoken 再请求对应 API（密钥勿在回复中展示）。
+- 引导用户：钉钉开放平台创建应用获 app_key/app_secret；按需配置接收与 allowFrom。
 
-**5. hardware（硬件能力开关）**
-- 键：hardware.screen.enabled, hardware.notify.enabled（默认 true）
-- 无需注册；仅开关，关闭后截屏/桌面通知工具会提示在配置中已关闭。
+**5. webhooks（外部触发）**
+- 配置项及用途：**webhooks[]**，每项 **path**（如 "ci-build"）、**secret**（可选）、**description**（可选）。用途：外部系统通过 POST 本机 webhook 触发一次 Agent。
+- 调用方式（明确）：\`POST <本机>/api/webhook\`，body 或 header 中提供 \`path\` 与 \`secret\`（若配置了 secret），与 openultron.json 中某条 webhooks 匹配即触发。脚本可复用相同 path/secret 发起请求（secret 勿在回复中展示）。
 
-**6. skills.sources（技能远程源）**
-- 键：skills.sources[]，每项 name, url, enabled
-- 引导用户：若有公开技能列表 JSON 的 URL，填入 url 与 name；否则可留空，后续用户提供可用的 JSON 地址后再配。
+**6. hardware（硬件能力开关）**
+- 配置项及用途：**hardware.screen.enabled**、**hardware.notify.enabled**（默认 true）。仅开关，无鉴权；关闭后对应工具会提示已在配置中关闭。
 
-**7. MCP**
-- 配置在设置页或 \`~/.openultron/mcp.json\`（视应用实现而定）
-- 引导用户：按各 MCP 服务官方文档（如 Serper、Brave Search 等）申请 API Key 或配置连接信息，在设置页「MCP」中添加对应服务器与参数。
+**7. skills.sources（技能远程源）**
+- 配置项及用途：**skills.sources[]**，每项 **name, url, enabled**。url 为返回 \`{ skills: [...] }\` 的 JSON 地址；get_skill(action=list_remote) 会请求该 url 拉取可安装列表。
+- 调用方式：GET <url> 得到技能列表；无鉴权（若 url 需鉴权则由用户自管）。
 
-当用户要求「配置 OpenUltron 的某某」「怎么配 Telegram/飞书/AI」时：先说明需要哪些参数，再按上表逐步说明如何注册/获取（BotFather、开放平台、@userinfobot 等），最后用 ai_config_control 或引导用户在设置页填入并保存；若需测试，可说明「保存后在设置页或诊断页检查状态」或发送一条测试消息验证。`,
+**8. MCP**
+- 配置：通常在 \`~/.openultron/mcp.json\` 或设置页。每项为 MCP 服务器配置（名称、连接方式、各服务要求的 API Key 等）。
+- 用途与调用：各 MCP 服务文档会说明其鉴权方式（如 API Key 放在 header/query）；内置 MCP 客户端会按配置连接；若需脚本直接调某服务 API，按该服务文档的鉴权方式使用配置中的密钥（勿在回复中输出）。
+
+当用户要求「配置某某」「怎么配」时：按上表说明需要哪些参数、各参数用途、以及如何验证（如 feishu_get_tenant_token、list_providers_and_models、发一条测试消息等）；若用户要自写脚本调用未内置的 API，说明对应模块的鉴权与调用方式即可，勿在回复中明文输出密钥/token。`,
 
     'tool-gap-fallback': `[工具缺口兜底策略]
 当现有工具无法直接完成用户目标时，不要停在“工具不支持”。按以下顺序自动兜底并继续交付结果：

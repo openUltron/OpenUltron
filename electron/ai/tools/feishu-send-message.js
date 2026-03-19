@@ -19,7 +19,7 @@ const definition = {
     properties: {
       chat_id: {
         type: 'string',
-        description: '飞书群/会话 ID（可选）。用户在飞书内对话时不传则自动发往当前会话；其他场景不传则用配置的 default_chat_id'
+        description: '飞书群/会话 ID（可选）。用户在飞书内对话时不传则自动发往当前会话；其他场景可从 sessions_list 查询飞书会话的 feishuChatId 作为 chat_id'
       },
       text: {
         type: 'string',
