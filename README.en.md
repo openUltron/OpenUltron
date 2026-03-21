@@ -6,36 +6,48 @@ OpenUltron is an AI desktop assistant built for real execution, not just chat.
 
 Think of it as a local AI workspace that can understand tasks, run tools, produce deliverables, and send results back to your channels.
 
+## Problems It Solves
+
+| Pain point | How OpenUltron helps |
+|------------|----------------------|
+| Chatbots that only talk | Built-in tools + MCP: files, shell, browser, screenshots, Feishu send, etc.—outputs land on disk or channels |
+| Juggling multiple models/providers | **Global model pool** + **per-model provider bindings**; the active model routes to the right `baseUrl` / key; in-app **`/model`** updates the same global **default model** as Settings |
+| Copy-pasting between desktop and IM | Feishu / Telegram / DingTalk integration; first-line **`/model`** + model id in Feishu (model must be in pool) switches the **global** default, same as the app |
+| Spinning up a tiny page/tool without a full repo | **Web sandbox apps**: sidebar **Apps** → install/create; **Studio** = preview + AI edits; CSP, network allowlist, optional `npm install`—see design docs |
+| Losing context or config after reinstall | Local conversations, memory, `~/.openultron/` data; backup ZIP export/import |
+
 ## Why OpenUltron
 
-- Execution-first experience, not a plain chatbot
-- One workspace for request -> execution -> output -> delivery
-- Local-first and configurable, suitable for daily long-term use
+- Execution-first, not a plain chatbot  
+- One flow: **request → execute → deliver → push to channels**  
+- Local-first with configurable models/proxy for daily and sensitive work  
 
 ## What You Can Do
 
-- Generate webpages, docs, scripts, and reports
-- Handle screenshots, files, and links as task artifacts
-- Send results directly to Feishu / Telegram / DingTalk; Feishu **user space docs** supported (authorize User Access Token to create docs in your space, token auto-refresh)
-- Extend capabilities with Skills and MCP tools
-- **Web sandbox apps**: use the sidebar **Apps** entry to install or create mini front-ends under `~/.openultron/web-apps/`; **Studio** pairs a live preview with AI-assisted edits to `index.html` / `manifest`. See `docs/WEB-APPS-SANDBOX-DESIGN.md` and `docs/WEB-APPS-IPC-REFERENCE.md`
-- Keep multi-session context and progress history
+- Generate webpages, docs, scripts, and reports; write files to disk via tools  
+- Handle screenshots, files, and links as task artifacts  
+- Send results to Feishu / Telegram / DingTalk; Feishu **user space docs** (User Access Token, auto-refresh)  
+- Extend with **Skills** and **MCP**  
+- **Global model selection**: **`/model`** in chat persists to config (same as Settings); AI can also use **`ai_config_control`** (e.g. `switch_model`)  
+- **Web sandbox apps**: **`/web-apps`** (library), **`/web-app-studio`** (preview + chat); see `docs/WEB-APPS-SANDBOX-DESIGN.md` and `docs/WEB-APPS-IPC-REFERENCE.md`  
+- Multi-session history and progress  
 
 ## Key Features
 
-- Multi-model support with flexible provider config
-- Sub-agent execution for complex tasks
-- Built-in + MCP tool calling system
-- Persistent conversation memory
-- Cron-based scheduled tasks (including Feishu User Token refresh, can be disabled)
-- Backup and restore for local data
+- **Multi-model & multi-provider**: providers, model pool, bindings; OpenAI-compatible APIs; see `docs/OPENAI-CODEX-AND-CHAT-COMPLETIONS.md` for Codex vs chat/completions  
+- **Sub-agents**: `sessions_spawn` for delegated work  
+- **Tools**: built-in + MCP; optional **`webapp__*`** tools in Web App Studio (see checklist)  
+- **Memory & persistence**: conversation and project memory on disk  
+- **Gateway**: local WebSocket entry for scripts/automation (default port in docs)  
+- **Cron**: scheduled jobs (Feishu token refresh optional)  
+- **Backup & restore**: ZIP backup of `~/.openultron/`  
 
 ## Typical Use Cases
 
-- Operations: campaign copy, daily summaries, channel delivery
-- Development: quick page generation, code tasks, packaged outputs
-- Team collaboration: AI outputs synced to chat and docs
-- Personal productivity: automate repetitive workflows
+- **Ops**: copy, summaries, channel delivery  
+- **Dev**: prototypes, code tasks, packaged outputs; **Web Studio** for sandbox mini-apps  
+- **Teams**: sync AI output to chat/docs  
+- **Personal**: cron + tools for repetitive work  
 
 ## Quick Start
 
@@ -75,9 +87,10 @@ npm run release:all
 
 ## Data & Paths
 
-- App data: `~/.openultron/`
+- App data: `~/.openultron/` (includes `openultron.json` AI config: **default model, pool, providers, bindings**)
 - Conversations: `conversations/`
 - Local skills: `skills/`
+- Web sandbox apps: `web-apps/` (per app id / version)
 - Logs: `logs/app.log`
 
 ## Stack (Brief)
@@ -85,6 +98,14 @@ npm run release:all
 - Electron + Vue 3 + Vite
 - Node.js main-process capabilities
 - MCP-based tool extensibility
+
+## Documentation
+
+- [OpenAI Codex vs Chat Completions](./docs/OPENAI-CODEX-AND-CHAT-COMPLETIONS.md)
+- [Skills & ClawHub compatibility](./docs/SKILLS-PACK-COMPAT.md)
+- [Web sandbox apps](./docs/WEB-APPS-SANDBOX-DESIGN.md)
+- [Web apps IPC / HTTP](./docs/WEB-APPS-IPC-REFERENCE.md)
+- [Web apps implementation checklist](./docs/WEB-APPS-IMPLEMENTATION-CHECKLIST.md)
 
 ---
 
