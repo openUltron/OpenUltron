@@ -264,6 +264,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     saveConfig: (config) => ipcRenderer.invoke('ai-save-config', config),
     getConfigForBackup: () => ipcRenderer.invoke('ai-get-config-for-backup'),
     restoreConfigFromBackup: (payload) => ipcRenderer.invoke('ai-restore-config-from-backup', payload),
+    loadCodexOpenAIKey: () => ipcRenderer.invoke('ai-load-codex-openai-key'),
     fetchModels: (options) => ipcRenderer.invoke('ai-fetch-models', options),
     getModels: (providerBaseUrl) => ipcRenderer.invoke('ai-get-models', providerBaseUrl),
     verifyModel: (data) => ipcRenderer.invoke('ai-verify-model', data),

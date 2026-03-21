@@ -3506,7 +3506,8 @@ async function verifyProviderModel(providerKey, modelId) {
       res.on('end', () => resolve({ status: res.statusCode, body: buf }))
     })
     req.on('error', reject)
-    req.setTimeout(12000, () => { req.destroy(); reject(new Error('请求超时')) })
+    // Codex / ChatGPT access_token、跨境访问官方 API 时首轮可能 >12s，避免误判为不可用
+    req.setTimeout(45000, () => { req.destroy(); reject(new Error('请求超时')) })
     req.write(postData)
     req.end()
   })
@@ -4883,6 +4884,51 @@ registerChannel('ai-get-config', async () => {
   }
 })
 
+registerChannel('ai-load-codex-openai-key', async () => {
+  try {
+    const {
+      extractCredentialFromCodexAuthJson,
+      extractCodexAccountId
+    } = require('./ai/codex-auth-loader')
+    const authPath = path.join(os.homedir(), '.codex', 'auth.json')
+    if (!fs.existsSync(authPath)) {
+      return {
+        success: false,
+        message:
+          '未找到 ~/.codex/auth.json。请先在终端运行 Codex CLI 完成登录（浏览器会打开 auth.openai.com，回调由本机 localhost:1455 上的 Codex 接收并写入该文件）；OpenUltron 不会打开该授权页。'
+      }
+    }
+    let parsed = null
+    try {
+      parsed = JSON.parse(fs.readFileSync(authPath, 'utf-8'))
+    } catch (e) {
+      return { success: false, message: `Codex 授权文件解析失败: ${e.message || String(e)}` }
+    }
+    const { credential, credentialType: extractedType } = extractCredentialFromCodexAuthJson(parsed)
+    if (!credential) {
+      return {
+        success: false,
+        message:
+          'auth.json 中未找到可用凭证（如 OPENAI_API_KEY 或 tokens.access_token）。若浏览器已授权但文件仍为空：请保持运行「codex login」的终端、确认 1455 端口未被占用，或重新执行一次 Codex 登录。'
+      }
+    }
+    const accountId = extractCodexAccountId(parsed)
+    const maskedAccountId = accountId
+      ? `${accountId.slice(0, 4)}***${accountId.slice(-2)}`
+      : ''
+    const credentialType = extractedType || 'openai_api_key'
+    return {
+      success: true,
+      apiKey: credential,
+      credentialType,
+      authMode: String(parsed?.auth_mode || '').trim(),
+      accountId: maskedAccountId
+    }
+  } catch (error) {
+    return { success: false, message: error.message || String(error) }
+  }
+})
+
 // 首次使用引导：返回是否仍需配置 API / 消息通知（供设置页展示 Onboarding 横幅）
 registerChannel('ai-get-onboarding-status', async () => {
   try {
@@ -5077,10 +5123,11 @@ registerChannel('ai-save-config', async (event, payload) => {
 
 // 获取模型列表
 registerChannel('ai-fetch-models', async (event, options) => {
-  const { forceRefresh } = options || {}
+  const { forceRefresh, providerBaseUrl } = options || {}
   try {
     const legacy = getAIConfigLegacy()
-    const baseUrl = legacy.config.apiBaseUrl || 'https://api.qnaigc.com/v1'
+    const pickedBaseUrl = String(providerBaseUrl || '').trim()
+    const baseUrl = pickedBaseUrl || legacy.config.apiBaseUrl || 'https://api.qnaigc.com/v1'
     const apiKey = legacy.providerKeys[baseUrl] || legacy.config.apiKey
     if (!apiKey) {
       return { success: false, message: '未配置 API Key' }

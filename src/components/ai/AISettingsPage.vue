@@ -84,6 +84,15 @@
             </button>
           </div>
           <span class="hint">{{ t('aiSettings.keyHint') }}</span>
+          <div v-if="isOpenAIProvider" class="codex-auth-row">
+            <button class="btn" type="button" :disabled="importingCodexKey" @click="useCodexOpenAIAuth">
+              {{ importingCodexKey ? t('aiSettings.codexAuthorizing') : t('aiSettings.codexUseAccount') }}
+            </button>
+            <div class="codex-auth-hints">
+              <span class="hint">{{ t('aiSettings.codexAuthHint') }}</span>
+              <span class="hint codex-auth-hint-sub">{{ t('aiSettings.codexAuthHintSub') }}</span>
+            </div>
+          </div>
           <div class="connection-status" v-if="connectionState !== 'idle'">
             <Loader v-if="connectionState === 'testing'" :size="13" class="spin" />
             <CheckCircle2 v-else-if="connectionState === 'success'" :size="13" />
@@ -352,6 +361,7 @@ const manualDialog = reactive({
 
 const connectionState = ref('idle')
 const connectionMsg = ref('')
+const importingCodexKey = ref(false)
 
 const models = ref([])
 const fetchingModels = ref(false)
@@ -363,6 +373,11 @@ const getCombo = () => `${config.apiBaseUrl}|||${config.apiKey}`
 const currentProviderName = computed(() => {
   const p = providers.value.find(x => x.baseUrl === config.apiBaseUrl)
   return p ? p.name : ''
+})
+
+const isOpenAIProvider = computed(() => {
+  const base = String(config.apiBaseUrl || '').trim().toLowerCase()
+  return base.includes('api.openai.com')
 })
 
 const filteredModels = computed(() => {
@@ -541,17 +556,6 @@ const verifyModelAvailability = async (modelId, providerBaseUrl = '') => {
   }
 }
 
-const validatePoolBeforeSave = async () => {
-  const candidates = [...new Set([config.defaultModel, ...normalizePool(config.modelPool)].filter(Boolean))]
-  for (const id of candidates) {
-    const provider = config.modelBindings[id] || ''
-    // eslint-disable-next-line no-await-in-loop
-    const ok = await verifyModelAvailability(id, provider)
-    if (!ok) return false
-  }
-  return true
-}
-
 const setPrimaryFromPool = (modelId) => {
   const id = String(modelId || '').trim()
   if (!id) return
@@ -711,6 +715,40 @@ const onKeyBlur = async () => {
   } catch { /* ignore */ }
 }
 
+const useCodexOpenAIAuth = async () => {
+  importingCodexKey.value = true
+  try {
+    if (typeof window.electronAPI?.ai?.loadCodexOpenAIKey !== 'function') {
+      throw new Error(t('aiSettings.restartToLoad'))
+    }
+    const res = await window.electronAPI.ai.loadCodexOpenAIKey()
+    if (!res?.success || !res?.apiKey) {
+      throw new Error((res && (res.error || res.message)) || t('aiSettings.codexAuthLoadFailed'))
+    }
+    const key = String(res.apiKey || '').trim()
+    if (!key) throw new Error(t('aiSettings.codexAuthLoadFailed'))
+    config.apiKey = key
+    providerKeys[config.apiBaseUrl] = key
+    const cur = rawData.providers.find(p => p.baseUrl === config.apiBaseUrl)
+    if (cur) cur.apiKey = key
+    await doSaveConfig()
+    connectionState.value = 'success'
+    const useAccessToken = String(res.credentialType || '') === 'chatgpt_access_token'
+    connectionMsg.value = useAccessToken
+      ? t('aiSettings.codexAuthLoadedByAccessToken')
+      : t('aiSettings.codexAuthLoaded')
+    saveMsg.value = connectionMsg.value
+    saveType.value = 'success'
+    setTimeout(() => { saveMsg.value = '' }, 3000)
+  } catch (e) {
+    saveMsg.value = (e && e.message) || t('aiSettings.codexAuthLoadFailed')
+    saveType.value = 'error'
+    setTimeout(() => { saveMsg.value = '' }, 4000)
+  } finally {
+    importingCodexKey.value = false
+  }
+}
+
 const retestConnection = async () => {
   if (!config.apiKey.trim()) return
   lastTestedCombo = ''
@@ -726,7 +764,10 @@ const testAndFetchModels = async (forceRefresh = false) => {
     if (typeof window.electronAPI.ai.fetchModels !== 'function') {
       throw new Error(t('aiSettings.restartToLoad'))
     }
-    const res = await window.electronAPI.ai.fetchModels({ forceRefresh })
+    const res = await window.electronAPI.ai.fetchModels({
+      forceRefresh,
+      providerBaseUrl: config.apiBaseUrl
+    })
     if (res.success) {
       models.value = res.models || []
       lastTestedCombo = getCombo()
@@ -810,11 +851,7 @@ const saveConfig = async () => {
   saving.value = true
   saveMsg.value = ''
   try {
-    const ok = await validatePoolBeforeSave()
-    if (!ok) {
-      saveType.value = 'error'
-      return
-    }
+    // 保存配置不阻塞于「模型可用性」校验：Codex/ChatGPT token 等场景下校验请求易超时，用户仍可用「刷新模型列表 / 重新验证」主动检查。
     const raw = buildRawPayload()
     const res = await window.electronAPI.ai.saveConfig({ raw })
     if (res.success) {
@@ -909,6 +946,27 @@ const saveConfig = async () => {
 }
 .generic-search-section .hint a:hover {
   text-decoration: underline;
+}
+.codex-auth-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+.codex-auth-hint-sub {
+  font-size: 12px;
+  opacity: 0.9;
+}
+.codex-auth-row {
+  margin-top: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.codex-auth-row .hint {
+  margin: 0;
 }
 
 /* 提供商 */

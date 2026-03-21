@@ -156,6 +156,15 @@ const messages = {
       apiUrl: 'API 地址',
       apiKeyPh: '输入 API Key，填写后自动验证',
       keyHint: '每个提供商的 Key 独立保存，切换提供商自动恢复对应 Key',
+      codexUseAccount: '使用 Codex 账户授权',
+      codexAuthorizing: '读取授权中...',
+      codexAuthHint:
+        '本按钮只读取 ~/.codex/auth.json，不会打开浏览器。Codex CLI 登录时使用的 auth.openai.com 与回调 http://localhost:1455/auth/callback 由 Codex 在终端里处理，与 OpenUltron 无关。',
+      codexAuthHintSub:
+        '请先在本机终端执行 Codex 登录（如 codex login），待授权成功并生成 auth.json 后再点此导入。若回调失败：保持该终端运行、检查 1455 端口是否被占用。',
+      codexAuthLoaded: '已从 Codex 授权导入 OpenAI Key',
+      codexAuthLoadedByAccessToken: '已从 Codex 登录态导入 access_token（ChatGPT 授权）',
+      codexAuthLoadFailed: '读取 Codex 授权失败',
       retest: '重新验证',
       advanced: '高级参数',
       currentModel: '当前模型',
@@ -489,6 +498,15 @@ const messages = {
       apiUrl: 'API URL',
       apiKeyPh: 'Enter API Key; validation starts automatically',
       keyHint: 'Each provider stores its own key; switching provider restores its key',
+      codexUseAccount: 'Use Codex Account Auth',
+      codexAuthorizing: 'Reading auth...',
+      codexAuthHint:
+        'This only reads ~/.codex/auth.json; it does not open a browser. Codex CLI handles auth.openai.com and the http://localhost:1455/auth/callback loop in your terminal—not OpenUltron.',
+      codexAuthHintSub:
+        'Run Codex login in a terminal first (e.g. codex login), wait until auth.json is written, then click here to import. If the callback fails: keep that terminal open and check port 1455 is free.',
+      codexAuthLoaded: 'OpenAI key imported from Codex auth',
+      codexAuthLoadedByAccessToken: 'Imported access_token from Codex login session (ChatGPT auth)',
+      codexAuthLoadFailed: 'Failed to load Codex auth',
       retest: 'Retest',
       advanced: 'Advanced',
       currentModel: 'Current Model',
