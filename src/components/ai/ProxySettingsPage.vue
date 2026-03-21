@@ -20,25 +20,25 @@
     <div class="form-grid">
       <label>
         <span>HTTP Proxy</span>
-        <input v-model.trim="form.http_proxy" type="text" placeholder="http://127.0.0.1:7890" />
+        <input v-model.trim="form.http_proxy" type="text" placeholder="例如 http://127.0.0.1:7890" />
       </label>
       <label>
         <span>HTTPS Proxy</span>
-        <input v-model.trim="form.https_proxy" type="text" placeholder="http://127.0.0.1:7890" />
+        <input v-model.trim="form.https_proxy" type="text" placeholder="留空则与 HTTP 相同" />
       </label>
       <label>
         <span>ALL Proxy</span>
-        <input v-model.trim="form.all_proxy" type="text" placeholder="socks5://127.0.0.1:7890" />
+        <input v-model.trim="form.all_proxy" type="text" placeholder="例如 socks5://127.0.0.1:7890" />
       </label>
       <label>
         <span>NO Proxy</span>
-        <input v-model.trim="form.no_proxy" type="text" placeholder="127.0.0.1,localhost" />
+        <input v-model.trim="form.no_proxy" type="text" placeholder="留空则默认 127.0.0.1,localhost" />
       </label>
     </div>
 
     <div class="proxy-help">
-      <p>推荐环境变量：</p>
-      <pre>export https_proxy={{ form.https_proxy || 'http://127.0.0.1:7890' }} http_proxy={{ form.http_proxy || 'http://127.0.0.1:7890' }} all_proxy={{ form.all_proxy || 'socks5://127.0.0.1:7890' }}</pre>
+      <p>保存后写入全局配置文件 <code>openultron.json</code> 的 <code>proxy</code> 字段，并在启动/保存时应用到本进程环境变量。以下为示例（请替换为你的代理）：</p>
+      <pre>export http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890 all_proxy=socks5://127.0.0.1:7890</pre>
     </div>
   </div>
 </template>
@@ -48,10 +48,10 @@ import { reactive, ref, onMounted } from 'vue'
 
 const form = reactive({
   enabled: false,
-  http_proxy: 'http://127.0.0.1:7890',
-  https_proxy: 'http://127.0.0.1:7890',
-  all_proxy: 'socks5://127.0.0.1:7890',
-  no_proxy: '127.0.0.1,localhost'
+  http_proxy: '',
+  https_proxy: '',
+  all_proxy: '',
+  no_proxy: ''
 })
 
 const saving = ref(false)
@@ -62,11 +62,12 @@ async function load() {
   try {
     const res = await window.electronAPI?.ai?.getProxyConfig?.()
     if (res?.success && res.data) {
-      form.enabled = !!res.data.enabled
-      form.http_proxy = String(res.data.http_proxy || form.http_proxy)
-      form.https_proxy = String(res.data.https_proxy || form.https_proxy)
-      form.all_proxy = String(res.data.all_proxy || form.all_proxy)
-      form.no_proxy = String(res.data.no_proxy || form.no_proxy)
+      const d = res.data
+      form.enabled = !!d.enabled
+      form.http_proxy = d.http_proxy != null ? String(d.http_proxy) : ''
+      form.https_proxy = d.https_proxy != null ? String(d.https_proxy) : ''
+      form.all_proxy = d.all_proxy != null ? String(d.all_proxy) : ''
+      form.no_proxy = d.no_proxy != null ? String(d.no_proxy) : ''
     }
   } catch (e) {
     statusType.value = 'error'
@@ -88,7 +89,13 @@ async function save() {
     const res = await window.electronAPI?.ai?.saveProxyConfig?.(payload)
     if (!res?.success) throw new Error(res?.message || '保存失败')
     statusType.value = 'ok'
-    statusMsg.value = form.enabled ? '已启用代理并应用到全局环境变量' : '已关闭代理并清理全局环境变量'
+    if (!form.enabled) {
+      statusMsg.value = '已关闭代理并清理全局环境变量'
+    } else if (!payload.http_proxy && !payload.https_proxy && !payload.all_proxy) {
+      statusMsg.value = '已保存：已勾选启用但未填写代理地址，当前不会走代理；填写至少一项后再次保存即可生效'
+    } else {
+      statusMsg.value = '已保存代理到全局配置并应用到进程环境变量'
+    }
   } catch (e) {
     statusType.value = 'error'
     statusMsg.value = e?.message || '保存失败'

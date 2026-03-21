@@ -3005,6 +3005,12 @@ function applyProxyEnvFromConfig() {
     const httpProxy = String(cfg.http_proxy || '').trim()
     const httpsProxy = String(cfg.https_proxy || httpProxy).trim()
     const allProxy = String(cfg.all_proxy || '').trim()
+    // 已勾选「启用」但未填写任何代理地址时，不写入环境变量（等同未生效）
+    if (!httpProxy && !httpsProxy && !allProxy) {
+      for (const k of keys) delete process.env[k]
+      return { enabled: true, effective: false, reason: 'no_proxy_url' }
+    }
+    // 未填写 NO_PROXY 时，默认绕过本机（与常见 CLI 行为一致，仍可由用户覆盖）
     const noProxy = String(cfg.no_proxy || '127.0.0.1,localhost').trim()
     process.env.http_proxy = httpProxy
     process.env.https_proxy = httpsProxy
@@ -3920,10 +3926,11 @@ function buildExternalPrompt({ task, systemPrompt, roleName, projectPath, channe
   return blocks.join('\n\n')
 }
 
+/** 子进程「走代理」变体：仅使用当前进程环境变量（来自用户保存的全局代理配置），不写死任何地址 */
 function getCodexProxyPresetEnv() {
-  const http = process.env.http_proxy || process.env.HTTP_PROXY || 'http://127.0.0.1:7890'
-  const https = process.env.https_proxy || process.env.HTTPS_PROXY || http
-  const all = process.env.all_proxy || process.env.ALL_PROXY || 'socks5://127.0.0.1:7890'
+  const http = String(process.env.http_proxy || process.env.HTTP_PROXY || '').trim()
+  const https = String(process.env.https_proxy || process.env.HTTPS_PROXY || '').trim() || http
+  const all = String(process.env.all_proxy || process.env.ALL_PROXY || '').trim()
   return {
     http_proxy: http,
     https_proxy: https,

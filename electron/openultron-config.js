@@ -101,12 +101,13 @@ const DEFAULT_HARDWARE = {
   notify: { enabled: true }
 }
 
+/** 默认不填任何代理地址，由用户在「设置 → 代理」中配置并写入 openultron.json */
 const DEFAULT_PROXY = {
   enabled: false,
-  http_proxy: 'http://127.0.0.1:7890',
-  https_proxy: 'http://127.0.0.1:7890',
-  all_proxy: 'socks5://127.0.0.1:7890',
-  no_proxy: '127.0.0.1,localhost'
+  http_proxy: '',
+  https_proxy: '',
+  all_proxy: '',
+  no_proxy: ''
 }
 
 /** 默认含 ClawHub；list_remote 对 type=clawhub 走搜索 API（见 get-skill.js） */

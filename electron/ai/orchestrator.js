@@ -697,7 +697,11 @@ class Orchestrator {
             modelCandidates.push({ model: String(r.model), routeConfig: r.config })
           }
           for (const m of fallbackModels) {
-            if (!modelCandidates.some(x => x.model === m)) modelCandidates.push({ model: m, routeConfig: config })
+            if (!modelCandidates.some(x => x.model === m)) {
+              const routeFromTable = fallbackRoutes.find((r) => r && r.model === m)
+              const routeConfig = routeFromTable && routeFromTable.config ? routeFromTable.config : config
+              modelCandidates.push({ model: m, routeConfig })
+            }
           }
           for (let mi = 0; mi < modelCandidates.length; mi++) {
             const tryModel = modelCandidates[mi].model
@@ -705,6 +709,18 @@ class Orchestrator {
             const tryAnthropic = this._isClaudeModel(tryModel)
             const callFn = this._pickOpenAiLlmCaller(tryConfig, tryAnthropic)
             try {
+              // 在流式正文前先插入消息内提示，随后同一 assistant 气泡继续追加备用模型输出
+              if (mi > 0 && canSend(wrappedSender)) {
+                const prev = modelCandidates[mi - 1]
+                const prevModel = prev?.model ? String(prev.model).trim() : ''
+                const tryHost = String((tryConfig.apiBaseUrl || '')).replace(/^https?:\/\//, '').replace(/\/.*$/, '')
+                const hostHint = tryHost ? `（${tryHost}）` : ''
+                const token = prevModel
+                  ? `\n\n> ⚠️ **主模型「${prevModel}」不可用**，已自动改用备用模型 **${tryModel}**${hostHint} 继续回复。\n\n`
+                  : `\n\n> ⚠️ 已自动改用备用模型 **${tryModel}**${hostHint} 继续回复。\n\n`
+                wrappedSender.send('ai-chat-token', { sessionId, token })
+                console.log(`[AI] 已故障转移到备用模型: ${tryModel} @ ${tryHost || '(default host)'}`)
+              }
               const messagesToSend = tryAnthropic ? currentMessages : this._sanitizeOpenAIMessages(currentMessages)
               const toolModes = sanitizedTools.length > 0
                 ? [{ tools: sanitizedTools, withTools: true }, { tools: undefined, withTools: false }]
@@ -747,11 +763,6 @@ class Orchestrator {
                 }
               }
               if (!response && lastModeErr) throw lastModeErr
-              if (mi > 0) {
-                const host = String((tryConfig.apiBaseUrl || '')).replace(/^https?:\/\//, '').replace(/\/.*$/, '')
-                console.log(`[AI] 已故障转移到备用模型: ${tryModel} @ ${host}`)
-                wrappedSender.send('ai-chat-token', { sessionId, token: `\n\n> ⚠️ 主模型不可用，已自动切换至备用模型 ${tryModel}${host ? ` @ ${host}` : ''}\n\n` })
-              }
               break
             } catch (err) {
               const classify = this._classifyLlmError(err)
@@ -1665,6 +1676,7 @@ class Orchestrator {
           const delay = this._getRetryDelayMs(attempt, baseDelayMs, maxDelayMs)
           const target = `${url.hostname}${url.pathname}`
           const code = err?.code ? ` code=${String(err.code)}` : ''
+          // 注：delay 为退避等待，非请求超时；单连接流式超时见下方 STREAM_TIMEOUT_MS（默认 120s）。ECONNRESET 多为网络/代理断连，非「超时太短」
           console.warn(`[AI] Responses API 调用失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries}) [${target}]${code}：`, err.message)
           this._sleep(delay, signal)
             .then(() => attemptOnce(attempt + 1).then(resolve, reject))
@@ -1679,6 +1691,7 @@ class Orchestrator {
         'Authorization': `Bearer ${config.apiKey}`,
         'Content-Length': Buffer.byteLength(postData)
       }, signal)
+      // 单请求「长时间无字节」才触发；与 TLS 握手/中途 read ECONNRESET 无关（后者走上方 onError 重试）
       const STREAM_TIMEOUT_MS = 120000
       req.setTimeout(STREAM_TIMEOUT_MS, () => {
         if (!req.destroyed) req.destroy(new Error(`请求超时（${STREAM_TIMEOUT_MS / 1000} 秒内无响应）`))
@@ -1972,7 +1985,8 @@ class Orchestrator {
 
   _getRetryConfig(config) {
     const raw = (config && typeof config === 'object') ? (config.retry || config.retries || {}) : {}
-    const maxRetries = Number.isFinite(raw.maxRetries) ? raw.maxRetries : 2
+    // maxRetries：与 attempt 比较，attempt>=maxRetries 时不再重试；默认 3 便于 Codex/跨境链路偶发 ECONNRESET 多试一轮
+    const maxRetries = Number.isFinite(raw.maxRetries) ? raw.maxRetries : 3
     const baseDelayMs = Number.isFinite(raw.baseDelayMs) ? raw.baseDelayMs : 800
     const maxDelayMs = Number.isFinite(raw.maxDelayMs) ? raw.maxDelayMs : 8000
     return {

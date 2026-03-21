@@ -1,5 +1,27 @@
 <template>
   <div class="chat-panel" ref="panelRef">
+    <!-- Context Tokens：顶栏细条，不参与消息列表滚动 -->
+    <div v-if="usageCard" class="chat-usage-strip" role="status" aria-live="polite">
+      <div class="chat-usage-strip-inner">
+        <span class="chat-usage-strip-label">Context Tokens</span>
+        <span class="chat-usage-strip-total">≈ {{ usageCard.total.toLocaleString() }}</span>
+        <span class="chat-usage-strip-sep" aria-hidden="true">·</span>
+        <span class="chat-usage-strip-parts" :title="usageStripTitle">
+          S {{ usageCard.system.toLocaleString() }} ({{ usageCard.systemPct }}%)
+          <span class="chat-usage-strip-sep" aria-hidden="true">·</span>
+          D {{ usageCard.dialog.toLocaleString() }} ({{ usageCard.dialogPct }}%)
+          <span class="chat-usage-strip-sep" aria-hidden="true">·</span>
+          T {{ usageCard.tool.toLocaleString() }} ({{ usageCard.toolPct }}%)
+        </span>
+        <span class="chat-usage-strip-sep" aria-hidden="true">·</span>
+        <span class="chat-usage-strip-iter">#{{ usageCard.iteration }}</span>
+      </div>
+      <div class="chat-usage-strip-bar" aria-hidden="true">
+        <span class="chat-usage-seg chat-usage-seg-sys" :style="{ width: `${usageCard.systemPct}%` }" />
+        <span class="chat-usage-seg chat-usage-seg-dlg" :style="{ width: `${usageCard.dialogPct}%` }" />
+        <span class="chat-usage-seg chat-usage-seg-tool" :style="{ width: `${usageCard.toolPct}%` }" />
+      </div>
+    </div>
     <!-- 消息列表 -->
     <div class="chat-messages" ref="messagesRef">
       <!-- 当前会话类型：主 / 飞书 · chat_id 片段 -->
@@ -13,30 +35,6 @@
           <span>{{ t('chat.compressedHint') }}</span>
         </div>
         <pre class="compression-notice-body">{{ compressionSummaryText }}</pre>
-      </div>
-      <div v-if="usageCard" class="chat-usage-card">
-        <div class="chat-usage-head">
-          <span>Context Tokens</span>
-          <em>#{{ usageCard.iteration }}</em>
-        </div>
-        <div class="chat-usage-total">≈ {{ usageCard.total }}</div>
-        <div class="chat-usage-bars">
-          <div class="chat-usage-row">
-            <span>System</span>
-            <strong>{{ usageCard.system }}</strong>
-            <em>{{ usageCard.systemPct }}%</em>
-          </div>
-          <div class="chat-usage-row">
-            <span>Dialog</span>
-            <strong>{{ usageCard.dialog }}</strong>
-            <em>{{ usageCard.dialogPct }}%</em>
-          </div>
-          <div class="chat-usage-row">
-            <span>Tool</span>
-            <strong>{{ usageCard.tool }}</strong>
-            <em>{{ usageCard.toolPct }}%</em>
-          </div>
-        </div>
       </div>
       <div v-if="displayMessages.length === 0 && !compressionSummaryText" class="chat-empty">
         <img :src="logoUrl" alt="" class="empty-icon avatar-logo-large" />
@@ -372,6 +370,12 @@ const usageCard = computed(() => {
     dialogPct: Number(usage.dialogPct) || 0,
     toolPct: Number(usage.toolPct) || 0,
   }
+})
+
+const usageStripTitle = computed(() => {
+  const u = usageCard.value
+  if (!u) return ''
+  return `System ${u.system} · Dialog ${u.dialog} · Tool ${u.tool}`
 })
 
 // ---- 模型：使用配置默认或会话保存的模型，不再提供底部切换 UI ----
@@ -2064,46 +2068,69 @@ defineExpose({ clearMessages, loadMessages, messages, handleExternalSend, isStre
   max-height: 40vh;
   overflow-y: auto;
 }
-.chat-usage-card {
-  margin: 8px 16px 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--ou-border);
-  border-radius: 8px;
-  background: var(--ou-bg-elevated, color-mix(in srgb, var(--ou-bg-main) 90%, #fff 10%));
-}
-.chat-usage-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12px;
+/* 顶栏：Context Tokens 细条，固定在聊天区顶部，不随消息滚动 */
+.chat-usage-strip {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--ou-border);
+  background: var(--ou-bg-sidebar);
+  font-size: 11px;
+  line-height: 1.35;
   color: var(--ou-text-muted);
 }
-.chat-usage-head em {
-  font-style: normal;
-  color: var(--ou-text-secondary);
-}
-.chat-usage-total {
-  margin-top: 6px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--ou-text);
-}
-.chat-usage-bars {
-  margin-top: 8px;
+.chat-usage-strip-inner {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.chat-usage-row {
-  display: grid;
-  grid-template-columns: 56px 1fr auto;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  padding: 4px 12px 3px;
+  min-width: 0;
 }
-.chat-usage-row span { color: var(--ou-text-muted); }
-.chat-usage-row strong { color: var(--ou-text); font-weight: 600; }
-.chat-usage-row em { color: var(--ou-text-secondary); font-style: normal; }
+.chat-usage-strip-label {
+  font-weight: 600;
+  color: var(--ou-text-secondary);
+  letter-spacing: 0.02em;
+}
+.chat-usage-strip-total {
+  font-variant-numeric: tabular-nums;
+  color: var(--ou-text);
+  font-weight: 600;
+}
+.chat-usage-strip-sep {
+  opacity: 0.45;
+  user-select: none;
+}
+.chat-usage-strip-parts {
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.chat-usage-strip-iter {
+  font-variant-numeric: tabular-nums;
+  color: var(--ou-text-secondary);
+  margin-left: auto;
+}
+.chat-usage-strip-bar {
+  display: flex;
+  height: 2px;
+  width: 100%;
+  overflow: hidden;
+  opacity: 0.85;
+}
+.chat-usage-seg {
+  display: block;
+  height: 100%;
+  min-width: 0;
+  transition: width 0.15s ease;
+}
+.chat-usage-seg-sys {
+  background: color-mix(in srgb, var(--ou-primary) 55%, var(--ou-bg-main));
+}
+.chat-usage-seg-dlg {
+  background: color-mix(in srgb, var(--ou-info, #3b82f6) 50%, var(--ou-bg-main));
+}
+.chat-usage-seg-tool {
+  background: color-mix(in srgb, var(--ou-warning) 45%, var(--ou-bg-main));
+}
 .streaming-indicator {
   display: flex;
   align-items: center;

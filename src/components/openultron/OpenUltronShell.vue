@@ -117,9 +117,18 @@ const webAppsNavActive = computed(
     route.path === '/app-open'
 )
 
-/** 从聊天/设置等页点「应用」时回到上次工作室；在应用库或仅预览页仍进应用库，避免误跳 */
+/** 从聊天/设置等页点「应用」时回到上次工作室；在应用库或仅预览页仍进应用库，避免误跳。
+ * 已在工作室页时：侧栏「应用」始终指向当前工作室，避免 session 未写入时误回应用列表。
+ */
 const webAppsNavTo = computed(() => {
   const path = route.path
+  if (path === '/web-app-studio') {
+    const appId = String(route.query.appId || '').trim()
+    const version = String(route.query.version || '').trim()
+    if (appId && version) {
+      return { path: '/web-app-studio', query: { appId, version } }
+    }
+  }
   if (path === '/web-apps' || path === '/app-open') {
     return '/web-apps'
   }
