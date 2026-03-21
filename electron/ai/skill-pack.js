@@ -122,6 +122,89 @@ function checkSkillGateRequires(gate, processEnv) {
   return { ok: true }
 }
 
+/** 从宿主 openultron.json 根对象按点路径取值（如 feishu.app_id、skills.entries.foo.env） */
+function getHostConfigValue(hostConfig, pathStr) {
+  if (!hostConfig || typeof hostConfig !== 'object' || typeof pathStr !== 'string') return undefined
+  const p = pathStr.trim()
+  if (!p) return undefined
+  const parts = p.split('.').filter(Boolean)
+  let cur = hostConfig
+  for (const k of parts) {
+    if (cur == null || typeof cur !== 'object') return undefined
+    cur = cur[k]
+  }
+  return cur
+}
+
+function isTruthyConfigValue(v) {
+  if (v === undefined || v === null) return false
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'number') return !Number.isNaN(v)
+  if (typeof v === 'string') return v.trim().length > 0
+  if (Array.isArray(v)) return v.length > 0
+  if (typeof v === 'object') return Object.keys(v).length > 0
+  return true
+}
+
+/**
+ * 门控：requires.config — 校验 openultron.json 中路径存在且非空（或 equals 匹配）
+ * @param {object} gate — metadata 中的 gate 片段（含 requires）
+ * @param {object} hostConfig — readAll() 得到的完整配置根对象
+ */
+function checkSkillGateRequiresConfig(gate, hostConfig) {
+  if (!gate || !gate.requires || hostConfig == null) return { ok: true }
+  const raw = gate.requires.config
+  if (raw === undefined || raw === null) return { ok: true }
+  const items = Array.isArray(raw) ? raw : [raw]
+  for (const item of items) {
+    if (typeof item === 'string') {
+      const pathStr = item.trim()
+      if (!pathStr) continue
+      const val = getHostConfigValue(hostConfig, pathStr)
+      if (!isTruthyConfigValue(val)) {
+        return { ok: false, reason: `requires.config: path "${pathStr}" not set or empty` }
+      }
+      continue
+    }
+    if (item && typeof item === 'object') {
+      const pathStr = String(item.path || item.jsonPath || '').trim()
+      if (!pathStr) continue
+      const val = getHostConfigValue(hostConfig, pathStr)
+      if (item.equals !== undefined) {
+        if (String(val) !== String(item.equals)) {
+          return { ok: false, reason: `requires.config: path "${pathStr}" does not match expected value` }
+        }
+      } else if (!isTruthyConfigValue(val)) {
+        return { ok: false, reason: `requires.config: path "${pathStr}" not set or empty` }
+      }
+    }
+  }
+  return { ok: true }
+}
+
+/**
+ * 合并 skills.entries 下与技能匹配的若干 key 的 env / apiKeys（后者用于 API Key，写入进程环境名）
+ */
+function mergeEntryEnvForKeys(entries, keys) {
+  const out = {}
+  if (!entries || typeof entries !== 'object') return out
+  for (const k of keys) {
+    const e = entries[k]
+    if (!e || typeof e !== 'object') continue
+    if (e.env && typeof e.env === 'object') {
+      for (const [ek, ev] of Object.entries(e.env)) {
+        if (typeof ev === 'string') out[ek] = ev
+      }
+    }
+    if (e.apiKeys && typeof e.apiKeys === 'object') {
+      for (const [ek, ev] of Object.entries(e.apiKeys)) {
+        if (typeof ev === 'string') out[ek] = ev
+      }
+    }
+  }
+  return out
+}
+
 function isTruthyMetaString(v) {
   return String(v || '').trim().toLowerCase() === 'true'
 }
@@ -189,8 +272,11 @@ function applyBaseDir(prompt, skillDir) {
 
 /**
  * 由 SKILL.md 原文 + 目录名生成技能对象
+ * @param {object} [options]
+ * @param {object} [options.hostConfig] — openultron.json readAll() 根对象，供 requires.config
+ * @param {object} [options.entries] — skills.entries
  */
-function parseSkillMd(raw, id, skillDir) {
+function parseSkillMd(raw, id, skillDir, options = {}) {
   const { front, body } = splitFrontmatter(raw)
   const meta = parseFrontmatterKeys(front || '')
   const gate = getGateSlice(meta)
@@ -205,8 +291,18 @@ function parseSkillMd(raw, id, skillDir) {
 
   const userInvocable = meta['user-invocable'] === undefined ? true : !['false', '0', 'no'].includes(String(meta['user-invocable']).toLowerCase())
 
+  const entries = options.entries && typeof options.entries === 'object' ? options.entries : {}
+  const hostConfig = options.hostConfig && typeof options.hostConfig === 'object' ? options.hostConfig : null
+  const entryKeys = skillEntryKeys(id, name, skillKey)
+  const entryEnv = mergeEntryEnvForKeys(entries, entryKeys)
+  const envForGate = { ...process.env, ...entryEnv }
+
   const skipGate = !!(gate && (gate.always === true || String(gate.always).toLowerCase() === 'true'))
-  const req = skipGate ? { ok: true } : checkSkillGateRequires(gate, process.env)
+  let req = skipGate ? { ok: true } : checkSkillGateRequires(gate, envForGate)
+  if (req.ok && !skipGate && gate && hostConfig) {
+    const rc = checkSkillGateRequiresConfig(gate, hostConfig)
+    if (!rc.ok) req = rc
+  }
 
   return {
     id,
@@ -245,6 +341,9 @@ module.exports = {
   getGateSlice,
   vendorGateNamespaceKey,
   checkSkillGateRequires,
+  checkSkillGateRequiresConfig,
+  getHostConfigValue,
+  mergeEntryEnvForKeys,
   mergeSkillRootDirs,
   applyBaseDir,
   parseSkillMd,

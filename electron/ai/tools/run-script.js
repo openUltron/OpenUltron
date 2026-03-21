@@ -7,6 +7,8 @@ const { spawn } = require('child_process')
 const { randomUUID } = require('crypto')
 const { getWorkspacePath } = require('../../app-root')
 const executorRegistry = require('../../extensions/executor-registry')
+const skillPack = require('../skill-pack')
+const openultronConfig = require('../../openultron-config')
 
 const TEMP_BASE = getWorkspacePath('temp')
 const DEFAULT_SCRIPT_TIMEOUT_MS = 90 * 1000
@@ -21,12 +23,12 @@ function getTaskDir(taskId) {
   return path.join(TEMP_BASE, safe)
 }
 
-function runPipInstall(workDir, timeoutMs) {
+function runPipInstall(workDir, timeoutMs, env) {
   return new Promise((resolve) => {
     const child = spawn('pip3', ['install', '-r', 'requirements.txt', '--target', workDir, '-q'], {
       cwd: workDir,
       shell: false,
-      env: process.env
+      env: env || process.env
     })
     let stdout = ''
     let stderr = ''
@@ -60,14 +62,15 @@ const definition = {
       runtime: { type: 'string', description: '可选。python | node | shell，默认 python' },
       task_id: { type: 'string', description: '可选。同一任务多次运行可复用同一目录（如写入文件后再次运行）；不传则每次新建' },
       requirements: { type: 'string', description: '可选。仅 Python。requirements.txt 内容，如 "requests\\nopenpyxl"；会先 pip install 再运行脚本' },
-      timeout_sec: { type: 'number', description: '脚本运行超时秒数，默认 90' }
+      timeout_sec: { type: 'number', description: '脚本运行超时秒数，默认 90' },
+      skill_env_key: { type: 'string', description: '可选。与 ~/.openultron/openultron.json 中 skills.entries 的 key 一致时，将该条目的 env / apiKeys 合并进子进程环境（调用需密钥的 API 时使用）' }
     },
     required: ['code']
   }
 }
 
 async function execute(args) {
-  const { code, runtime = 'python', task_id, requirements, timeout_sec = 90 } = args
+  const { code, runtime = 'python', task_id, requirements, timeout_sec = 90, skill_env_key } = args
 
   if (!code || typeof code !== 'string') {
     return { success: false, error: '缺少 code 参数' }
@@ -78,14 +81,26 @@ async function execute(args) {
     return { success: false, error: `未找到执行器: ${runtime}` }
   }
 
+  let skillEnv = {}
+  const sk = skill_env_key && String(skill_env_key).trim()
+  if (sk) {
+    try {
+      const cfg = openultronConfig.readAll() || {}
+      const entries = (cfg.skills && cfg.skills.entries) || {}
+      skillEnv = skillPack.mergeEntryEnvForKeys(entries, [sk])
+    } catch (_) {}
+  }
+
   ensureTempBase()
   const workDir = getTaskDir(task_id)
   fs.mkdirSync(workDir, { recursive: true })
 
+  const scriptEnv = { ...process.env, ...skillEnv }
+
   if (runtime === 'python' && requirements && requirements.trim()) {
     const reqPath = path.join(workDir, 'requirements.txt')
     fs.writeFileSync(reqPath, requirements.trim(), 'utf-8')
-    const pipResult = await runPipInstall(workDir, DEFAULT_PIP_TIMEOUT_MS)
+    const pipResult = await runPipInstall(workDir, DEFAULT_PIP_TIMEOUT_MS, scriptEnv)
     if (pipResult.exitCode !== 0 && pipResult.exitCode !== -1) {
       return {
         success: false,
@@ -98,7 +113,6 @@ async function execute(args) {
   }
 
   const timeoutMs = Math.min(Math.max(10, timeout_sec) * 1000, 300 * 1000)
-  const scriptEnv = { ...process.env }
   if (runtime === 'python' && requirements && requirements.trim()) {
     scriptEnv.PYTHONPATH = workDir
   }

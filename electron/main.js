@@ -2093,6 +2093,12 @@ app.whenReady().then(async () => {
   setImmediate(() => {
     startFeishuReceive().catch(e => console.warn('[Feishu] 启动接收失败:', e.message))
   })
+  setImmediate(() => rebindSkillsWatchPaths())
+  app.on('before-quit', () => {
+    try {
+      if (_skillsChokidar) _skillsChokidar.close().catch(() => {})
+    } catch (_) {}
+  })
 }).catch((error) => {
   console.error('Error in app.whenReady():', error)
 })
@@ -2876,7 +2882,8 @@ function ensureSkillsDir() {
 }
 
 // 解析 SKILL.md（技能包 / AgentSkills 风格，见 docs/SKILLS-PACK-COMPAT.md）
-function parseSkillFile(skillDir) {
+/** @param {{ hostConfig?: object, entries?: object }} [ctx] */
+function parseSkillFile(skillDir, ctx = {}) {
   const dirName = path.basename(skillDir)
   const filePath = path.join(skillDir, 'SKILL.md')
   let raw
@@ -2886,7 +2893,10 @@ function parseSkillFile(skillDir) {
     return null
   }
   try {
-    return skillPack.parseSkillMd(raw, dirName, skillDir)
+    return skillPack.parseSkillMd(raw, dirName, skillDir, {
+      hostConfig: ctx.hostConfig,
+      entries: ctx.entries
+    })
   } catch {
     return {
       id: dirName,
@@ -2933,14 +2943,14 @@ function writeSkillFile(name, skill) {
  */
 function readAllSkills(options = {}) {
   ensureSkillsDir()
-  let config = { skills: {} }
+  let hostConfig = {}
   try {
-    config = require('./openultron-config').readAll()
+    hostConfig = require('./openultron-config').readAll() || {}
   } catch (_) {}
-  const load = (config.skills && config.skills.load) || {}
+  const load = (hostConfig.skills && hostConfig.skills.load) || {}
   const extraDirs = Array.isArray(load.extraDirs) ? load.extraDirs : []
-  const entries = (config.skills && config.skills.entries && typeof config.skills.entries === 'object')
-    ? config.skills.entries
+  const entries = (hostConfig.skills && hostConfig.skills.entries && typeof hostConfig.skills.entries === 'object')
+    ? hostConfig.skills.entries
     : {}
   let workspaceDir = null
   const pp = options.projectPath != null ? String(options.projectPath).trim() : ''
@@ -2958,7 +2968,7 @@ function readAllSkills(options = {}) {
   const skills = []
   for (const [id, info] of merged) {
     try {
-      const skill = parseSkillFile(info.skillDir)
+      const skill = parseSkillFile(info.skillDir, { hostConfig, entries })
       if (!skill) continue
       skill.source = info.source === 'workspace' ? 'workspace' : info.source === 'extra' ? 'extra' : 'app'
       if (skillPack.entryDisabled(entries, skillPack.skillEntryKeys(id, skill.name, skill.skillKey))) continue
@@ -2972,6 +2982,14 @@ function readAllSkills(options = {}) {
 // 读取沙箱内技能（<appRoot>/skills/_sandbox/*/SKILL.md），供 get_skill list_sandbox 与 validate_skill 使用
 function readSandboxSkills() {
   ensureSkillsDir()
+  let hostConfig = {}
+  let entries = {}
+  try {
+    hostConfig = require('./openultron-config').readAll() || {}
+    entries = (hostConfig.skills && hostConfig.skills.entries && typeof hostConfig.skills.entries === 'object')
+      ? hostConfig.skills.entries
+      : {}
+  } catch (_) {}
   const sandboxDir = path.join(_skillsDir, '_sandbox')
   if (!fs.existsSync(sandboxDir)) return []
   const skills = []
@@ -2980,7 +2998,7 @@ function readSandboxSkills() {
     try { if (!fs.statSync(entryPath).isDirectory()) continue } catch { continue }
     const skillFile = path.join(entryPath, 'SKILL.md')
     if (!fs.existsSync(skillFile)) continue
-    try { skills.push(parseSkillFile(entryPath)) } catch {}
+    try { skills.push(parseSkillFile(entryPath, { hostConfig, entries })) } catch {}
   }
   return skills
 }
@@ -3033,6 +3051,56 @@ function initBuiltinSkills() {
 // 在 AI 区域初始化时写入内置技能，并预加载所有技能
 initBuiltinSkills()
 let _skillsCache = readAllSkills({})
+
+/** 技能目录或 openultron.json 变更时刷新缓存并通知渲染进程（与 install_skill 后行为一致） */
+function refreshSkillsCacheAndNotify() {
+  try {
+    _skillsCache = readAllSkills({})
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ai-skills-changed')
+  } catch (_) {}
+}
+
+let _skillsChokidar = null
+/** 监视 ~/.openultron/skills、extraDirs、openultron.json，变更后热刷新技能列表 */
+function getSkillsWatchPaths() {
+  const list = []
+  try {
+    if (_skillsDir && fs.existsSync(_skillsDir)) list.push(_skillsDir)
+    const cfgPath = getAppRootPath('openultron.json')
+    if (fs.existsSync(cfgPath)) list.push(cfgPath)
+    const cfg = require('./openultron-config').readAll() || {}
+    const extras = (cfg.skills && cfg.skills.load && cfg.skills.load.extraDirs) || []
+    for (const d of extras) {
+      const abs = String(d || '').trim()
+      if (abs && fs.existsSync(abs)) list.push(abs)
+    }
+  } catch (_) {}
+  return list
+}
+function rebindSkillsWatchPaths() {
+  try {
+    if (_skillsChokidar) {
+      _skillsChokidar.close().catch(() => {})
+      _skillsChokidar = null
+    }
+    const chokidar = require('chokidar')
+    const paths = getSkillsWatchPaths()
+    if (paths.length === 0) return
+    _skillsChokidar = chokidar.watch(paths, {
+      ignoreInitial: true,
+      depth: 12,
+      awaitWriteFinish: { stabilityThreshold: 200 }
+    })
+    _skillsChokidar.on('all', (event, p) => {
+      refreshSkillsCacheAndNotify()
+      if (p && path.basename(String(p)) === 'openultron.json') {
+        setTimeout(() => rebindSkillsWatchPaths(), 400)
+      }
+    })
+  } catch (e) {
+    console.warn('[skills] 目录监视不可用:', e.message)
+  }
+}
 
 const pendingEditorFilesRequests = new Map()
 
@@ -3117,10 +3185,7 @@ const aiToolRegistry = createDefaultRegistry({
   },
   getSandboxSkills: () => readSandboxSkills(),
   getSkillsSources: () => require('./openultron-config').getSkillsSources(),
-  onSkillChanged: () => {
-    _skillsCache = readAllSkills({})
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('ai-skills-changed')
-  }
+  onSkillChanged: () => refreshSkillsCacheAndNotify()
 })
 /** 将工具返回的 image_base64 注册为产物文件并返回 local-resource URL，避免 base64 进入消息体 */
 async function registerImageBase64ForChat(base64, sessionId) {
@@ -9017,12 +9082,17 @@ registerChannel('ai-backup-export', async (event, { options } = {}) => {
     fs.mkdirSync(appRootDir, { recursive: true })
     addDirToZip(appRootDir)
 
-    // meta.json
+    // meta.json（备份调试：版本、导出时间、应用版本）
     zip.addFile('meta.json', Buffer.from(JSON.stringify({
       version: 2,
+      formatVersion: 2,
       mode: 'full_app_root',
       appRootDirname: path.basename(appRootDir),
       exportedAt: new Date().toISOString(),
+      appName: app.getName(),
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      electron: process.versions.electron,
       stats
     }, null, 2), 'utf-8'))
 
@@ -9372,7 +9442,12 @@ registerChannel('ai-export-skills-pack', async (event, { names, includeSandbox }
     }
     zip.addFile('meta.json', Buffer.from(JSON.stringify({
       type: 'skills-pack',
+      formatVersion: 1,
       exportedAt: new Date().toISOString(),
+      appName: app.getName(),
+      appVersion: app.getVersion(),
+      platform: process.platform,
+      electron: process.versions.electron,
       skillsCount: count,
       includeSandbox: !!includeSandbox
     }, null, 2), 'utf-8'))
