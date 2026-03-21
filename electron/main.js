@@ -388,13 +388,10 @@ function createWindow(productionAppUrl) {
     mainWindow = null
   })
 
-  // 当窗口从后台切换到前台时，主动刷新待定文件检查
+  // 当窗口从后台切换到前台时，主动刷新待定文件检查（无日志，避免焦点切换刷屏）
   mainWindow.on('focus', () => {
-    console.log('🔄 窗口获得焦点，主动刷新待定文件检查')
-    // 发送消息到渲染进程，触发刷新
     if (mainWindow.webContents) {
       mainWindow.webContents.send('refresh-on-focus')
-      console.log('📡 [主进程] 已发送 refresh-on-focus 事件到前端')
     }
   })
 
@@ -770,7 +767,6 @@ registerChannel('send-refresh-on-focus', async (event) => {
     // 发送刷新事件到渲染进程（用于地址栏刷新按钮或 Command+R）
     if (mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('refresh-on-focus')
-      console.log('📡 [主进程] 手动触发 refresh-on-focus 事件')
     }
     return true
   } catch (error) {
@@ -784,7 +780,6 @@ registerChannel('notify-refresh-complete', async (event) => {
     // 通知刷新完成
     if (mainWindow && mainWindow.webContents) {
       mainWindow.webContents.send('refresh-complete')
-      console.log('📡 [主进程] 发送 refresh-complete 事件')
     }
     return true
   } catch (error) {
