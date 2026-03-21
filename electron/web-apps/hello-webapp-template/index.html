@@ -13,12 +13,51 @@
       --ok: #3fb950;
       --accent: #2f81f7;
       --border: #2d3642;
+      --code-bg: #0e1319;
+      --ok-text: #bceec6;
+      --pill-ok-text: #c8f5d0;
+      --btn-text: #d8e9ff;
+      --btn-bg: #1f3b63;
+      --btn-border: #315d95;
+      --btn-bg-hover: #274a7b;
+    }
+    html[data-theme="light"], html.theme-light {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #4b5563;
+      --ok: #1a7f37;
+      --accent: #0969da;
+      --border: #d8dee6;
+      --code-bg: #f3f5f8;
+      --ok-text: #166534;
+      --pill-ok-text: #14532d;
+      --btn-text: #0b3b7a;
+      --btn-bg: #e8f1ff;
+      --btn-border: #93b4e5;
+      --btn-bg-hover: #dbe9ff;
+    }
+    html[data-theme="dark"], html.theme-dark {
+      --bg: #0f1419;
+      --panel: #1a2028;
+      --text: #e6edf3;
+      --muted: #9fb0c0;
+      --ok: #3fb950;
+      --accent: #2f81f7;
+      --border: #2d3642;
+      --code-bg: #0e1319;
+      --ok-text: #bceec6;
+      --pill-ok-text: #c8f5d0;
+      --btn-text: #d8e9ff;
+      --btn-bg: #1f3b63;
+      --btn-border: #315d95;
+      --btn-bg-hover: #274a7b;
     }
     body {
       margin: 0;
       padding: 24px;
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: radial-gradient(1200px 400px at 20% -10%, #1a2430 0%, var(--bg) 55%);
+      background: var(--bg);
       color: var(--text);
     }
     .wrap {
@@ -62,28 +101,28 @@
     }
     .pill.ok {
       border-color: color-mix(in srgb, var(--ok) 45%, var(--border));
-      color: #c8f5d0;
+      color: var(--pill-ok-text);
       background: color-mix(in srgb, var(--ok) 15%, transparent);
     }
     button {
-      border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
-      color: #d8e9ff;
-      background: color-mix(in srgb, var(--accent) 22%, #10161f);
+      border: 1px solid var(--btn-border);
+      color: var(--btn-text);
+      background: var(--btn-bg);
       border-radius: 8px;
       padding: 6px 12px;
       font-size: 13px;
       cursor: pointer;
     }
-    button:hover { filter: brightness(1.06); }
+    button:hover { background: var(--btn-bg-hover); }
     pre {
       margin: 0;
       border: 1px solid var(--border);
       border-radius: 10px;
       padding: 10px;
-      background: #0e1319;
+      background: var(--code-bg);
       font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
       font-size: 12px;
-      color: #c5d3e0;
+      color: var(--text);
       overflow-x: auto;
       white-space: pre-wrap;
       line-height: 1.45;
@@ -94,7 +133,7 @@
       color: var(--muted);
       word-break: break-all;
     }
-    .status.ok { color: #bceec6; }
+    .status.ok { color: var(--ok-text); }
   </style>
 </head>
 <body>

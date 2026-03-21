@@ -8,41 +8,13 @@
       <div class="was-studio">
         <section class="was-sandbox" aria-label="沙盒预览">
           <header class="was-sandbox-head">
-            <button type="button" class="was-back ghost" @click="goBack">← 应用库</button>
+            <button type="button" class="was-back-outline" @click="goBack">返回应用库</button>
             <div class="was-title-block">
-              <nav class="was-crumb" aria-label="面包屑">
-                <router-link to="/web-apps" class="was-crumb-link">应用</router-link>
-                <span class="was-crumb-sep" aria-hidden="true">/</span>
-                <span class="was-crumb-current">{{ appName }}</span>
+              <div class="was-headline-row">
+                <span class="was-headline">应用工作室</span>
                 <span class="was-crumb-pill">工作室</span>
-              </nav>
-              <div class="was-name-row" role="group" aria-label="应用展示名称">
-                <label class="was-name-label" for="was-display-name">展示名称</label>
-                <input
-                  id="was-display-name"
-                  v-model.trim="displayNameDraft"
-                  type="text"
-                  class="was-name-input"
-                  maxlength="120"
-                  placeholder="应用列表中显示的名称"
-                  :disabled="nameSaving"
-                  @keydown.enter.prevent="saveDisplayName"
-                />
-                <button
-                  type="button"
-                  class="was-name-save"
-                  :disabled="nameSaving || !displayNameDraft || displayNameDraft === appName"
-                  @click="saveDisplayName"
-                >
-                  {{ nameSaving ? '保存中…' : '保存' }}
-                </button>
               </div>
-              <p v-if="nameSaveError" class="was-name-error" role="alert">{{ nameSaveError }}</p>
               <span class="was-meta">{{ appId }} · {{ appVersion }}</span>
-              <p class="was-tagline">服务预览 · 展示名称写入 manifest.json · 右侧 AI 可读写本应用目录下文件</p>
-              <p class="was-service-meta">
-                {{ serviceRunning ? `服务运行中 · ${serviceModeText}` : '服务未运行（可手动启动）' }}
-              </p>
             </div>
             <div class="was-actions">
               <button type="button" class="was-refresh ghost" @click="startService">启动服务</button>
@@ -51,10 +23,12 @@
             </div>
           </header>
           <webview
+            ref="previewWebview"
             :key="previewKey"
             class="was-webview"
             partition="persist:ou-webapps"
             :src="previewSrc"
+            @dom-ready="onPreviewDomReady"
             allowpopups
           />
         </section>
@@ -87,29 +61,27 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ChatPanel from '../components/ai/ChatPanel.vue'
 import { saveLastWebAppStudio } from '../composables/useLastWebAppStudio.js'
+import { useTheme } from '../composables/useTheme.js'
 
 defineOptions({ name: 'WebAppStudioView' })
 
 const route = useRoute()
 const router = useRouter()
 const api = window.electronAPI?.ai
+const { effectiveTheme } = useTheme()
 
 const appPath = ref('')
 const previewUrl = ref('')
 const appName = ref('')
-const displayNameDraft = ref('')
-const nameSaving = ref(false)
-const nameSaveError = ref('')
 const appId = ref('')
 const appVersion = ref('')
 const entryHtml = ref('index.html')
 const loadError = ref('')
 const previewKey = ref(0)
+const previewWebview = ref(null)
 const serviceRunning = ref(false)
 const serviceMode = ref('')
 let previewRefreshTimer = null
-/** AI 写入 manifest.json 后需从磁盘同步展示名称到输入框 */
-let studioManifestNeedsSync = false
 
 const studioSessionLabel = computed(() =>
   appName.value ? `应用 · ${appName.value}` : '应用'
@@ -127,8 +99,40 @@ const previewSrc = computed(() => {
   const u = previewUrl.value
   if (!u) return ''
   const sep = u.includes('?') ? '&' : '?'
-  return `${u}${sep}_ou_refresh=${previewKey.value}`
+  return `${u}${sep}_ou_refresh=${previewKey.value}&_ou_theme=${encodeURIComponent(effectiveTheme.value)}`
 })
+
+function getPreviewTheme() {
+  return effectiveTheme.value === 'dark' ? 'dark' : 'light'
+}
+
+function syncPreviewTheme() {
+  const wv = previewWebview.value
+  if (!wv || typeof wv.executeJavaScript !== 'function') return
+  const theme = getPreviewTheme()
+  const script = `(() => {
+    const t = ${JSON.stringify(theme)}
+    try {
+      const root = document.documentElement
+      root.setAttribute('data-ou-host-theme', t)
+      root.setAttribute('data-theme', t)
+      root.classList.remove('theme-light', 'theme-dark')
+      root.classList.add('theme-' + t)
+      root.style.colorScheme = t
+      if (document.body) {
+        document.body.style.colorScheme = t
+        if (t === 'dark' && !document.body.style.backgroundColor) document.body.style.backgroundColor = '#0f1419'
+        if (t === 'light' && !document.body.style.backgroundColor) document.body.style.backgroundColor = '#ffffff'
+      }
+    } catch (_) {}
+    return true
+  })()`
+  wv.executeJavaScript(script).catch(() => {})
+}
+
+function onPreviewDomReady() {
+  syncPreviewTheme()
+}
 
 /** 注入模型：明确「当前只改这一沙箱应用」，避免与其它项目混淆 */
 const studioSystemPrompt = computed(() => {
@@ -143,7 +147,7 @@ const studioSystemPrompt = computed(() => {
     '## 应用工作室（当前唯一编辑目标）',
     `你正在协助用户开发与调试 **一个** OpenUltron 沙箱应用。本轮会话的 **projectPath / 工作区** 即下方目录；**所有** file_operation、apply_patch 等涉及路径的操作，必须针对 **该应用**，不要改到 OpenUltron 主程序目录或其它无关项目。`,
     '',
-    `- **展示名称**（应用库列表标题，与 \`manifest.json\` 的 \`name\` 一致；可在工作室顶部修改并保存）：${name}`,
+    `- **应用名称**（来自 \`manifest.json\` 的 \`name\`）：${name}`,
     `- **应用 ID**：\`${id}\``,
     `- **版本**：\`${ver}\``,
     `- **应用根目录（绝对路径）**：\`${root}\``,
@@ -166,51 +170,6 @@ async function refreshPreview() {
 
 function onStudioPreviewRefreshEvent() {
   bumpPreview()
-}
-
-async function syncStudioManifestFromDisk() {
-  if (!api?.getWebApp || !appId.value || !appVersion.value) return
-  try {
-    const r = await api.getWebApp({ id: appId.value, version: appVersion.value })
-    if (r?.success && r.manifest?.name) {
-      appName.value = r.manifest.name
-      displayNameDraft.value = r.manifest.name
-    }
-  } catch {
-    /* ignore */
-  }
-}
-
-async function saveDisplayName() {
-  const id = appId.value
-  const version = appVersion.value
-  const next = String(displayNameDraft.value || '').trim()
-  nameSaveError.value = ''
-  if (!next) {
-    nameSaveError.value = '名称不能为空'
-    return
-  }
-  if (next === appName.value) return
-  if (!api?.updateWebAppName) {
-    nameSaveError.value = '当前环境不支持修改名称'
-    return
-  }
-  nameSaving.value = true
-  try {
-    const r = await api.updateWebAppName({ id, version, name: next })
-    if (!r?.success) {
-      nameSaveError.value = r?.error || '保存失败'
-      return
-    }
-    appName.value = r.manifest?.name || next
-    displayNameDraft.value = appName.value
-    if (r.previewUrl) previewUrl.value = r.previewUrl
-    bumpPreview()
-  } catch (e) {
-    nameSaveError.value = e?.message || String(e)
-  } finally {
-    nameSaving.value = false
-  }
 }
 
 function pathUnderApp(absPath) {
@@ -242,8 +201,6 @@ function onStudioToolResult(data) {
     const act = String(parsed.action || '')
     if (act === 'write' && parsed.success && pathUnderApp(parsed.path)) {
       shouldRefresh = true
-      const p = String(parsed.path || '').replace(/\\/g, '/')
-      if (/manifest\.json$/i.test(p)) studioManifestNeedsSync = true
     }
   } else if (name === 'apply_patch') {
     if (parsed.success && Array.isArray(parsed.results)) {
@@ -251,15 +208,6 @@ function onStudioToolResult(data) {
         (r) => r && r.success && r.path && pathUnderApp(r.path)
       )
       if (any) shouldRefresh = true
-      const touchedManifest = parsed.results.some(
-        (r) =>
-          r &&
-          r.success &&
-          r.path &&
-          pathUnderApp(r.path) &&
-          /manifest\.json$/i.test(String(r.path).replace(/\\/g, '/'))
-      )
-      if (touchedManifest) studioManifestNeedsSync = true
     }
   } else if (name === 'execute_command') {
     const ok = parsed.success === true
@@ -274,10 +222,6 @@ function onStudioToolResult(data) {
   previewRefreshTimer = setTimeout(() => {
     previewRefreshTimer = null
     bumpPreview()
-    if (studioManifestNeedsSync) {
-      studioManifestNeedsSync = false
-      void syncStudioManifestFromDisk()
-    }
   }, 450)
 }
 
@@ -308,8 +252,6 @@ async function loadApp() {
     appId.value = id
     appVersion.value = version
     appName.value = r.manifest?.name || id
-    displayNameDraft.value = appName.value
-    nameSaveError.value = ''
     const ent = r.manifest?.entry && typeof r.manifest.entry === 'object' ? r.manifest.entry.html : ''
     entryHtml.value = String(ent || 'index.html').trim() || 'index.html'
     saveLastWebAppStudio({ appId: id, version })
@@ -352,6 +294,12 @@ onMounted(() => {
 watch(
   () => [route.query.appId, route.query.version],
   () => loadApp()
+)
+watch(
+  () => effectiveTheme.value,
+  () => {
+    syncPreviewTheme()
+  }
 )
 
 onBeforeUnmount(() => {
@@ -405,20 +353,29 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--ou-border);
   flex-shrink: 0;
   background: var(--ou-bg-elevated, var(--ou-bg-main));
 }
-.was-back.ghost {
-  padding: 4px 10px;
-  border: none;
+.was-back-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--ou-border);
+  border-radius: 8px;
   background: transparent;
   color: var(--ou-text-muted);
   cursor: pointer;
+  flex-shrink: 0;
   font-size: 13px;
+  font-weight: 500;
 }
-.was-back.ghost:hover {
+.was-back-outline:hover {
+  border-color: var(--ou-text-muted);
   color: var(--ou-text);
 }
 .was-title-block {
@@ -426,107 +383,34 @@ onBeforeUnmount(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
-.was-crumb {
+.was-headline-row {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 6px;
-  font-size: 14px;
-  line-height: 1.3;
 }
-.was-crumb-link {
-  color: var(--ou-text-muted);
-  text-decoration: none;
-}
-.was-crumb-link:hover {
-  color: var(--ou-accent);
-}
-.was-crumb-sep {
-  color: var(--ou-border);
-  user-select: none;
-}
-.was-crumb-current {
-  font-weight: 600;
+.was-headline {
+  font-size: 22px;
+  line-height: 1.1;
+  font-weight: 700;
   color: var(--ou-text);
 }
 .was-crumb-pill {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 2px 8px;
+  padding: 3px 10px;
   border-radius: 999px;
   background: var(--ou-accent);
   color: var(--ou-accent-fg);
 }
-.was-name-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-.was-name-label {
-  font-size: 12px;
-  color: var(--ou-text-muted);
-  flex-shrink: 0;
-}
-.was-name-input {
-  flex: 1;
-  min-width: 140px;
-  max-width: 320px;
-  padding: 6px 10px;
-  font-size: 13px;
-  border-radius: 6px;
-  border: 1px solid var(--ou-border);
-  background: var(--ou-bg-main);
-  color: var(--ou-text);
-}
-.was-name-input:focus {
-  outline: none;
-  border-color: var(--ou-accent);
-}
-.was-name-save {
-  padding: 6px 12px;
-  font-size: 12px;
-  border-radius: 6px;
-  border: 1px solid var(--ou-border);
-  background: var(--ou-bg-main);
-  color: var(--ou-text);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-.was-name-save:hover:not(:disabled) {
-  border-color: var(--ou-accent);
-  color: var(--ou-accent);
-}
-.was-name-save:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.was-name-error {
-  margin: 4px 0 0;
-  font-size: 11px;
-  color: var(--ou-danger, #e5534b);
-}
 .was-meta {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--ou-text-muted);
   font-family: ui-monospace, monospace;
   word-break: break-all;
-}
-.was-tagline {
-  margin: 4px 0 0;
-  font-size: 11px;
-  color: var(--ou-text-muted);
-  line-height: 1.35;
-}
-.was-service-meta {
-  margin: 0;
-  font-size: 11px;
-  color: var(--ou-text-muted);
 }
 .was-actions {
   display: flex;
@@ -553,6 +437,7 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   width: 100%;
+  background: var(--ou-bg-main);
 }
 .was-chat {
   width: min(440px, 42vw);

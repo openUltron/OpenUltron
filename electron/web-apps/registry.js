@@ -237,6 +237,15 @@ node --check server.js
 python3 -c "print('python ok')"
 \`\`\`
 
+## 主题兼容（必须）
+
+沙箱预览会跟随宿主主题在 **light / dark** 间切换。实现页面时必须保证两套主题可用，避免只适配一种导致不可读。
+
+- 不要把文字和背景颜色写死为单一深浅组合。
+- 优先使用 CSS 变量承载颜色，再通过主题态切换变量值。
+- 兼容选择器建议：\`html[data-theme="light"]\` / \`html[data-theme="dark"]\` 或 \`.theme-light\` / \`.theme-dark\`。
+- 对比度至少保证正文可读（避免浅色字配浅底、深色字配深底）。
+
 ## 注意事项
 
 - 仅在应用目录内读写文件，避免越界到主程序目录。
@@ -304,15 +313,52 @@ function createBlankWebApp(opts = {}) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${safeName}</title>
   <style>
-    body { font-family: system-ui, sans-serif; padding: 1.5rem; background: #0f1419; color: #e6edf3; }
-    h1 { font-size: 1.25rem; margin: 0 0 0.5rem; }
-    p { margin: 0; opacity: 0.85; font-size: 0.9rem; line-height: 1.5; }
-    code { font-size: 0.85em; }
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2028;
+      --text: #e6edf3;
+      --muted: #9fb0c0;
+      --border: #2d3642;
+    }
+    html[data-theme="light"], html.theme-light {
+      --bg: #f6f8fb;
+      --panel: #ffffff;
+      --text: #1f2937;
+      --muted: #4b5563;
+      --border: #d8dee6;
+    }
+    html[data-theme="dark"], html.theme-dark {
+      --bg: #0f1419;
+      --panel: #1a2028;
+      --text: #e6edf3;
+      --muted: #9fb0c0;
+      --border: #2d3642;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .card {
+      max-width: 860px;
+      margin: 0 auto;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--panel);
+      padding: 14px 16px;
+    }
+    h1 { font-size: 22px; margin: 0 0 8px; letter-spacing: -0.02em; }
+    p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.5; }
+    code { font-size: 0.9em; color: var(--text); }
   </style>
 </head>
 <body>
-  <h1>${safeName}</h1>
-  <p>在 <strong>应用工作室</strong> 右侧用 AI 协助，或直接编辑本目录下的 <code>index.html</code>、<code>service.js</code> 与 <code>manifest.json</code>。</p>
+  <main class="card">
+    <h1>${safeName}</h1>
+    <p>在 <strong>应用工作室</strong> 右侧用 AI 协助，或直接编辑本目录下的 <code>index.html</code>、<code>service.js</code> 与 <code>manifest.json</code>。本页面已兼容浅色/深色主题。</p>
+  </main>
 </body>
 </html>
 `

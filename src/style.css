@@ -4,6 +4,7 @@ html.theme-dark {
   --ou-bg-main: #1e1e1e;
   --ou-bg-sidebar: #252526;
   --ou-bg-card: #2d2d2d;
+  --ou-bg-elevated: #252a33;
   --ou-border: rgba(255, 255, 255, 0.08);
   --ou-text: #d4d4d4;
   --ou-text-muted: #888;
@@ -21,12 +22,14 @@ html.theme-dark {
   --ou-success: #0dbc79;
   --ou-warning: #e5c07b;
   --ou-error: #f14c4c;
+  --ou-danger: #f14c4c;
 }
 
 html.theme-light {
   --ou-bg-main: #f3f4f6;
   --ou-bg-sidebar: #ffffff;
   --ou-bg-card: #ffffff;
+  --ou-bg-elevated: #ffffff;
   --ou-border: rgba(0, 0, 0, 0.1);
   --ou-text: #1f2937;
   --ou-text-muted: #6b7280;
@@ -44,6 +47,7 @@ html.theme-light {
   --ou-success: #1a7f37;
   --ou-warning: #9a6700;
   --ou-error: #cf222e;
+  --ou-danger: #cf222e;
 }
 
 * {

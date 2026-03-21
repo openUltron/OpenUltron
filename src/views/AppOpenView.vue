@@ -6,14 +6,10 @@
     </div>
     <template v-else-if="previewUrl">
       <header class="aopen-head">
-        <button type="button" class="aopen-back ghost" @click="goBack">← 应用库</button>
+        <button type="button" class="aopen-back-outline" @click="goBack">返回应用库</button>
         <div class="aopen-title-block">
           <span class="aopen-title">{{ appName }}</span>
           <span class="aopen-meta">{{ appId }} · {{ appVersion }}</span>
-          <p class="aopen-tagline">服务预览 · 全屏沙盒渲染</p>
-          <p class="aopen-service-meta">
-            {{ serviceRunning ? `服务运行中 · ${serviceModeText}` : '服务未运行（可手动启动）' }}
-          </p>
         </div>
         <div class="aopen-actions">
           <button type="button" class="aopen-btn" @click="startService">启动服务</button>
@@ -23,10 +19,12 @@
         </div>
       </header>
       <webview
+        ref="previewWebview"
         :key="previewKey"
         class="aopen-webview"
         partition="persist:ou-webapps"
         :src="previewSrc"
+        @dom-ready="onPreviewDomReady"
         allowpopups
       />
     </template>
@@ -37,12 +35,14 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useTheme } from '../composables/useTheme.js'
 
 defineOptions({ name: 'AppOpenView' })
 
 const route = useRoute()
 const router = useRouter()
 const api = window.electronAPI?.ai
+const { effectiveTheme } = useTheme()
 
 const appName = ref('')
 const appId = ref('')
@@ -50,22 +50,46 @@ const appVersion = ref('')
 const previewUrl = ref('')
 const loadError = ref('')
 const previewKey = ref(0)
-const serviceRunning = ref(false)
-const serviceMode = ref('')
-
-const serviceModeText = computed(() => {
-  const m = String(serviceMode.value || '').trim()
-  if (m === 'managed') return '自定义命令'
-  if (m === 'static') return '默认静态服务'
-  return '未知模式'
-})
+const previewWebview = ref(null)
 
 const previewSrc = computed(() => {
   const u = previewUrl.value
   if (!u) return ''
   const sep = u.includes('?') ? '&' : '?'
-  return `${u}${sep}_ou_refresh=${previewKey.value}`
+  return `${u}${sep}_ou_refresh=${previewKey.value}&_ou_theme=${encodeURIComponent(effectiveTheme.value)}`
 })
+
+function getPreviewTheme() {
+  return effectiveTheme.value === 'dark' ? 'dark' : 'light'
+}
+
+function syncPreviewTheme() {
+  const wv = previewWebview.value
+  if (!wv || typeof wv.executeJavaScript !== 'function') return
+  const theme = getPreviewTheme()
+  const script = `(() => {
+    const t = ${JSON.stringify(theme)}
+    try {
+      const root = document.documentElement
+      root.setAttribute('data-ou-host-theme', t)
+      root.setAttribute('data-theme', t)
+      root.classList.remove('theme-light', 'theme-dark')
+      root.classList.add('theme-' + t)
+      root.style.colorScheme = t
+      if (document.body) {
+        document.body.style.colorScheme = t
+        if (t === 'dark' && !document.body.style.backgroundColor) document.body.style.backgroundColor = '#0f1419'
+        if (t === 'light' && !document.body.style.backgroundColor) document.body.style.backgroundColor = '#ffffff'
+      }
+    } catch (_) {}
+    return true
+  })()`
+  wv.executeJavaScript(script).catch(() => {})
+}
+
+function onPreviewDomReady() {
+  syncPreviewTheme()
+}
 
 function bumpPreview() {
   previewKey.value += 1
@@ -91,8 +115,6 @@ async function loadApp() {
       return
     }
     previewUrl.value = r.previewUrl || ''
-    serviceRunning.value = !!r?.service?.running
-    serviceMode.value = String(r?.service?.mode || '')
     appId.value = id
     appVersion.value = version
     appName.value = r.manifest?.name || id
@@ -109,8 +131,6 @@ async function startService() {
   const r = await api.startWebAppService({ id, version })
   if (r?.success && r?.url) {
     previewUrl.value = r.url
-    serviceRunning.value = true
-    serviceMode.value = String(r.mode || '')
     bumpPreview()
     return
   }
@@ -123,8 +143,6 @@ async function stopService() {
   const version = String(route.query.version || '').trim()
   if (!id || !version) return
   await api.stopWebAppService({ id, version })
-  serviceRunning.value = false
-  serviceMode.value = ''
   await loadApp()
 }
 
@@ -148,6 +166,12 @@ onMounted(() => loadApp())
 watch(
   () => [route.query.appId, route.query.version],
   () => loadApp()
+)
+watch(
+  () => effectiveTheme.value,
+  () => {
+    syncPreviewTheme()
+  }
 )
 </script>
 
@@ -184,15 +208,23 @@ watch(
   flex-shrink: 0;
   background: var(--ou-bg-elevated, var(--ou-bg-main));
 }
-.aopen-back.ghost {
-  padding: 4px 10px;
-  border: none;
+.aopen-back-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--ou-border);
+  border-radius: 8px;
   background: transparent;
   color: var(--ou-text-muted);
   cursor: pointer;
   font-size: 13px;
+  font-weight: 500;
 }
-.aopen-back.ghost:hover {
+.aopen-back-outline:hover {
+  border-color: var(--ou-text-muted);
   color: var(--ou-text);
 }
 .aopen-title-block {
@@ -212,16 +244,6 @@ watch(
   color: var(--ou-text-muted);
   font-family: ui-monospace, monospace;
   word-break: break-all;
-}
-.aopen-tagline {
-  margin: 2px 0 0;
-  font-size: 11px;
-  color: var(--ou-text-muted);
-}
-.aopen-service-meta {
-  margin: 0;
-  font-size: 11px;
-  color: var(--ou-text-muted);
 }
 .aopen-actions {
   display: flex;
@@ -250,5 +272,6 @@ watch(
   flex: 1;
   min-height: 0;
   width: 100%;
+  background: var(--ou-bg-main);
 }
 </style>

@@ -258,13 +258,12 @@ defineExpose({ load, installSample, importZip })
 }
 .wam-toolbar {
   margin-bottom: 0;
-  padding: 20px 28px 20px;
+  padding: 20px 20px 20px;
   border-bottom: 1px solid var(--ou-border);
   background: linear-gradient(180deg, var(--ou-bg-elevated, var(--ou-bg-main)) 0%, var(--ou-bg-main) 100%);
 }
 .wam-page-hero {
-  max-width: 920px;
-  margin: 0 auto;
+  width: 100%;
 }
 .wam-page-title {
   font-size: 1.35rem;
@@ -295,20 +294,16 @@ defineExpose({ load, installSample, importZip })
   color: var(--ou-danger, #f85149);
   font-size: 13px;
   margin-bottom: 12px;
-  max-width: 920px;
-  margin-left: auto;
-  margin-right: auto;
-  padding: 0 28px;
+  padding: 0 20px;
 }
 .wam-loading {
   color: var(--ou-text-muted);
   font-size: 13px;
-  padding: 0 28px;
+  padding: 0 20px;
 }
 .wam-empty {
-  max-width: 920px;
-  margin: 0 auto;
-  padding: 32px 28px 48px;
+  margin: 0 20px;
+  padding: 32px 20px 48px;
   text-align: center;
   border: 1px dashed var(--ou-border);
   border-radius: 12px;
@@ -329,7 +324,7 @@ defineExpose({ load, installSample, importZip })
 .wam-list {
   list-style: none;
   margin: 0;
-  padding: 0 28px 24px;
+  padding: 0 0 24px;
   border-top: 1px solid var(--ou-border);
 }
 .wam-row {
@@ -337,7 +332,7 @@ defineExpose({ load, installSample, importZip })
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--ou-border);
   background: var(--ou-bg-elevated, var(--ou-bg-main));
 }
@@ -370,13 +365,15 @@ defineExpose({ load, installSample, importZip })
   padding: 6px 12px;
   border-radius: 6px;
   border: 1px solid var(--ou-border);
-  background: var(--ou-bg-elevated, #2d333b);
+  background: var(--ou-bg-card);
   color: var(--ou-text);
   font-size: 13px;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .wam-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
+  background: var(--ou-bg-hover);
+  border-color: color-mix(in srgb, var(--ou-text-muted) 35%, var(--ou-border));
 }
 .wam-btn:disabled {
   opacity: 0.5;
@@ -391,7 +388,8 @@ defineExpose({ load, installSample, importZip })
   color: var(--ou-accent-fg);
 }
 .wam-btn.primary:hover:not(:disabled) {
-  filter: brightness(1.06);
+  background: color-mix(in srgb, var(--ou-accent) 90%, #000 10%);
+  border-color: color-mix(in srgb, var(--ou-accent) 88%, #000 12%);
 }
 .wam-btn.danger {
   border-color: var(--ou-danger, #f85149);

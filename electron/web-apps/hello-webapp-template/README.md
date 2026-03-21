@@ -23,6 +23,14 @@ OpenUltron 打开该应用时会优先启动服务，然后加载 `http://127.0.
 - 服务端口通过环境变量 `PORT` 注入
 - 页面可请求 `/api/health` 检查服务是否在线
 
+## 主题兼容（必须）
+
+沙箱预览会跟随宿主主题在 **light / dark** 间切换，页面实现必须兼容两套主题。
+
+- 建议通过 CSS 变量管理颜色，不要写死单一深浅风格。
+- 兼容选择器建议：`html[data-theme="light"]` / `html[data-theme="dark"]`，或 `.theme-light` / `.theme-dark`。
+- 需保证文字与背景对比度可读，避免主题切换后出现“看不见文字”。
+
 ## 开发调试
 
 在应用工作室右侧 AI 中可直接执行命令：
@@ -38,4 +46,3 @@ python3 -c "print('python ok')"
 1. 按业务拆分 `api/`、`public/`、`src/` 目录。
 2. 在 `manifest.json` 的 `entry.service.command` 配置你的启动命令（如 `npm run dev`）。
 3. 如需开放 AI 工具，可在 `manifest.aiTools` 声明并由应用实现。
-
