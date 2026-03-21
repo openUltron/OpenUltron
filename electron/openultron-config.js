@@ -39,7 +39,7 @@ const DEFAULT_AI = {
     { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', apiKey: '' },
     { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiKey: '' },
     // 国外主流
-    { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: '' },
+    { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: '', openAiWireMode: 'codex' },
     { name: 'Anthropic Claude', baseUrl: 'https://api.anthropic.com/v1', apiKey: '' },
     { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: '' },
     { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: '' },
@@ -101,6 +101,14 @@ const DEFAULT_HARDWARE = {
   notify: { enabled: true }
 }
 
+const DEFAULT_PROXY = {
+  enabled: false,
+  http_proxy: 'http://127.0.0.1:7890',
+  https_proxy: 'http://127.0.0.1:7890',
+  all_proxy: 'socks5://127.0.0.1:7890',
+  no_proxy: '127.0.0.1,localhost'
+}
+
 /** 默认含 ClawHub；list_remote 对 type=clawhub 走搜索 API（见 get-skill.js） */
 const DEFAULT_SKILLS_SOURCES = [
   { name: 'ClawHub', url: 'https://clawhub.ai/', enabled: true, type: 'clawhub' }
@@ -159,6 +167,15 @@ function normalizeModelBindings(bindings, providers = [], pool = [], fallbackPro
   return out
 }
 
+/** 合并 OpenAI 接口类型：已保存优先；未写字段时用默认模板（如 OpenAI 默认 codex） */
+function pickOpenAiWireMode(saved, defaultTemplate) {
+  const v = saved && saved.openAiWireMode
+  if (v === 'responses' || v === 'chat' || v === 'codex' || v === 'auto') return v
+  const d = defaultTemplate && defaultTemplate.openAiWireMode
+  if (d === 'responses' || d === 'chat' || d === 'codex' || d === 'auto') return d
+  return undefined
+}
+
 function mergeProviders(defaultList, savedList) {
   if (!Array.isArray(savedList) || savedList.length === 0) return defaultList.map(p => ({ ...p }))
   const byUrl = new Map(savedList.filter(p => p && p.baseUrl).map(p => [p.baseUrl, p]))
@@ -166,12 +183,20 @@ function mergeProviders(defaultList, savedList) {
     const saved = byUrl.get(p.baseUrl)
     if (saved) {
       byUrl.delete(p.baseUrl)
-      return { name: p.name, baseUrl: p.baseUrl, apiKey: saved.apiKey ?? '' }
+      const out = { name: p.name, baseUrl: p.baseUrl, apiKey: saved.apiKey ?? '' }
+      const wm = pickOpenAiWireMode(saved, p)
+      if (wm) out.openAiWireMode = wm
+      return out
     }
     return { ...p }
   })
   byUrl.forEach((saved) => {
-    merged.push({ name: saved.name || saved.baseUrl, baseUrl: saved.baseUrl, apiKey: saved.apiKey ?? '' })
+    const out = { name: saved.name || saved.baseUrl, baseUrl: saved.baseUrl, apiKey: saved.apiKey ?? '' }
+    const v = saved.openAiWireMode
+    if (v === 'responses' || v === 'chat' || v === 'codex' || v === 'auto') {
+      out.openAiWireMode = v
+    }
+    merged.push(out)
   })
   return merged
 }
@@ -201,6 +226,7 @@ function readAll() {
         dingtalk,
         webhooks,
         hardware,
+        proxy: { ...DEFAULT_PROXY, ...(data.proxy && typeof data.proxy === 'object' ? data.proxy : {}) },
         skills: skillsBlock
       }
     } catch (e) {
@@ -234,6 +260,7 @@ function readAll() {
     dingtalk: { ...DEFAULT_DINGTALK },
     webhooks: [],
     hardware: { ...DEFAULT_HARDWARE },
+    proxy: { ...DEFAULT_PROXY },
     skills: normalizeSkillsBlock({})
   }
   writeAll(merged)
@@ -431,6 +458,24 @@ function setWebhooks(webhooks) {
   writeAll(all)
 }
 
+function getProxy() {
+  const all = readAll()
+  return all.proxy && typeof all.proxy === 'object' ? { ...DEFAULT_PROXY, ...all.proxy } : { ...DEFAULT_PROXY }
+}
+
+function setProxy(partial) {
+  const all = readAll()
+  const cur = all.proxy && typeof all.proxy === 'object' ? { ...DEFAULT_PROXY, ...all.proxy } : { ...DEFAULT_PROXY }
+  all.proxy = {
+    enabled: partial && partial.enabled !== undefined ? !!partial.enabled : !!cur.enabled,
+    http_proxy: partial && partial.http_proxy !== undefined ? String(partial.http_proxy || '').trim() : String(cur.http_proxy || ''),
+    https_proxy: partial && partial.https_proxy !== undefined ? String(partial.https_proxy || '').trim() : String(cur.https_proxy || ''),
+    all_proxy: partial && partial.all_proxy !== undefined ? String(partial.all_proxy || '').trim() : String(cur.all_proxy || ''),
+    no_proxy: partial && partial.no_proxy !== undefined ? String(partial.no_proxy || '').trim() : String(cur.no_proxy || '')
+  }
+  writeAll(all)
+}
+
 module.exports = {
   getPath,
   readAll,
@@ -451,10 +496,13 @@ module.exports = {
   getHardware,
   getWebhooks,
   setWebhooks,
+  getProxy,
+  setProxy,
   ensureMerged,
   DEFAULT_AI,
   DEFAULT_FEISHU,
   DEFAULT_TELEGRAM,
   DEFAULT_DINGTALK,
   DEFAULT_HARDWARE,
+  DEFAULT_PROXY,
 }

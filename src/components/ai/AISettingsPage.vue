@@ -272,7 +272,7 @@ const DEFAULT_PROVIDERS = [
   { name: '火山引擎豆包', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', apiKey: '' },
   { name: '硅基流动', baseUrl: 'https://api.siliconflow.cn/v1', apiKey: '' },
   { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', apiKey: '' },
-  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: '' },
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', apiKey: '', openAiWireMode: 'codex' },
   { name: 'Anthropic Claude', baseUrl: 'https://api.anthropic.com/v1', apiKey: '' },
   { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', apiKey: '' },
   { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: '' },
@@ -390,19 +390,20 @@ const isOpenAIProvider = computed(() => {
   return base.includes('api.openai.com')
 })
 
-/** 当前 OpenAI 供应商：Chat / Platform Responses / Codex(chatgpt)（空=自动：JWT→Codex 后端） */
+/** 当前 OpenAI 供应商：Chat / Platform Responses / Codex(chatgpt)（空选项=自动，落盘为 openAiWireMode: 'auto'） */
 const currentProviderOpenAiWireMode = computed({
   get() {
     const p = rawData.providers.find(x => x.baseUrl === config.apiBaseUrl)
     const v = p?.openAiWireMode
     if (v === 'responses' || v === 'chat' || v === 'codex') return v
+    if (v === 'auto') return ''
     return ''
   },
   set(v) {
     const p = rawData.providers.find(x => x.baseUrl === config.apiBaseUrl)
     if (!p) return
     if (v === 'responses' || v === 'chat' || v === 'codex') p.openAiWireMode = v
-    else delete p.openAiWireMode
+    else p.openAiWireMode = 'auto'
   }
 })
 
@@ -416,6 +417,14 @@ const filteredModels = computed(() => {
   )
 })
 
+function pickOpenAiWireModeFromSaved(saved, templateP) {
+  const v = saved?.openAiWireMode
+  if (v === 'responses' || v === 'chat' || v === 'codex' || v === 'auto') return v
+  const d = templateP?.openAiWireMode
+  if (d === 'responses' || d === 'chat' || d === 'codex' || d === 'auto') return d
+  return undefined
+}
+
 // 合并默认供应商与服务端返回的列表，确保页面上始终展示全部预设（含升级后新增的）
 function mergeProvidersWithSaved(defaultList, savedList) {
   if (!Array.isArray(savedList) || savedList.length === 0) return defaultList.map(p => ({ ...p }))
@@ -424,25 +433,27 @@ function mergeProvidersWithSaved(defaultList, savedList) {
     const saved = byUrl.get(p.baseUrl)
     if (saved) {
       byUrl.delete(p.baseUrl)
+      const wm = pickOpenAiWireModeFromSaved(saved, p)
       return {
         name: p.name,
         baseUrl: p.baseUrl,
         apiKey: saved.apiKey ?? '',
-        ...(saved.openAiWireMode === 'responses' || saved.openAiWireMode === 'chat' || saved.openAiWireMode === 'codex'
-          ? { openAiWireMode: saved.openAiWireMode }
-          : {})
+        ...(wm ? { openAiWireMode: wm } : {})
       }
     }
     return { ...p }
   })
-  byUrl.forEach((saved) => merged.push({
-    name: saved.name || saved.baseUrl,
-    baseUrl: saved.baseUrl,
-    apiKey: saved.apiKey ?? '',
-    ...(saved.openAiWireMode === 'responses' || saved.openAiWireMode === 'chat' || saved.openAiWireMode === 'codex'
-      ? { openAiWireMode: saved.openAiWireMode }
-      : {})
-  }))
+  byUrl.forEach((saved) => {
+    const v = saved.openAiWireMode
+    merged.push({
+      name: saved.name || saved.baseUrl,
+      baseUrl: saved.baseUrl,
+      apiKey: saved.apiKey ?? '',
+      ...(v === 'responses' || v === 'chat' || v === 'codex' || v === 'auto'
+        ? { openAiWireMode: v }
+        : {})
+    })
+  })
   return merged
 }
 
@@ -850,7 +861,7 @@ function buildRawPayload() {
     name: p.name,
     baseUrl: p.baseUrl,
     apiKey: p.baseUrl === config.apiBaseUrl ? (config.apiKey ?? p.apiKey ?? '') : (p.apiKey ?? ''),
-    ...(p.openAiWireMode === 'responses' || p.openAiWireMode === 'chat' || p.openAiWireMode === 'codex'
+    ...(p.openAiWireMode === 'responses' || p.openAiWireMode === 'chat' || p.openAiWireMode === 'codex' || p.openAiWireMode === 'auto'
       ? { openAiWireMode: p.openAiWireMode }
       : {})
   }))

@@ -19,7 +19,7 @@ const definition = {
 }
 
 async function execute(args, context = {}) {
-  const { capabilityId, method, args = {} } = args
+  const { capabilityId, method, args: invokeArgs = {} } = args
   if (!capabilityId || !method) {
     return { success: false, error: '缺少 capabilityId 或 method' }
   }
@@ -40,7 +40,7 @@ async function execute(args, context = {}) {
     return { success: false, error: `能力 ${capabilityId} 不存在方法: ${method}` }
   }
   try {
-    const result = await methodDef.invoke(args, {
+    const result = await methodDef.invoke(invokeArgs, {
       projectPath: context.projectPath,
       sessionId: context.sessionId
     })

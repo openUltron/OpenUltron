@@ -3,6 +3,8 @@
 
 const https = require('https')
 const http = require('http')
+const net = require('net')
+const tls = require('tls')
 const path = require('path')
 const { URL } = require('url')
 const { SSEParser } = require('./stream-parser')
@@ -21,7 +23,6 @@ const {
   getOpenAiResponsesPostUrl,
   isCodexChatgptResponsesUrl,
   shouldUseOpenAiResponses,
-  shouldFallbackResponsesToChat,
   extractResponsesOutputText
 } = require('./openai-responses')
 
@@ -130,6 +131,23 @@ function estimateTokenBreakdown(messages) {
     dialogPct: ratio(buckets.dialog),
     toolPct: ratio(buckets.tool),
     otherPct: ratio(buckets.other)
+  }
+}
+
+function getProxyUrlForTarget(targetUrl) {
+  try {
+    const isHttps = String(targetUrl?.protocol || '').toLowerCase() === 'https:'
+    const env = process.env || {}
+    const direct = isHttps
+      ? (env.https_proxy || env.HTTPS_PROXY || env.http_proxy || env.HTTP_PROXY || '')
+      : (env.http_proxy || env.HTTP_PROXY || '')
+    const fallback = env.all_proxy || env.ALL_PROXY || ''
+    const raw = String(direct || fallback || '').trim()
+    if (!raw) return null
+    const u = new URL(raw)
+    return u
+  } catch {
+    return null
   }
 }
 
@@ -1199,24 +1217,7 @@ class Orchestrator {
 
   // ---------- 单轮非流式文本生成（用于 commit message 等简单场景）----------
   async generateText(opts = {}) {
-    try {
-      return await this._generateTextOnce(opts)
-    } catch (e) {
-      const cfg = opts.config || this.getConfig()
-      let codexUrl = null
-      try {
-        codexUrl = getOpenAiResponsesPostUrl(cfg.apiBaseUrl, cfg.openAiWireMode, cfg.apiKey)
-      } catch { /* ignore */ }
-      // ChatGPT Codex 后端失败时不要回退到 Platform chat（无订阅额度）
-      if (codexUrl && isCodexChatgptResponsesUrl(codexUrl)) throw e
-      if (shouldFallbackResponsesToChat(e) && shouldUseOpenAiResponses(cfg.apiBaseUrl, cfg.openAiWireMode, cfg.apiKey)) {
-        return await this._generateTextOnce({
-          ...opts,
-          config: { ...cfg, openAiWireMode: 'chat' }
-        })
-      }
-      throw e
-    }
+    return this._generateTextOnce(opts)
   }
 
   async _generateTextOnce({ prompt, model: overrideModel, systemPrompt, config: externalConfig } = {}) {
@@ -1553,7 +1554,9 @@ class Orchestrator {
 
         if (this._shouldRetryError(err, attempt, maxRetries)) {
           const delay = this._getRetryDelayMs(attempt, baseDelayMs, maxDelayMs)
-          console.warn(`[AI] API 调用失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries})：`, err.message)
+          const target = `${url.hostname}${url.pathname}`
+          const code = err?.code ? ` code=${String(err.code)}` : ''
+          console.warn(`[AI] API 调用失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries}) [${target}]${code}：`, err.message)
           this._sleep(delay, signal)
             .then(() => attemptOnce(attempt + 1).then(resolve, reject))
             .catch(() => reject(err))
@@ -1642,7 +1645,7 @@ class Orchestrator {
   /**
    * Responses 形态：JWT+自动 或 codex 模式 → `chatgpt.com/backend-api/codex/responses`；
    * responses(Platform) 模式 → `api.openai.com/v1/responses`。
-   * 仅 Platform Responses 无权限时回退 Chat Completions；ChatGPT Codex 失败不回退。
+   * 不在 Responses 与 Chat Completions 之间自动切换；失败由上层按模型池/备用模型处理。
    */
   _callOpenAIResponsesLLM(body, config, sender, sessionId, signal) {
     const { maxRetries, baseDelayMs, maxDelayMs } = this._getRetryConfig(config)
@@ -1660,7 +1663,9 @@ class Orchestrator {
       const onError = (err) => {
         if (this._shouldRetryError(err, attempt, maxRetries)) {
           const delay = this._getRetryDelayMs(attempt, baseDelayMs, maxDelayMs)
-          console.warn(`[AI] Responses API 调用失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries})：`, err.message)
+          const target = `${url.hostname}${url.pathname}`
+          const code = err?.code ? ` code=${String(err.code)}` : ''
+          console.warn(`[AI] Responses API 调用失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries}) [${target}]${code}：`, err.message)
           this._sleep(delay, signal)
             .then(() => attemptOnce(attempt + 1).then(resolve, reject))
             .catch(() => reject(err))
@@ -1725,22 +1730,7 @@ class Orchestrator {
       req.end()
     })
 
-    return attemptOnce(0).catch((err) => {
-      if (isCodexChatgptResponsesUrl(responsesPostUrl)) {
-        throw err
-      }
-      if (shouldFallbackResponsesToChat(err)) {
-        console.warn('[AI] Platform Responses 无权限（缺 api.responses.write 等），回退 Chat Completions:', err.message)
-        if (canSend(sender)) {
-          sender.send('ai-chat-token', {
-            sessionId,
-            token: '\n\n> ⚠️ 当前凭证无 **Platform Responses** 权限（需 `api.responses.write` 等 scope）。已自动改用 **Chat Completions**。若使用受限 API Key，请在 platform.openai.com 为该 Key 勾选 Responses 权限，或改用「接口类型：Chat」并保存。\n\n'
-          })
-        }
-        return this._callOpenAILLM(body, config, sender, sessionId, signal)
-      }
-      throw err
-    })
+    return attemptOnce(0)
   }
 
   // ========== Anthropic Messages API ==========
@@ -2005,11 +1995,17 @@ class Orchestrator {
       return false
     }
 
-    const msg = String(err.message || '').toLowerCase()
+    const code = String(err.code || '').toUpperCase()
+    if (['ECONNRESET', 'ETIMEDOUT', 'EPIPE', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED'].includes(code)) return true
+
+    const msg = String(err.message || err || '').toLowerCase()
     return (
       msg.includes('timeout') ||
       msg.includes('econnreset') ||
       msg.includes('socket hang up') ||
+      msg.includes('socket disconnected') ||
+      msg.includes('tls connection') ||
+      msg.includes('secure tls') ||
       msg.includes('eai_again') ||
       msg.includes('enotfound') ||
       msg.includes('etimedout')
@@ -2037,15 +2033,89 @@ class Orchestrator {
 
   _makeRequest(url, method, headers, signal) {
     const isHttps = url.protocol === 'https:'
-    const httpModule = isHttps ? https : http
-
-    const req = httpModule.request({
-      hostname: url.hostname,
-      port: url.port || (isHttps ? 443 : 80),
-      path: url.pathname + url.search,
+    const proxyUrl = getProxyUrlForTarget(url)
+    const proxyProtocol = String(proxyUrl?.protocol || '').toLowerCase()
+    const useHttpProxy = !!proxyUrl && proxyProtocol === 'http:'
+    const useSocksProxy = !!proxyUrl && proxyProtocol.startsWith('socks')
+    const unsupportedProxy = !!proxyUrl && !useHttpProxy && !useSocksProxy
+    const reqOpts = {
       method,
       headers
-    })
+    }
+
+    if (useSocksProxy) {
+      console.warn('[AI] 检测到 SOCKS 代理配置，当前 Node 直连请求暂不支持 SOCKS 隧道，已回退直连：', String(proxyUrl))
+    }
+    if (unsupportedProxy) {
+      console.warn('[AI] 当前仅支持 http:// 代理地址，已回退直连：', String(proxyUrl))
+    }
+
+    if (useHttpProxy) {
+      const proxyHost = proxyUrl.hostname
+      const proxyPort = Number(proxyUrl.port || (proxyProtocol === 'https:' ? 443 : 80))
+      const proxyAuth = proxyUrl.username
+        ? `Basic ${Buffer.from(`${decodeURIComponent(proxyUrl.username)}:${decodeURIComponent(proxyUrl.password || '')}`).toString('base64')}`
+        : ''
+      if (!isHttps) {
+        Object.assign(reqOpts, {
+          hostname: proxyHost,
+          port: proxyPort,
+          path: url.toString()
+        })
+        reqOpts.headers = {
+          Host: url.host,
+          ...headers
+        }
+        if (proxyAuth) reqOpts.headers['Proxy-Authorization'] = proxyAuth
+      } else {
+        Object.assign(reqOpts, {
+          hostname: url.hostname,
+          port: Number(url.port || 443),
+          path: url.pathname + url.search,
+          createConnection: (_opts, cb) => {
+            const connectSocket = net.connect(proxyPort, proxyHost, () => {
+              const connectReq = [
+                `CONNECT ${url.hostname}:${Number(url.port || 443)} HTTP/1.1`,
+                `Host: ${url.hostname}:${Number(url.port || 443)}`
+              ]
+              if (proxyAuth) connectReq.push(`Proxy-Authorization: ${proxyAuth}`)
+              connectReq.push('Connection: keep-alive', '', '')
+              connectSocket.write(connectReq.join('\r\n'))
+            })
+            connectSocket.setTimeout(30000, () => {
+              connectSocket.destroy(new Error('代理 CONNECT 超时'))
+            })
+            let buf = ''
+            const onData = (chunk) => {
+              buf += chunk.toString('utf8')
+              if (!buf.includes('\r\n\r\n')) return
+              connectSocket.removeListener('data', onData)
+              const firstLine = buf.split('\r\n')[0] || ''
+              if (!/^HTTP\/1\.[01]\s+200/i.test(firstLine)) {
+                connectSocket.destroy(new Error(`代理 CONNECT 失败: ${firstLine}`))
+                return
+              }
+              const tlsSocket = tls.connect({
+                socket: connectSocket,
+                servername: url.hostname
+              }, () => cb(null, tlsSocket))
+              tlsSocket.on('error', (e) => cb(e))
+            }
+            connectSocket.on('data', onData)
+            connectSocket.on('error', (e) => cb(e))
+          }
+        })
+      }
+    } else {
+      Object.assign(reqOpts, {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search
+      })
+    }
+
+    const httpModule = isHttps ? https : http
+    const req = httpModule.request(reqOpts)
 
     const onAbort = () => { req.destroy(); }
     signal.addEventListener('abort', onAbort, { once: true })

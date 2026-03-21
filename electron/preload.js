@@ -261,6 +261,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   ai: {
     getConfig: () => ipcRenderer.invoke('ai-get-config'),
     getOnboardingStatus: () => ipcRenderer.invoke('ai-get-onboarding-status'),
+    getProxyConfig: () => ipcRenderer.invoke('proxy-get-config'),
+    saveProxyConfig: (data) => ipcRenderer.invoke('proxy-save-config', data),
     saveConfig: (config) => ipcRenderer.invoke('ai-save-config', config),
     getConfigForBackup: () => ipcRenderer.invoke('ai-get-config-for-backup'),
     restoreConfigFromBackup: (payload) => ipcRenderer.invoke('ai-restore-config-from-backup', payload),

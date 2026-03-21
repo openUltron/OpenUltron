@@ -122,6 +122,10 @@ function buildResponsesRequestBody(messages, body, options = {}) {
   }
   if (options.codexChatgptBackend) {
     req.store = false
+    // 无 system 消息时 ins 为空，Codex 仍要求必填 instructions，否则 400「Instructions are required」
+    if (req.instructions == null || !String(req.instructions).trim()) {
+      req.instructions = 'Follow the user message and complete the task.'
+    }
   }
   return req
 }
@@ -236,16 +240,6 @@ function shouldUseOpenAiResponses(apiBaseUrl, openAiWireMode, apiKey) {
   return key.startsWith('eyJ')
 }
 
-/**
- * Responses 返回 401/403 且缺少 api.responses.write 等：OAuth/受限 sk- 常无此 scope，可回退 Chat Completions。
- */
-function shouldFallbackResponsesToChat(err) {
-  const status = Number(err?.httpStatus) || 0
-  const msg = String(err?.message || err || '').toLowerCase()
-  if (status !== 401 && status !== 403) return false
-  return /api\.responses\.write|responses\.write|insufficient permissions|missing scopes|restricted api key|incorrect role|not have access/.test(msg)
-}
-
 /** 非流式 Responses 返回 JSON 中抽取助手文本 */
 function extractResponsesOutputText(data) {
   if (!data || typeof data !== 'object') return ''
@@ -272,7 +266,6 @@ module.exports = {
   isCodexChatgptResponsesUrl,
   OPENAI_CODEX_CHATGPT_RESPONSES_URL,
   shouldUseOpenAiResponses,
-  shouldFallbackResponsesToChat,
   normalizeTextContent,
   extractResponsesOutputText
 }

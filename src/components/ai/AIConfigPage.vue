@@ -30,6 +30,7 @@
         </ul>
       </div>
       <AISettingsPage v-if="activeTab === 'config'" />
+      <ProxySettingsPage v-else-if="activeTab === 'proxy'" />
       <WebAppToolsSettingsPage v-else-if="activeTab === 'webapps'" />
       <NotifyChannelsPage v-else-if="activeTab === 'feishu'" />
       <AIBackupPage v-else-if="activeTab === 'backup'" />
@@ -40,8 +41,9 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
-import { Settings, Send, Archive, Activity, LayoutGrid } from 'lucide-vue-next'
+import { Settings, Send, Archive, Activity, LayoutGrid, Globe } from 'lucide-vue-next'
 import AISettingsPage from './AISettingsPage.vue'
+import ProxySettingsPage from './ProxySettingsPage.vue'
 import NotifyChannelsPage from './NotifyChannelsPage.vue'
 import AIBackupPage from './AIBackupPage.vue'
 import DoctorPage from './DoctorPage.vue'
@@ -57,6 +59,7 @@ const props = defineProps({
 const { t } = useI18n()
 const menuItems = computed(() => ([
   { key: 'config', label: t('config.menuApi'), icon: Settings },
+  { key: 'proxy', label: '代理', icon: Globe },
   { key: 'webapps', label: t('config.menuWebApps'), icon: LayoutGrid },
   { key: 'feishu', label: t('config.menuNotify'), icon: Send },
   { key: 'backup', label: t('config.menuBackup'), icon: Archive },

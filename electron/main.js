@@ -2993,6 +2993,42 @@ ensurePromptsDirAndDefaults()
 // 统一 AI 工作空间：~/.openultron/workspace/{scripts,projects}
 ensureWorkspaceDirs()
 
+function applyProxyEnvFromConfig() {
+  try {
+    const openultronConfig = require('./openultron-config')
+    const cfg = openultronConfig.getProxy()
+    const keys = ['http_proxy', 'https_proxy', 'all_proxy', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'no_proxy', 'NO_PROXY']
+    if (!cfg || !cfg.enabled) {
+      for (const k of keys) delete process.env[k]
+      return { enabled: false }
+    }
+    const httpProxy = String(cfg.http_proxy || '').trim()
+    const httpsProxy = String(cfg.https_proxy || httpProxy).trim()
+    const allProxy = String(cfg.all_proxy || '').trim()
+    const noProxy = String(cfg.no_proxy || '127.0.0.1,localhost').trim()
+    process.env.http_proxy = httpProxy
+    process.env.https_proxy = httpsProxy
+    process.env.all_proxy = allProxy
+    process.env.HTTP_PROXY = httpProxy
+    process.env.HTTPS_PROXY = httpsProxy
+    process.env.ALL_PROXY = allProxy
+    process.env.no_proxy = noProxy
+    process.env.NO_PROXY = noProxy
+    return {
+      enabled: true,
+      http_proxy: httpProxy,
+      https_proxy: httpsProxy,
+      all_proxy: allProxy,
+      no_proxy: noProxy
+    }
+  } catch (e) {
+    console.warn('[Proxy] 应用代理配置失败:', e.message)
+    return { enabled: false, error: e.message }
+  }
+}
+
+applyProxyEnvFromConfig()
+
 function writeAIConfigFromTool(data) {
   aiConfigFile.writeAIConfig(app, data)
   BrowserWindow.getAllWindows().forEach(win => {
@@ -3397,10 +3433,11 @@ registerChannel('get-gateway-ws-url', () => {
   const port = isDev ? GATEWAY_PORT_DEV : GATEWAY_PORT_PROD
   return `ws://127.0.0.1:${port}`
 })
-/** OpenAI 专用：chat / responses；空字符串表示自动（JWT→responses） */
+/** OpenAI 专用：chat / responses / codex / auto；空字符串与 'auto' 均表示自动（JWT→Codex 后端） */
 function getProviderOpenAiWireMode(legacy, baseUrl) {
   const p = legacy?.raw?.providers?.find((x) => x && x.baseUrl === baseUrl)
   const v = p?.openAiWireMode
+  if (v === 'auto') return ''
   if (v === 'responses' || v === 'chat' || v === 'codex') return v
   return ''
 }
@@ -3539,7 +3576,6 @@ async function verifyProviderModel(providerKey, modelId) {
     const {
       shouldUseOpenAiResponses,
       buildResponsesRequestBody,
-      shouldFallbackResponsesToChat,
       getOpenAiResponsesPostUrl,
       isCodexChatgptResponsesUrl
     } = require('./ai/openai-responses')
@@ -3556,15 +3592,7 @@ async function verifyProviderModel(providerKey, modelId) {
       let err = r.body
       try { err = JSON.parse(r.body)?.error?.message || r.body } catch { /* ignore */ }
       const msgStr = `HTTP ${r.status}: ${(err || '').toString().slice(0, 200)}`
-      const fakeErr = new Error(msgStr)
-      fakeErr.httpStatus = r.status
-      if (isCodexChatgptResponsesUrl(urlObj)) {
-        return { success: false, error: msgStr }
-      }
-      if (!shouldFallbackResponsesToChat(fakeErr)) {
-        return { success: false, error: msgStr }
-      }
-      // 无 api.responses.write 等：回退 Chat Completions 校验
+      return { success: false, error: msgStr }
     }
     const url = `${baseUrl}/chat/completions`
     const r = await doPost(url, {
@@ -4968,6 +4996,32 @@ registerChannel('ai-load-codex-openai-key', async () => {
     }
   } catch (error) {
     return { success: false, message: error.message || String(error) }
+  }
+})
+
+registerChannel('proxy-get-config', async () => {
+  try {
+    const openultronConfig = require('./openultron-config')
+    const data = openultronConfig.getProxy()
+    return { success: true, data }
+  } catch (e) {
+    return { success: false, message: e.message }
+  }
+})
+
+registerChannel('proxy-save-config', async (event, payload) => {
+  try {
+    const openultronConfig = require('./openultron-config')
+    openultronConfig.setProxy(payload || {})
+    const applied = applyProxyEnvFromConfig()
+    BrowserWindow.getAllWindows().forEach(win => {
+      if (win.webContents && !win.webContents.isDestroyed()) {
+        win.webContents.send('ai-config-updated')
+      }
+    })
+    return { success: true, data: applied }
+  } catch (e) {
+    return { success: false, message: e.message }
   }
 })
 

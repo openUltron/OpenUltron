@@ -208,6 +208,8 @@ export function installBrowserPolyfill(baseUrl = DEFAULT_API_BASE) {
     ai: {
       getConfig: () => invoke('ai-get-config', []),
       getOnboardingStatus: () => invoke('ai-get-onboarding-status', []),
+      getProxyConfig: () => invoke('proxy-get-config', []),
+      saveProxyConfig: (data) => invoke('proxy-save-config', [data]),
       saveConfig: (config) => invoke('ai-save-config', [config]),
       getConfigForBackup: () => invoke('ai-get-config-for-backup', []),
       restoreConfigFromBackup: (payload) => invoke('ai-restore-config-from-backup', [payload]),

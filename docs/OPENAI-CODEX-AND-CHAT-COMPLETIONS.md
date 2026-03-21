@@ -75,7 +75,7 @@ OpenAI 侧大致可以拆成 **三条常见轨道**（简化理解）：
 | | OpenClaw（源码行为） | OpenUltron（常见配置） |
 |--|----------------------|-------------------------|
 | ChatGPT/Codex OAuth | **`chatgpt.com/backend-api` + `openai-codex-*`** | 常把 JWT 配在 **`api.openai.com`** |
-| Platform | **`sk-` → `api.openai.com` + Responses** | **`sk-` 或 JWT 回退 **`chat/completions`** |
+| Platform | **`sk-` → `api.openai.com` + Responses** | **按「接口类型」走 Responses / Chat，不自动跨线切换** |
 
 因此：**「OpenClaw 浏览器登录能用」≠「同一 token 填到 `api.openai.com` 一定等价」**——人家在 **`openai-codex` 分支上根本走的是 **另一套 base URL**。
 
@@ -86,13 +86,13 @@ OpenAI 侧大致可以拆成 **三条常见轨道**（简化理解）：
 在「设置 → AI 配置」中，供应商为 **OpenAI（api.openai.com）** 时可选择 **接口类型**：
 
 - **自动**：`sk-` → **Chat Completions**；JWT（`eyJ…`）→ **`POST https://chatgpt.com/backend-api/codex/responses`**（与 OpenClaw `openai-codex` 一致，走 **Codex / ChatGPT 订阅** 侧，**不再**默认打 `api.openai.com/v1/responses`）。  
-- ChatGPT Codex 端点要求请求体里 **`store: false`**（否则会返回 `400 Store must be set to false`），应用已自动带上；且**不支持**传 `temperature`（否则会 `400 Unsupported parameter: temperature`），已自动省略。  
+- ChatGPT Codex 端点要求 **`instructions` 必填**（无 system 消息时应用会填默认一句），且 **`store: false`**（否则会返回 `400 Store must be set to false`），应用已自动带上；且**不支持**传 `temperature`（否则会 `400 Unsupported parameter: temperature`），已自动省略。  
 - Codex 的 `input` 内 **user** 消息文本块用 **`input_text`**（及 `input_image` 等）；**assistant** 历史文本块用 **`output_text`** / **`refusal`**，与 Platform 全用 `input_text` 不同，应用已按角色区分。  
 - **Codex 订阅（chatgpt.com 后端）**：显式固定上述 Codex 端点（即使 Base URL 仍填 `api.openai.com/v1`）。  
 - **Responses (Platform)**：`POST {apiBaseUrl}/responses`（Platform API Key / 需 `api.responses.write` 等）。  
 - **Chat**：`POST {apiBaseUrl}/chat/completions`。
 
-当 **仅 Platform Responses** 返回 401/403（缺 scope）时，会 **自动回退到 Chat Completions**。**ChatGPT Codex 后端** 请求失败时 **不会**回退到 Platform chat（避免无订阅额度却误打用量）。
+**不会在** Responses / Codex 与 **Chat Completions** 之间自动切换；请按凭证在设置里选择 **Responses (Platform)**、**Codex** 或 **Chat**。模型不可用或限流时，仅通过 **备用模型 / 模型池** 继续对话（与接口类型无关）。
 
 ---
 
