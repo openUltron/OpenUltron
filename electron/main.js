@@ -3427,6 +3427,7 @@ const aiOrchestrator = new Orchestrator(getAIConfigLegacy, aiToolRegistry, aiMcp
 const GATEWAY_PORT_PROD = 28790
 const GATEWAY_PORT_DEV = 28792
 const { createGateway } = require('./ai/gateway')
+const { getResolvedAIConfigForProvider: getResolvedAIConfigForProviderFromModule } = require('./ai/resolve-provider-config')
 let currentOpenSession = null
 registerChannel('ai-report-current-session', (event, { projectPath, sessionId }) => {
   currentOpenSession = (projectPath != null && sessionId != null) ? { projectPath: String(projectPath), sessionId: String(sessionId) } : null
@@ -3667,63 +3668,7 @@ registerChannel('ai-verify-model', async (event, { model, provider } = {}) => {
 
 /** 按供应商名称或 baseUrl 解析出该供应商的 config（用于子 Agent 指定供应商） */
 function getResolvedAIConfigForProvider(providerKey) {
-  if (!providerKey || String(providerKey).trim() === '') return null
-  const key = String(providerKey).trim()
-  const legacy = getAIConfigLegacy()
-  const raw = legacy?.raw
-  const providers = raw?.providers
-  if (!Array.isArray(providers) || providers.length === 0) return null
-  const byUrl = new Map(providers.filter(p => p && p.baseUrl).map(p => [p.baseUrl, p]))
-  const byName = new Map(providers.filter(p => p && p.name).map(p => [String(p.name).trim().toLowerCase(), p]))
-  const p = byUrl.get(key) || byName.get(key.toLowerCase()) || null
-  if (!p || !p.baseUrl) return null
-  const apiKey = (legacy.providerKeys && legacy.providerKeys[p.baseUrl]) || p.apiKey || ''
-  if (!apiKey || !String(apiKey).trim()) return null
-  const bindings = legacy.raw?.modelBindings && typeof legacy.raw.modelBindings === 'object' ? legacy.raw.modelBindings : {}
-  const globalPool = Array.isArray(legacy.raw?.modelPool)
-    ? legacy.raw.modelPool.map(x => String(x || '').trim()).filter(Boolean)
-    : []
-  const globalDefaultModel = String((legacy.raw && legacy.raw.defaultModel) || (legacy.config && legacy.config.defaultModel) || '').trim()
-  const defaultProvider = String(legacy.raw?.defaultProvider || '').trim()
-  // 当前供应商可用的“配置模型池”：全局模型池中绑定到该 provider 的模型
-  const providerPool = [...new Set(
-    globalPool.filter((m) => {
-      const bound = String(bindings[m] || defaultProvider).trim()
-      return bound === p.baseUrl
-    })
-  )]
-  const validatedByProvider = store.get('aiModelsValidatedByProvider', {})
-  const validated = validatedByProvider[p.baseUrl]
-  let defaultModel = providerPool[0] || ''
-  let fallbackModels = [...providerPool.slice(1)]
-  if (Array.isArray(validated) && validated.length > 0) {
-    const ids = validated
-      .map(m => (m.id || m.name || '').trim())
-      .filter(Boolean)
-    if (!defaultModel && ids.length > 0) defaultModel = ids[0]
-    const extra = ids.filter(id => id !== defaultModel && !fallbackModels.includes(id))
-    fallbackModels = [...fallbackModels, ...extra]
-  }
-  if (!defaultModel) {
-    // 兜底：若全局主模型本就绑定到当前 provider，则用它
-    const dmProvider = String(bindings[globalDefaultModel] || defaultProvider).trim()
-    if (globalDefaultModel && dmProvider === p.baseUrl) defaultModel = globalDefaultModel
-  }
-  if (!defaultModel) defaultModel = globalDefaultModel || 'deepseek-v3'
-  return {
-    apiKey: String(apiKey).trim(),
-    apiBaseUrl: p.baseUrl,
-    defaultModel,
-    openAiWireMode: getProviderOpenAiWireMode(legacy, p.baseUrl),
-    modelPool: [defaultModel, ...fallbackModels].filter(Boolean),
-    fallbackModels,
-    modelBindings: bindings,
-    temperature: (legacy.config && legacy.config.temperature) ?? 0,
-    maxTokens: (legacy.config && legacy.config.maxTokens) ?? 0,
-    maxToolIterations: (legacy.config && legacy.config.maxToolIterations) ?? 0,
-    contextCompression: mergeContextCompressionFromLegacy(legacy),
-    toolDefinitions: mergeToolDefinitionsFromLegacy(legacy)
-  }
+  return getResolvedAIConfigForProviderFromModule(providerKey, { legacy: getAIConfigLegacy(), store })
 }
 
 const EXTERNAL_SUBAGENT_SPECS = [
@@ -5217,12 +5162,78 @@ registerChannel('ai-save-config', async (event, payload) => {
       console.error('[AI] 配置写入后校验失败: defaultProvider 未持久化', { expected: data.defaultProvider, got: verify.defaultProvider })
       return { success: false, message: '配置未正确写入，请检查应用数据目录权限' }
     }
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (win.webContents && !win.webContents.isDestroyed()) win.webContents.send('ai-config-updated')
+    })
     return { success: true }
   } catch (error) {
     console.error('[AI] 保存配置失败:', error.message)
     return { success: false, message: error.message }
   }
 })
+
+/** 飞书/Telegram/钉钉 首行 `/model <id>` 或 `/模型 <id>`，与 App 内 /model 一致，写入全局 defaultModel */
+function parseInboundModelCommand (rawText) {
+  const t = String(rawText || '').trim()
+  if (!t) return null
+  const lines = t.split(/\r?\n/)
+  const first = lines[0].trim()
+  const m = first.match(/^\/(model|模型)\s+(.+)$/i)
+  if (!m) return null
+  const modelId = String(m[2] || '').trim().replace(/^["']|["']$/g, '')
+  if (!modelId) return null
+  const remainderText = lines.slice(1).join('\n').trim()
+  return { modelId, remainderText }
+}
+
+/** 将全局主模型写入 openultron.json（与设置页、ai_config_control 一致） */
+function applyGlobalDefaultModel (modelId) {
+  const mid = String(modelId || '').trim()
+  if (!mid) return { success: false, error: '未指定模型 ID' }
+  try {
+    const normalizePool = (pool, defaultModel) => {
+      const list = Array.isArray(pool) ? pool.map(x => String(x || '').trim()).filter(Boolean) : []
+      const uniq = [...new Set(list)]
+      const dm = String(defaultModel || '').trim()
+      if (dm && !uniq.includes(dm)) uniq.unshift(dm)
+      return uniq
+    }
+    const normalizeBindings = (bindings, providers, pool, fallbackProvider) => {
+      const allow = new Set((providers || []).map(p => String(p?.baseUrl || '').trim()).filter(Boolean))
+      const out = {}
+      const src = bindings && typeof bindings === 'object' ? bindings : {}
+      for (const [k, v] of Object.entries(src)) {
+        const model = String(k || '').trim()
+        const provider = String(v || '').trim()
+        if (!model || !provider) continue
+        if (allow.size > 0 && !allow.has(provider)) continue
+        out[model] = provider
+      }
+      const fb = String(fallbackProvider || '').trim()
+      for (const mm of pool || []) {
+        const model = String(mm || '').trim()
+        if (!model) continue
+        if (!out[model] && fb) out[model] = fb
+      }
+      return out
+    }
+    const data = aiConfigFile.readAIConfig(app, store)
+    const pool = normalizePool(data.modelPool, data.defaultModel)
+    if (pool.length > 0 && !pool.includes(mid)) {
+      return { success: false, error: `模型 "${mid}" 不在全局模型池中` }
+    }
+    data.defaultModel = mid
+    data.modelPool = normalizePool(data.modelPool, data.defaultModel)
+    data.modelBindings = normalizeBindings(data.modelBindings, data.providers, data.modelPool, data.defaultProvider)
+    aiConfigFile.writeAIConfig(app, data)
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (win.webContents && !win.webContents.isDestroyed()) win.webContents.send('ai-config-updated')
+    })
+    return { success: true }
+  } catch (e) {
+    return { success: false, error: e.message || String(e) }
+  }
+}
 
 // 获取模型列表
 registerChannel('ai-fetch-models', async (event, options) => {
@@ -5597,7 +5608,8 @@ function getCoordinatorSystemPrompt(channel = '') {
     '当用户要求飞书文档编写/改写/追加时，优先直接使用文档能力工具（如 feishu_doc_capability 或 lark docx 相关工具）执行；仅在明显需要长流程/并行时再派发子 Agent。',
     '当用户要求飞书电子表格或多维表格操作时，优先直接使用内置能力工具：feishu_sheets_capability / feishu_bitable_capability。禁止只回复操作步骤而不执行。',
     '禁止只回复“已派发/处理中”而不执行。若未派发子 Agent，必须由主 Agent 直接执行并返回结果。',
-    '收到子 Agent 结果后，简洁向用户回复结论与必要说明。'
+    '收到子 Agent 结果后，简洁向用户回复结论与必要说明。',
+    '用户可在消息首行发送「/model <模型ID>」或「/模型 <模型ID>」切换全局主模型（与 App 内设置一致）；首行之后可接正常提问。也可使用 ai_config_control 的 switch_model 修改主会话模型。'
   ].join('\n')
 }
 registerChannel('ai-get-tools', async () => {
@@ -8124,7 +8136,29 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     }
     inboundAttachmentsForUi.push({ ...a, ...(uiPath ? { path: uiPath } : {}) })
   }
-  const userDisplayText = String(displayText || '').trim() || (attachments.length > 0 ? '[附件]' : String(message?.text || '').trim())
+  let userDisplayText = String(displayText || '').trim() || (attachments.length > 0 ? '[附件]' : String(message?.text || '').trim())
+  const modelCmd = parseInboundModelCommand(userDisplayText)
+  if (modelCmd && modelCmd.modelId) {
+    const apply = applyGlobalDefaultModel(modelCmd.modelId)
+    if (!apply.success) {
+      if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
+        await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
+      }
+      const errBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+      eventBus.emit('chat.session.completed', { binding: errBinding, payload: { text: `切换模型失败：${apply.error}` } })
+      return
+    }
+    const rest = (modelCmd.remainderText || '').trim()
+    if (!rest) {
+      if (binding.channel === 'feishu' && userMessageId && typingReactionId) {
+        await feishuNotify.deleteMessageReaction(userMessageId, typingReactionId).catch(() => {})
+      }
+      const okBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }
+      eventBus.emit('chat.session.completed', { binding: okBinding, payload: { text: `已切换全局模型为：${modelCmd.modelId}` } })
+      return
+    }
+    userDisplayText = rest
+  }
   const historyMessages = (conv && conv.messages) ? [...conv.messages] : []
   historyMessages.push({
     role: 'user',

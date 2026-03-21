@@ -25,6 +25,7 @@ const {
   shouldUseOpenAiResponses,
   extractResponsesOutputText
 } = require('./openai-responses')
+const { mergeModelSelectionIntoConfig } = require('./resolve-provider-config')
 
 /** 是否为相对路径（与仅以 `/` 开头区分，兼容 Windows 绝对路径） */
 function isRelativeFilePath(p) {
@@ -235,7 +236,12 @@ class Orchestrator {
 
   // ---------- 启动 Agent 对话循环 ----------
   async startChat({ sessionId, messages, model, tools, sender, config: externalConfig, projectPath, panelId, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId }) {
-    const config = externalConfig || this.getConfig()
+    let config = externalConfig || this.getConfig()
+    const requestedModel = model && String(model).trim() ? String(model).trim() : ''
+    // 用户所选模型若绑定到另一供应商（modelBindings / fallbackRoutes），必须切换 apiBaseUrl/apiKey/openAiWireMode，否则会误用默认供应商（如仍走 Codex 的 chatgpt.com）
+    if (requestedModel && this.getAIConfig) {
+      config = mergeModelSelectionIntoConfig(config, requestedModel, this.getAIConfig, null)
+    }
     if (!config.apiKey || !String(config.apiKey).trim()) {
       const baseUrl = (config.apiBaseUrl || '').trim()
       const isOpenRouter = /openrouter\.ai/i.test(baseUrl)
@@ -2045,6 +2051,53 @@ class Orchestrator {
     })
   }
 
+  _summarizeRequestDiag(req) {
+    const d = req && req.__netDiag ? req.__netDiag : null
+    if (!d) return ''
+    const now = Date.now()
+    const elapsed = Math.max(0, now - Number(d.startedAt || now))
+    const p = d.phases || {}
+    const order = [
+      'socket_assigned',
+      'dns_lookup',
+      'tcp_connect',
+      'tls_connect',
+      'request_finish',
+      'response_headers',
+      'first_byte',
+      'response_end',
+      'socket_error',
+      'request_error',
+      'socket_close',
+      'request_close'
+    ]
+    const phaseTokens = []
+    for (const key of order) {
+      const v = p[key]
+      if (!v) continue
+      const t = Number(v.t || 0)
+      if (key === 'dns_lookup') {
+        phaseTokens.push(`dns=${t}ms(${v.address || '?'}/${v.family || '?'})`)
+        continue
+      }
+      if (key === 'response_headers') {
+        phaseTokens.push(`headers=${t}ms(${v.statusCode || '?'})`)
+        continue
+      }
+      if (key === 'socket_error' || key === 'request_error') {
+        phaseTokens.push(`${key}=${t}ms(${v.code || ''}${v.code && v.message ? ',' : ''}${v.message || ''})`)
+        continue
+      }
+      if (key === 'socket_close') {
+        phaseTokens.push(`socket_close=${t}ms(hadError=${v.hadError ? '1' : '0'})`)
+        continue
+      }
+      phaseTokens.push(`${key}=${t}ms`)
+    }
+    const proxy = d.proxy ? ` proxy=${d.proxy}` : ' proxy=direct'
+    return `trace=${d.traceId} elapsed=${elapsed}ms${proxy} phases=[${phaseTokens.join(', ')}]`
+  }
+
   _makeRequest(url, method, headers, signal) {
     const isHttps = url.protocol === 'https:'
     const proxyUrl = getProxyUrlForTarget(url)
@@ -2130,6 +2183,59 @@ class Orchestrator {
 
     const httpModule = isHttps ? https : http
     const req = httpModule.request(reqOpts)
+    const startedAt = Date.now()
+    const traceId = `${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+    req.__netDiag = {
+      traceId,
+      startedAt,
+      proxy: useHttpProxy ? String(proxyUrl) : '',
+      method,
+      target: `${url.hostname}${url.pathname}`,
+      phases: {}
+    }
+    const mark = (phase, extra = {}) => {
+      const d = req.__netDiag
+      if (!d || d.phases[phase]) return
+      d.phases[phase] = {
+        t: Math.max(0, Date.now() - d.startedAt),
+        ...extra
+      }
+    }
+
+    req.on('socket', (socket) => {
+      mark('socket_assigned')
+      socket.once('lookup', (err, address, family) => {
+        mark('dns_lookup', {
+          address: address || '',
+          family: family || '',
+          error: err ? String(err.message || err) : ''
+        })
+      })
+      socket.once('connect', () => mark('tcp_connect'))
+      socket.once('secureConnect', () => mark('tls_connect'))
+      socket.once('error', (e) => {
+        mark('socket_error', {
+          code: String(e?.code || ''),
+          message: String(e?.message || '')
+        })
+      })
+      socket.once('close', (hadError) => {
+        mark('socket_close', { hadError: !!hadError })
+      })
+    })
+    req.once('finish', () => mark('request_finish'))
+    req.once('response', (res) => {
+      mark('response_headers', { statusCode: res.statusCode || 0 })
+      res.once('data', () => mark('first_byte'))
+      res.once('end', () => mark('response_end'))
+    })
+    req.once('error', (e) => {
+      mark('request_error', {
+        code: String(e?.code || ''),
+        message: String(e?.message || '')
+      })
+    })
+    req.once('close', () => mark('request_close'))
 
     const onAbort = () => { req.destroy(); }
     signal.addEventListener('abort', onAbort, { once: true })

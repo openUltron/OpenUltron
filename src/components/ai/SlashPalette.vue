@@ -37,11 +37,11 @@
 
 <script setup>
 import { ref, watch, nextTick } from 'vue'
-import { Zap, BookOpen, Plug, ChevronRight, Hash } from 'lucide-vue-next'
+import { Zap, BookOpen, Plug, ChevronRight, Hash, Cpu } from 'lucide-vue-next'
 
 const props = defineProps({
   show: Boolean,
-  category: { type: String, default: '' },  // '' | 'skills' | 'playbook' | 'mcp'
+  category: { type: String, default: '' },  // '' | 'skills' | 'playbook' | 'mcp' | 'model'
   query: { type: String, default: '' },
   items: { type: Array, default: () => [] }
 })
@@ -67,6 +67,7 @@ const typeIcon = (type) => {
   if (type === 'skill')    return Zap
   if (type === 'playbook') return BookOpen
   if (type === 'mcp')      return Plug
+  if (type === 'model')    return Cpu
   return ChevronRight
 }
 

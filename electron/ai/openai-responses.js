@@ -105,8 +105,11 @@ function buildResponsesRequestBody(messages, body, options = {}) {
   if (body.temperature != null && !options.codexChatgptBackend) {
     req.temperature = body.temperature
   }
+  // Codex 后端同样不接受 `max_output_tokens`（会 400 Unsupported parameter）
   const mt = Number(body.max_tokens) || 0
-  if (mt > 0) req.max_output_tokens = mt
+  if (mt > 0 && !options.codexChatgptBackend) {
+    req.max_output_tokens = mt
+  }
   if (body.tools && body.tools.length) {
     req.tools = body.tools.map((t) => {
       const fn = t.function || t

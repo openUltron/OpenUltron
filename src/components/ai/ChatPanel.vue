@@ -378,31 +378,69 @@ const usageStripTitle = computed(() => {
   return `System ${u.system} · Dialog ${u.dialog} · Tool ${u.tool}`
 })
 
-// ---- 模型：使用配置默认或会话保存的模型，不再提供底部切换 UI ----
+// ---- 模型：/model 与设置页共用全局 defaultModel（openultron.json），非按会话存储 ----
 const currentModel = ref('')
+const defaultModelId = ref('')
+const modelPoolList = ref([])
+
+/** 主模型 + 模型池去重后的全部可选 id（用于 /model 列表与标签展示） */
+const allSelectableModelIds = computed(() => {
+  const d = String(defaultModelId.value || '').trim()
+  const pool = modelPoolList.value || []
+  const seen = new Set()
+  const out = []
+  if (d) {
+    seen.add(d)
+    out.push(d)
+  }
+  for (const m of pool) {
+    if (!m || seen.has(m)) continue
+    seen.add(m)
+    out.push(m)
+  }
+  return out
+})
+
+function ensureCurrentModelInPool () {
+  const ids = allSelectableModelIds.value
+  if (!ids.length) return
+  const cur = String(currentModel.value || '').trim()
+  if (!cur || !ids.includes(cur)) {
+    currentModel.value = ids[0]
+  }
+}
 
 const loadModels = async () => {
   try {
     const configRes = await window.electronAPI.ai.getConfig()
     if (configRes.success && configRes.config) {
-      const defaultModel = configRes.config.defaultModel || ''
+      const cfg = configRes.config
+      const defaultModel = String(cfg.defaultModel || '').trim()
+      const pool = Array.isArray(cfg.modelPool) ? cfg.modelPool.map((x) => String(x || '').trim()).filter(Boolean) : []
+      defaultModelId.value = defaultModel
+      modelPoolList.value = pool
+
       if (props.model) {
-        currentModel.value = props.model
-      } else {
-        currentModel.value = defaultModel
+        currentModel.value = String(props.model).trim()
+        return
       }
+      currentModel.value = defaultModel || pool[0] || ''
+      ensureCurrentModelInPool()
     }
   } catch { /* ignore */ }
 }
 
-// 当父组件传入 model 变化时（首次加载会话时同步）
+// 当父组件传入 model 变化时（例如工作室固定模型）
 watch(() => props.model, (val) => {
-  if (val && val !== currentModel.value) currentModel.value = val
+  if (val && String(val).trim() !== '' && String(val).trim() !== currentModel.value) {
+    currentModel.value = String(val).trim()
+  }
 }, { immediate: true })
 
 watch(() => props.projectPath, () => {
   loadSkills()
   loadAgentMd()
+  loadModels()
 })
 
 // ---- 技能（自动注入，无需手动选择）----
@@ -433,7 +471,7 @@ const loadAgentMd = async () => {
 // ---- 斜杠命令 ----
 const slashPaletteRef = ref(null)
 const showSlash = ref(false)
-const slashCategory = ref('')   // '' | 'skills' | 'mcp'
+const slashCategory = ref('')   // '' | 'skills' | 'mcp' | 'model'
 const slashQuery = ref('')
 // 斜杠选择：多技能
 const activeSlashSkills = ref([])
@@ -452,19 +490,24 @@ const loadMcpServers = async () => {
   } catch { /* ignore */ }
 }
 
-// 跑马灯快捷指令提示（轮播）
-const MARQUEE_HINTS = [
-  'Type / to choose skills or commands',
-  'Enter to send · Shift+Enter for newline',
-  '/skills for skills · /mcp for MCP tools',
-]
+// 跑马灯快捷指令提示（轮播，随语言切换）
+const marqueeHints = computed(() => [
+  t('chat.marqueeHintSlash1'),
+  t('chat.marqueeHintSlash3'),
+  t('chat.marqueeHintSlash2'),
+])
 const marqueeHintIndex = ref(0)
-const marqueeHint = computed(() => MARQUEE_HINTS[marqueeHintIndex.value] ?? MARQUEE_HINTS[0])
+const marqueeHint = computed(() => {
+  const hints = marqueeHints.value
+  if (!hints.length) return ''
+  return hints[marqueeHintIndex.value % hints.length] ?? hints[0]
+})
 let marqueeTimer = null
 function startMarquee() {
   if (marqueeTimer) return
   marqueeTimer = setInterval(() => {
-    marqueeHintIndex.value = (marqueeHintIndex.value + 1) % MARQUEE_HINTS.length
+    const n = marqueeHints.value.length || 1
+    marqueeHintIndex.value = (marqueeHintIndex.value + 1) % n
   }, 2800)
 }
 function stopMarquee() {
@@ -475,17 +518,27 @@ function stopMarquee() {
 }
 
 // 一级菜单：分类（自进化由后台自动执行，不再提供 /evolve 指令）
-const SLASH_CATEGORIES = [
-  { id: 'skills', name: 'skills', description: 'Skills', type: 'category' },
-  { id: 'mcp', name: 'mcp', description: 'MCP Tools', type: 'category' },
-]
+const slashRootCategories = computed(() => {
+  const cats = [
+    { id: 'skills', name: 'skills', description: t('chat.slashCategorySkills'), type: 'category' },
+    { id: 'mcp', name: 'mcp', description: t('chat.slashCategoryMcp'), type: 'category' },
+  ]
+  if (!props.model && allSelectableModelIds.value.length > 1) {
+    cats.push({ id: 'model', name: 'model', description: t('chat.slashCategoryModel'), type: 'category' })
+  }
+  return cats
+})
 
 // 根据当前分类和 query 计算候选列表
 const slashItems = computed(() => {
   const q = slashQuery.value.toLowerCase()
 
   if (!slashCategory.value) {
-    return SLASH_CATEGORIES.filter(c => !q || c.id.includes(q) || c.description.includes(q))
+    return slashRootCategories.value.filter(c =>
+      !q ||
+      c.id.includes(q) ||
+      (c.description && c.description.toLowerCase().includes(q))
+    )
   }
 
   let items = []
@@ -495,12 +548,21 @@ const slashItems = computed(() => {
     }))
   } else if (slashCategory.value === 'mcp') {
     items = mcpServers.value
+  } else if (slashCategory.value === 'model') {
+    const d = String(defaultModelId.value || '').trim()
+    items = allSelectableModelIds.value.map((mid) => ({
+      id: mid,
+      name: mid,
+      description: mid === d ? t('chat.modelPrimaryGroup') : t('chat.modelPoolGroup'),
+      type: 'model',
+      raw: { id: mid }
+    }))
   }
 
   if (!q) return items
   return items.filter(i =>
     i.name?.toLowerCase().includes(q) ||
-    i.description?.toLowerCase().includes(q)
+    (i.description && i.description.toLowerCase().includes(q))
   )
 })
 
@@ -518,6 +580,28 @@ const onSlashSelect = (item) => {
     inputText.value = `/${item.id} `
     if (item.id === 'mcp') loadMcpServers()
     nextTick(() => inputRef.value?.focus())
+    return
+  }
+  // 模型：写入全局 defaultModel（与设置页主模型一致）
+  if (item.type === 'model') {
+    const id = String(item.id || '').trim()
+    ;(async () => {
+      try {
+        const res = await window.electronAPI.ai.saveConfig({ raw: { defaultModel: id } })
+        if (!res?.success) {
+          error.value = res?.message || '保存模型失败'
+          return
+        }
+        await loadModels()
+        showSlash.value = false
+        slashCategory.value = ''
+        slashQuery.value = ''
+        inputText.value = ''
+        nextTick(() => inputRef.value?.focus())
+      } catch (e) {
+        error.value = e?.message || '保存模型失败'
+      }
+    })()
     return
   }
   // 技能：可多选
@@ -601,7 +685,7 @@ const onInput = () => {
   const spaceIdx = rest.indexOf(' ')
   if (spaceIdx !== -1) {
     const cat = rest.slice(0, spaceIdx).toLowerCase()
-    const knownCats = ['skills', 'mcp']
+    const knownCats = ['skills', 'mcp', 'model']
     if (knownCats.includes(cat)) {
       slashCategory.value = cat
       slashQuery.value = rest.slice(spaceIdx + 1)
@@ -1203,6 +1287,11 @@ const syncSessionName = () => {
     lastContent: lastAst?.content?.slice(-200) || ''
   }).catch(() => {})
 }
+
+watch(currentModel, (v) => {
+  syncSessionName()
+  emit('model-change', v)
+})
 
 // 命令执行情况仅在进行中展示，不保留到历史消息；保存时剥离
 function stripToolExecutionForSave(msgs) {
@@ -2188,6 +2277,7 @@ defineExpose({ clearMessages, loadMessages, messages, handleExternalSend, isStre
   width: 100%;
   min-width: 0;
 }
+
 .input-row textarea {
   flex: 1;
   min-width: 0;
