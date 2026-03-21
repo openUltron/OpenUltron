@@ -219,12 +219,57 @@ const props = defineProps({
   projectPath: { type: String, default: '' },
   enableMention: { type: Boolean, default: true },  // 是否支持 @ 文件提及（非项目页面禁用）
   initialSessionId: { type: String, default: null },  // 主会话传入的当前会话 id，用于加载指定会话或与 URL 同步
-  sessionTypeLabel: { type: String, default: '' }     // 当前会话类型展示（主/飞书 · chat_id 片段），由 ChatView 传入
+  sessionTypeLabel: { type: String, default: '' },    // 当前会话类型展示（主/飞书 · chat_id 片段），由 ChatView 传入
+  /** 应用工作室等：工具结果落盘后回调（如刷新左侧预览），仅非流式 chunk */
+  afterToolResult: { type: Function, default: null },
+  /** 沙箱应用工作室：为 true 时优先注入沙箱说明，避免全局「OpenUltron/IDENTITY」提示误导模型改错目录 */
+  studioSandboxMode: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['first-message', 'model-change', 'provider-change', 'session-loaded', 'session-created'])
 
-const useAIChatInstance = useAIChat()
+const studioWriteToolTouched = ref(false)
+const studioRunInFlight = ref(false)
+
+function studioHasWriteToolResult(data) {
+  if (!props.studioSandboxMode) return false
+  const name = String(data?.name || '')
+  if (!/^(file_operation|apply_patch|execute_command)$/.test(name)) return false
+  let parsed
+  try {
+    parsed = typeof data?.result === 'string' ? JSON.parse(data.result) : data?.result
+  } catch {
+    return false
+  }
+  if (!parsed || typeof parsed !== 'object') return false
+  if (parsed.partial === true || parsed.running === true) return false
+
+  if (name === 'file_operation') {
+    return parsed.success === true && String(parsed.action || '') === 'write'
+  }
+  if (name === 'apply_patch') {
+    if (parsed.success === true) return true
+    if (Array.isArray(parsed.results)) return parsed.results.some((r) => r && r.success === true)
+    return false
+  }
+  if (name === 'execute_command') {
+    if (parsed.success !== true) return false
+    const cwd = String(parsed.cwd || '').trim()
+    const root = String(props.projectPath || '').trim()
+    if (!cwd || !root) return false
+    const a = cwd.replace(/\\/g, '/')
+    const b = root.replace(/\\/g, '/').replace(/\/+$/, '')
+    return a === b || a.startsWith(`${b}/`)
+  }
+  return false
+}
+
+const useAIChatInstance = useAIChat({
+  afterToolResult: (data) => {
+    if (studioHasWriteToolResult(data)) studioWriteToolTouched.value = true
+    props.afterToolResult?.(data)
+  }
+})
 const { messages, isStreaming, error, pendingConfirm, sendMessage, stopChat, loadMessages, respondConfirm } = useAIChatInstance
 const seenFeishuMessageIds = new Set()
 const feishuReloadPending = ref(false)
@@ -535,14 +580,25 @@ const currentDateLabel = () => {
 // 构建最终 systemPrompt：基础 prompt + 技能目录（不含内容，AI 按需调用 get_skill 工具获取）
 const buildSystemPrompt = () => {
   const parts = []
-  // 当前应用边界：本应用为 OpenUltron；用户要求改本机其他项目时直接操作，不预写具体项目名或路径
-  parts.push(
-    '## 当前应用\n' +
-    '你正在运行的应用是 **OpenUltron**（本应用）。' +
-    '当用户要求修改或配置本机其他项目、某仓库或用户提到的任意名称时，你应当直接操作：用 execute_command 查找路径，用 file_operation 读取与修改配置文件；不要推脱或仅请用户提供路径。具体是什么项目、配置文件名与目录结构由你通过检索或用户表述自行判断。\n' +
-    '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：不要只给安装建议。应直接执行最小化安装步骤并继续任务；安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
-    '**名字与身份**：当用户说「改名字」「改身份」「修改角色」等且未指明外部项目时，指本应用（OpenUltron）的 IDENTITY.md、SOUL.md。两文件在**应用根目录**（与 prompts 同级），如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md；文件名为**大写** IDENTITY.md、SOUL.md，勿写入 prompts/ 或 identity.md（小写）。可引导用户点「编辑我的名字与角色」打开，或用 file_operation 写上述路径；勿误解为改其它外部助手应用。'
-  )
+  if (props.studioSandboxMode && props.systemPrompt) {
+    // 必须放在最前，否则下文「OpenUltron/IDENTITY」会把「改 hello」误导成改主程序身份文件
+    parts.push(
+      '## 【最高优先级】应用工作室（沙箱）\n' +
+      '你当前在 **应用工作室** 中协助用户。**本轮会话唯一允许用 file_operation / apply_patch 写入的项目根目录** 即下方「应用工作室」中给出的**应用根目录**（与 projectPath 一致）。\n' +
+      '**禁止** 因用户说「hello」「Hello」「改 hello」就去修改 ~/.openultron/IDENTITY.md、SOUL.md 或 OpenUltron **主程序**仓库；用户指的是 **已安装的沙箱应用**（如示例 Hello）目录里的 `index.html` / `manifest.json` 等。\n' +
+      '相对路径（如 `index.html`）会自动拼到该应用根目录；不要用 execute_command 去别处找「hello 项目」。'
+    )
+    parts.push(props.systemPrompt)
+  } else {
+    // 当前应用边界：本应用为 OpenUltron；用户要求改本机其他项目时直接操作，不预写具体项目名或路径
+    parts.push(
+      '## 当前应用\n' +
+      '你正在运行的应用是 **OpenUltron**（本应用）。' +
+      '当用户要求修改或配置本机其他项目、某仓库或用户提到的任意名称时，你应当直接操作：用 execute_command 查找路径，用 file_operation 读取与修改配置文件；不要推脱或仅请用户提供路径。具体是什么项目、配置文件名与目录结构由你通过检索或用户表述自行判断。\n' +
+      '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：不要只给安装建议。应直接执行最小化安装步骤并继续任务；安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
+      '**名字与身份**：当用户说「改名字」「改身份」「修改角色」等且未指明外部项目时，指本应用（OpenUltron）的 IDENTITY.md、SOUL.md。两文件在**应用根目录**（与 prompts 同级），如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md；文件名为**大写** IDENTITY.md、SOUL.md，勿写入 prompts/ 或 identity.md（小写）。可引导用户点「编辑我的名字与角色」打开，或用 file_operation 写上述路径；勿误解为改其它外部助手应用。'
+    )
+  }
   const todayStr = currentDateLabel()
   parts.push(`当前日期：${todayStr}。回答中凡涉及「今天」「本月」「当前」等时间，必须使用此日期（${todayStr}），不得使用搜索结果或其它来源的日期。`)
   // 联网与工具优先级：必须优先尝试搜索，且禁止同一轮对话内重复多次搜索造成死循环
@@ -568,12 +624,14 @@ const buildSystemPrompt = () => {
     '脚本运行成功后，若逻辑可复用，必须调用 install_skill 将该脚本保存为技能：content 为完整 SKILL.md，frontmatter 含 type: script，正文为 Python 代码。' +
     '技能会随「AI 数据备份/恢复」一起备份与恢复；后续同类需求可先 get_skill 获取脚本再 run_script 执行。'
   )
-  parts.push(
-    '## 查找并修改本机其他项目\n' +
-    '用户要求查看或修改本机某项目、某仓库或用户提到的任意名称时：**自行决定**用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不得未执行就称找不到或向用户索要路径。可先调用 query_command_log 看当前项目下曾执行过的命令与成功/失败情况，再决定本次用什么命令。具体项目名称、常见路径、配置文件与目录结构由你自行检索或根据用户表述判断，提示词中不预设。\n' +
-    '**回复风格**：不要写「我来帮你…」「让我执行搜索命令」等固定话术；不要输出「可能的原因和建议」「请提供以下任一信息」等模板式列表。直接执行、根据结果继续或简短说明已尝试与下一步。'
-  )
-  if (props.systemPrompt) parts.push(props.systemPrompt)
+  if (!props.studioSandboxMode) {
+    parts.push(
+      '## 查找并修改本机其他项目\n' +
+      '用户要求查看或修改本机某项目、某仓库或用户提到的任意名称时：**自行决定**用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不得未执行就称找不到或向用户索要路径。可先调用 query_command_log 看当前项目下曾执行过的命令与成功/失败情况，再决定本次用什么命令。具体项目名称、常见路径、配置文件与目录结构由你自行检索或根据用户表述判断，提示词中不预设。\n' +
+      '**回复风格**：不要写「我来帮你…」「让我执行搜索命令」等固定话术；不要输出「可能的原因和建议」「请提供以下任一信息」等模板式列表。直接执行、根据结果继续或简短说明已尝试与下一步。'
+    )
+  }
+  if (props.systemPrompt && !props.studioSandboxMode) parts.push(props.systemPrompt)
   if (skills.value.length > 0) {
     // 仅列出 id + name，不含描述，减少 token 占用；完整内容由 AI 按需调用 get_skill 获取
     const skillList = skills.value
@@ -1252,6 +1310,15 @@ const handleSend = async (opts = {}) => {
   if (!text && !hasActiveSlash.value && pendingAttachments.value.length === 0) return
   if (!stopPrevious && isStreaming.value && !STOP_CMD_RE.test(text) && !CLEAR_CMD_RE.test(text)) return
 
+  // 应用工作室：无有效 projectPath 时主进程会落到默认 workspace，文件不会写进沙箱
+  if (props.studioSandboxMode) {
+    const pp = String(props.projectPath || '').trim()
+    if (!pp || pp.startsWith('__')) {
+      error.value = '应用目录未就绪，请等待左侧加载完成后再发送'
+      return
+    }
+  }
+
   if (HISTORY_CMD_RE.test(text)) {
     inputText.value = ''
     adjustTextareaHeight()
@@ -1494,13 +1561,17 @@ const handleSend = async (opts = {}) => {
   sendMessage(finalText, {
     model: currentModel.value || undefined,
     systemPrompt,
-    projectPath: props.projectPath || undefined,
+    projectPath: (props.projectPath && String(props.projectPath).trim()) || undefined,
     userContentParts,
     displayContent: finalText !== displayText ? displayText : undefined,
     panelId,
     sessionId: ensuredSessionId || undefined,
     stopPrevious: stopPrevious || undefined
   })
+  if (props.studioSandboxMode) {
+    studioRunInFlight.value = true
+    studioWriteToolTouched.value = false
+  }
   if (carrySummaryForNextSession.value) carrySummaryForNextSession.value = ''
   nextTick(() => forceScrollToBottom())
 }
@@ -1715,9 +1786,24 @@ onMounted(async () => {
   watch([currentSessionId, () => props.projectPath], reportSession)
 
   // 每轮对话结束后用当前完整消息列表写盘，避免被后端压缩结果覆盖导致「早期消息已压缩」后看不到完整记录
+  // 注意：不能用 String(null)==='null' 与 sessionId 比较，否则在 currentSessionId 尚未写入时会误判为「非本会话」并整段跳过（预览不刷新、不落盘）
   window.electronAPI?.ai?.onComplete?.((data) => {
-    if (data?.sessionId != null && String(data.sessionId) !== String(currentSessionId.value)) return
+    const sid = data?.sessionId != null ? String(data.sessionId).trim() : ''
+    const cur =
+      currentSessionId.value != null && currentSessionId.value !== ''
+        ? String(currentSessionId.value).trim()
+        : ''
+    if (sid && cur && sid !== cur) return
     nextTick(() => persistSave())
+    // 窗口不在前台时提示用户（切到其他应用或最小化）
+    try {
+      if (typeof document !== 'undefined' && (document.hidden || !document.hasFocus())) {
+        window.electronAPI?.showSystemNotification?.({
+          title: 'OpenUltron',
+          body: 'AI 已完成本轮回复'
+        })
+      }
+    } catch (_) { /* ignore */ }
   })
 
   startMarquee()
@@ -1782,7 +1868,7 @@ watch(() => messages.value.length, (newLen, oldLen) => {
 })
 
 let scrollTimer = null
-watch(isStreaming, (streaming) => {
+watch(isStreaming, (streaming, wasStreaming) => {
   if (streaming) {
     scrollTimer = setInterval(scrollToBottom, 300)
   } else {
@@ -1791,6 +1877,23 @@ watch(isStreaming, (streaming) => {
     if (props.projectPath === '__feishu__' && feishuReloadPending.value) {
       feishuReloadPending.value = false
       persistLoad()
+    }
+    // 应用工作室：流式结束即刷新左侧预览（兜底 onComplete 被误过滤；并覆盖 execute_command 等写入）
+    if (props.studioSandboxMode && wasStreaming === true) {
+      nextTick(() => {
+        try {
+          window.dispatchEvent(new CustomEvent('ou-webapp-studio-preview-refresh'))
+        } catch (_) { /* ignore */ }
+      })
+      if (studioRunInFlight.value && !studioWriteToolTouched.value) {
+        messages.value.push({
+          role: 'assistant',
+          content: '提示：本轮未检测到任何写文件工具调用（file_operation/apply_patch/execute_command 写入）。如果你要改页面，我需要实际写入当前应用目录的文件。',
+          _uiKey: genUiKey()
+        })
+      }
+      studioRunInFlight.value = false
+      studioWriteToolTouched.value = false
     }
   }
 })
@@ -1805,10 +1908,14 @@ const handleExternalSend = (text) => {
   sendMessage(text, {
     model: currentModel.value || undefined,
     systemPrompt: buildSystemPrompt(),
-    projectPath: props.projectPath || undefined,
+    projectPath: (props.projectPath && String(props.projectPath).trim()) || undefined,
     panelId,
     sessionId: ensuredSessionId || undefined
   })
+  if (props.studioSandboxMode) {
+    studioRunInFlight.value = true
+    studioWriteToolTouched.value = false
+  }
   nextTick(() => forceScrollToBottom())
 }
 

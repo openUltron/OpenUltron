@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   notifyRefreshComplete: () => {
     ipcRenderer.invoke('notify-refresh-complete')
   },
+  /** 系统原生通知（窗口在后台时提示 AI 已完成等） */
+  showSystemNotification: (payload) => ipcRenderer.invoke('show-system-notification', payload || {}),
   
   // 实时命令输出监听
   onRealtimeCommandOutput: (callback) => {
@@ -366,6 +368,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     backupRestore: (data) => ipcRenderer.invoke('ai-backup-restore', data),
     exportSkillsPack: (opts) => ipcRenderer.invoke('ai-export-skills-pack', opts || {}),
     importSkillsPack: (opts) => ipcRenderer.invoke('ai-import-skills-pack', opts || {}),
+    // Web 应用（~/.openultron/web-apps/）
+    listWebApps: () => ipcRenderer.invoke('web-apps-list'),
+    getWebApp: (data) => ipcRenderer.invoke('web-apps-get', data),
+    previewWebApp: (data) => ipcRenderer.invoke('web-apps-preview-url', data),
+    importWebAppZip: (data) => ipcRenderer.invoke('web-apps-import-zip', data || {}),
+    exportWebAppZip: (data) => ipcRenderer.invoke('web-apps-export-zip', data),
+    installWebAppSample: () => ipcRenderer.invoke('web-apps-install-sample'),
+    createWebApp: (data) => ipcRenderer.invoke('web-apps-create', data || {}),
+    updateWebAppName: (data) => ipcRenderer.invoke('web-apps-update-name', data || {}),
+    getWebAppAiSettings: () => ipcRenderer.invoke('web-apps-get-ai-settings'),
+    setWebAppAiSettings: (data) => ipcRenderer.invoke('web-apps-set-ai-settings', data || {}),
     // Token 用量 & 账单
     getUsage: (params) => ipcRenderer.invoke('ai-get-usage', params),
     getBilling: (params) => ipcRenderer.invoke('ai-get-billing', params),

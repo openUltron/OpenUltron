@@ -18,6 +18,7 @@ Think of it as a local AI workspace that can understand tasks, run tools, produc
 - Handle screenshots, files, and links as task artifacts
 - Send results directly to Feishu / Telegram / DingTalk; Feishu **user space docs** supported (authorize User Access Token to create docs in your space, token auto-refresh)
 - Extend capabilities with Skills and MCP tools
+- **Web sandbox apps**: use the sidebar **Apps** entry to install or create mini front-ends under `~/.openultron/web-apps/`; **Studio** pairs a live preview with AI-assisted edits to `index.html` / `manifest`. See `docs/WEB-APPS-SANDBOX-DESIGN.md` and `docs/WEB-APPS-IPC-REFERENCE.md`
 - Keep multi-session context and progress history
 
 ## Key Features

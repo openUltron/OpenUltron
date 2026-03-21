@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openultron.local/schemas/manifest-web-app-mvp.json",
+  "title": "OpenUltron Web App Manifest (MVP)",
+  "description": "与 electron/web-apps/registry.js 中 validateMvpManifest 对齐的最小必填子集；缺省 runtime 时校验会规范为 { browser: true, node: false }。安装/导入 ZIP 时会额外校验 host.openUltron 与当前宿主 semver（见 host-openultron.js）。扩展字段见 WEB-APPS-SANDBOX-DESIGN.md §3.2。",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "name", "version", "host", "entry"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "稳定唯一 id，如反向域名 com.example.app"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "展示名（应用库、工作室标题；可通过 web-apps-update-name 或编辑 manifest.json 修改）"
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SemVer 字符串"
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["openUltron", "protocol"],
+      "properties": {
+        "openUltron": { "type": "string", "description": "宿主最低版本，如 >=1.0.0" },
+        "protocol": { "type": "integer", "minimum": 1, "description": "manifest 协议版本" }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "html": { "type": "string", "default": "index.html" }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "可选。缺省时校验会规范为 { browser: true, node: false }",
+      "properties": {
+        "browser": { "type": "boolean" },
+        "node": { "type": "boolean" }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "可选。含 net:allowlist 时配合 netAllowlist 放行出站请求（guest-session）"
+    },
+    "netAllowlist": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "可选。URL 或主机名列表；需 permissions 含 net:allowlist"
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "可选。如 { mode: \"allowlist\", allowlist: [...] } 与 netAllowlist 二选一风格"
+    },
+    "npm": {
+      "type": "object",
+      "properties": {
+        "allowScripts": { "type": "boolean", "description": "为 true 时 npm 安装不默认加 --ignore-scripts" }
+      }
+    },
+    "aiTools": {
+      "type": "array",
+      "description": "可选。声明 webapp__<id>__<name> 工具，见 §6",
+      "items": {
+        "type": "object",
+        "required": ["name", "handler"],
+        "properties": {
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "handler": { "type": "string", "enum": ["browser", "node"] },
+          "entry": { "type": "string" },
+          "parameters": { "type": "object" }
+        }
+      }
+    }
+  }
+}

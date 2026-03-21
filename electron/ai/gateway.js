@@ -213,6 +213,10 @@ function createGateway(opts) {
 
     const isMainSession = !params?.feishuChatId && params?.projectPath !== '__feishu__'
     const useTools = tools === false ? [] : (Array.isArray(tools) && tools.length > 0 && !isMainSession ? tools : toolDefs)
+    const resolvedProjectPath =
+      projectPath != null && String(projectPath).trim() !== ''
+        ? String(projectPath).trim()
+        : getWorkspaceRoot()
     return orchestrator.startChat({
       sessionId,
       messages: msgList,
@@ -220,7 +224,7 @@ function createGateway(opts) {
       tools: useTools,
       sender: wrappedSender,
       config: resolvedConfig,
-      projectPath: projectPath || getWorkspaceRoot(),
+      projectPath: resolvedProjectPath,
       panelId: panelId || undefined,
       feishuChatId: feishuChatId || undefined,
       feishuTenantKey: feishuTenantKey || undefined,

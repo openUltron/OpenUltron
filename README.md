@@ -19,6 +19,7 @@ OpenUltron 是一款面向效率场景的 AI 桌面助手。
 - 自动处理截图、文件、链接等任务产物
 - 对接飞书 / Telegram / 钉钉，把结果直接发到会话里；飞书支持**个人空间文档**（授权 User Access Token 后可将文档创建到个人空间，Token 自动刷新）
 - 用 Skills 和 MCP 扩展能力，接入你自己的工作流
+- **Web 沙箱应用**：在侧栏「应用」中安装/新建迷你前端（`~/.openultron/web-apps/`），**工作室**内左侧预览、右侧 AI 协助改 `index.html` / `manifest`；详见 `docs/WEB-APPS-SANDBOX-DESIGN.md` 与 `docs/WEB-APPS-IPC-REFERENCE.md`
 - 管理多会话历史，持续追踪上下文与任务进度
 
 ## 亮点能力
@@ -85,6 +86,13 @@ npm run release:all
 - Electron + Vue 3 + Vite
 - Node.js 主进程能力
 - 可扩展工具协议（MCP）
+
+## 设计文档
+
+- [技能包与 ClawHub 兼容说明](./docs/SKILLS-PACK-COMPAT.md)
+- [Web 沙箱应用（可打包/安装/依赖声明）](./docs/WEB-APPS-SANDBOX-DESIGN.md)
+- [Web 应用实现清单（进度勾选）](./docs/WEB-APPS-IMPLEMENTATION-CHECKLIST.md)  
+  - 侧栏 **应用** → 应用库 **`/web-apps`**（新建 / 列表）；**打开** **`/app-open`**（仅全屏预览）；**工作室** **`/web-app-studio`**（左侧预览 + 右侧 AI）。
 
 ---
 

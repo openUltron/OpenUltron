@@ -16,6 +16,21 @@ const routes = [
       { path: 'sessions', name: 'SessionsList', component: () => import('../views/SessionsListView.vue') },
       { path: 'control/cron', name: 'ControlCron', component: ControlCron },
       { path: 'skills', name: 'Skills', component: SkillsView },
+      {
+        path: 'web-apps',
+        name: 'WebAppsHome',
+        component: () => import('../views/WebAppsHomeView.vue')
+      },
+      {
+        path: 'web-app-studio',
+        name: 'WebAppStudio',
+        component: () => import('../views/WebAppStudioView.vue')
+      },
+      {
+        path: 'app-open',
+        name: 'AppOpen',
+        component: () => import('../views/AppOpenView.vue')
+      },
       { path: 'settings/config', name: 'SettingsConfig', component: SettingsConfig },
       { path: 'settings/logs', name: 'SettingsLogs', component: SettingsLogs }
     ]

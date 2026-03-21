@@ -1,0 +1,16 @@
+{
+  "id": "com.openultron.hello",
+  "name": "Hello Web App",
+  "version": "1.0.0",
+  "host": {
+    "openUltron": ">=1.0.0",
+    "protocol": 1
+  },
+  "entry": {
+    "html": "index.html"
+  },
+  "runtime": {
+    "browser": true,
+    "node": false
+  }
+}

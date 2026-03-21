@@ -16,6 +16,25 @@ const { getAppRootPath, getWorkspaceRoot } = require('../app-root')
 const sessionRegistry = require('./session-registry')
 const { logger: appLogger } = require('../app-logger')
 
+/** 是否为相对路径（与仅以 `/` 开头区分，兼容 Windows 绝对路径） */
+function isRelativeFilePath(p) {
+  if (p == null || typeof p !== 'string') return false
+  const s = String(p).trim()
+  if (!s) return false
+  return !path.isAbsolute(s)
+}
+
+/**
+ * 应用工作室：会话绑定 ~/.openultron/web-apps/... 沙箱目录。
+ * 此类会话若仍注入「当前应用=OpenUltron」「改名字→IDENTITY.md」，会覆盖前端沙箱提示，导致改 Hello 示例时误改主程序身份文件。
+ */
+function isWebAppSandboxProject(projectPath) {
+  const p = String(projectPath || '').trim()
+  if (!p || p.startsWith('__')) return false
+  if (!path.isAbsolute(p)) return false
+  return /web-apps/i.test(p.replace(/\\/g, '/'))
+}
+
 /** 从字符串中匹配第一个「绝对路径 + 图片扩展名」*/
 const SCREENSHOT_PATH_RE = /(\/var\/folders\/[^\s'")\]]+\.(?:png|jpg|jpeg|webp))|(\/tmp\/[^\s'")\]]+\.(?:png|jpg|jpeg|webp))|(\/(?:var|Users|tmp)[^\s'")\]]+\.(?:png|jpg|jpeg|webp))/i
 
@@ -148,6 +167,10 @@ class Orchestrator {
       abortController
     })
 
+    if (isWebAppSandboxProject(projectPath)) {
+      appLogger.info('[AI][WebAppSandbox] startChat', { projectPath: String(projectPath || '').trim(), sessionId })
+    }
+
     // 包装 sender，拦截关键事件更新注册表（HTTP 调用时 sender 为 null，不推送）
     const wrappedSender = {
       send: (channel, data) => {
@@ -162,6 +185,7 @@ class Orchestrator {
       isDestroyed: () => !canSend(sender)
     }
 
+    const webAppSandbox = isWebAppSandboxProject(projectPath)
     const allowedPool = Array.isArray(config.modelPool)
       ? config.modelPool.map(x => String(x || '').trim()).filter(Boolean)
       : []
@@ -197,22 +221,36 @@ class Orchestrator {
     // Memory 注入：全局 MEMORY.md + 项目相关 top-5 记忆
     try {
       const memParts = []
+      const sandboxRoot = webAppSandbox ? String(projectPath).trim() : ''
 
       // 0. 当前应用边界（最高优先级）
-      memParts.push(
-        '[当前应用]\n' +
-        '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
-        '当用户要求修改或配置**本机其他项目**、某仓库或用户提到的任意名称时：自行决定用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不要未执行就称找不到或向用户索要路径。可先调用 query_command_log 查看当前项目下已执行命令的成功/失败与已查看路径，再决定本次命令，实现自我进化。具体项目名称、常见路径与配置文件名由你自行检索或根据用户表述判断，提示词中不预设。\n' +
-        '**安装类命令（npm/pip/brew/pnpm/yarn install 等）**：执行前必须先调用 query_command_log(query=recent_successful_commands) 查看本项目下已执行成功的命令；若列表中已有相同或等价的安装命令（如同一包、同一工具），则**不要重复执行**，直接说明「此前已安装过」并继续后续步骤。避免每次会话都重新安装已成功的依赖。\n' +
-        '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：先使用内置工具（ffmpeg_run、edge_tts_synthesize 等）；若内置工具失败，可用 execute_command 安装系统依赖或直接执行系统命令重试，execute_command 不拦截 TTS/ffmpeg/安装类命令。安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
-        'TTS/语音与音视频：优先使用内置工具。TTS：tts_voice_manager(list_voices/list_aliases) 查询音色，edge_tts_synthesize(text, voice) 合成 mp3，feishu_send_voice_message(audio_text=... 或 audio_file_path=...) 发送。音视频：ffmpeg_run(args) 使用内置 ffmpeg。若内置失败，可用 execute_command 调用系统 edge-tts/ffmpeg 或安装依赖，execute_command 不拦截 TTS/ffmpeg 类命令。\n' +
-        '**用户明确要求「用语音」「语音介绍」「发语音」时，必须实际调用工具**（如 feishu_send_message 的 audio_text、或 execute_command 生成音频后 audio_file_path 发送），不得仅用文字回复声称已完成而未调用任何工具。\n' +
-        `默认工作空间：${getWorkspaceRoot()}。\n` +
-        `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
-        '**生成 PPT/PDF/Excel 等二进制文件**：必须用 execute_command 运行实际生成工具（如 npx slidev build、python-pptx、pandoc 等），不可用 file_operation 写 .pptx/.pdf；生成后从命令输出或 list_dir 确认输出路径，在回复中给出**完整绝对路径**，避免用户找不到文件。\n' +
-        '**禁止虚假声称（必须严格遵守）**：只有当前轮工具调用**明确返回** success: true / 成功 时，才能对用户说「成功」「已创建」「已发送」。不得在未调用工具或工具返回失败/错误时声称成功。不得编造或臆测：文件路径、文件大小、页数、message_id、飞书消息ID 等必须**仅来自工具返回结果**；若工具返回 success: false 或 error，必须如实告诉用户失败并给出原因，不得改写为成功。\n' +
-        '**回复风格**：不要写「我来帮你…」「让我执行…」等固定话术；不要输出「可能的原因和建议」「请提供以下任一信息」等模板式列表。直接执行、根据结果继续或简短说明已尝试与下一步。未明确要求修改外部项目时，默认在 OpenUltron 内完成。'
-      )
+      if (webAppSandbox) {
+        memParts.push(
+          '[当前应用 - 应用工作室沙箱 · 最高优先级]\n' +
+          '你正在 **应用工作室** 中协助用户编辑 **一个已安装的 Web 沙箱应用**（**不是** OpenUltron 主程序仓库）。\n' +
+          `本会话 **projectPath**（沙箱应用根目录，绝对路径）为：\n\`${sandboxRoot}\`\n` +
+          '**所有** file_operation、apply_patch 的相对路径均相对于上述根目录自动拼接；修改 **index.html**、**.css**、**manifest.json** 等会直接影响左侧预览。\n' +
+          '**实现功能时必须实际调用工具写入上述目录**：不要只输出「已创建/已实现」的长文说明；新增页面/脚本请用 **file_operation(action=write)** 或 **apply_patch** 写入 `index.html` 等真实文件；邮件/Excel 等也需落在本目录或 **execute_command(cwd=上述根目录)** 生成。\n' +
+          '用户说「改应用名」「改展示名称」时：优先改 **`manifest.json` 的 `name` 字段**（应用库列表标题）；用户说「改 Hello」「改标题」「改页面上的字」时，指 **该沙箱应用目录内** 的页面资源（通常先读再改 **index.html** 或 manifest 指定的入口 HTML），**禁止** 因「Hello」字样去修改 ~/.openultron/IDENTITY.md、SOUL.md 或 OpenUltron 安装目录下的身份文件。\n' +
+          '**禁止虚假声称**：仅当 file_operation / apply_patch **明确返回** success 时，才能说已写入或已修改。\n' +
+          '**回复风格**：不要写「我来帮你…」等固定话术；直接调用工具改文件并简短说明修改点。'
+        )
+      } else {
+        memParts.push(
+          '[当前应用]\n' +
+          '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
+          '当用户要求修改或配置**本机其他项目**、某仓库或用户提到的任意名称时：自行决定用 execute_command 执行哪些命令定位，用 file_operation 读改配置；不要未执行就称找不到或向用户索要路径。可先调用 query_command_log 查看当前项目下已执行命令的成功/失败与已查看路径，再决定本次命令，实现自我进化。具体项目名称、常见路径与配置文件名由你自行检索或根据用户表述判断，提示词中不预设。\n' +
+          '**安装类命令（npm/pip/brew/pnpm/yarn install 等）**：执行前必须先调用 query_command_log(query=recent_successful_commands) 查看本项目下已执行成功的命令；若列表中已有相同或等价的安装命令（如同一包、同一工具），则**不要重复执行**，直接说明「此前已安装过」并继续后续步骤。避免每次会话都重新安装已成功的依赖。\n' +
+          '当执行中遇到「命令不存在」「依赖缺失」（如 tesseract、ffmpeg、python 包等）时：先使用内置工具（ffmpeg_run、edge_tts_synthesize 等）；若内置工具失败，可用 execute_command 安装系统依赖或直接执行系统命令重试，execute_command 不拦截 TTS/ffmpeg/安装类命令。安装命令超时或失败时，自动换一种安装方式重试一次（无需向用户弹确认），仍失败再给降级方案。\n' +
+          'TTS/语音与音视频：优先使用内置工具。TTS：tts_voice_manager(list_voices/list_aliases) 查询音色，edge_tts_synthesize(text, voice) 合成 mp3，feishu_send_voice_message(audio_text=... 或 audio_file_path=...) 发送。音视频：ffmpeg_run(args) 使用内置 ffmpeg。若内置失败，可用 execute_command 调用系统 edge-tts/ffmpeg 或安装依赖，execute_command 不拦截 TTS/ffmpeg 类命令。\n' +
+          '**用户明确要求「用语音」「语音介绍」「发语音」时，必须实际调用工具**（如 feishu_send_message 的 audio_text、或 execute_command 生成音频后 audio_file_path 发送），不得仅用文字回复声称已完成而未调用任何工具。\n' +
+          `默认工作空间：${getWorkspaceRoot()}。\n` +
+          `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
+          '**生成 PPT/PDF/Excel 等二进制文件**：必须用 execute_command 运行实际生成工具（如 npx slidev build、python-pptx、pandoc 等），不可用 file_operation 写 .pptx/.pdf；生成后从命令输出或 list_dir 确认输出路径，在回复中给出**完整绝对路径**，避免用户找不到文件。\n' +
+          '**禁止虚假声称（必须严格遵守）**：只有当前轮工具调用**明确返回** success: true / 成功 时，才能对用户说「成功」「已创建」「已发送」。不得在未调用工具或工具返回失败/错误时声称成功。不得编造或臆测：文件路径、文件大小、页数、message_id、飞书消息ID 等必须**仅来自工具返回结果**；若工具返回 success: false 或 error，必须如实告诉用户失败并给出原因，不得改写为成功。\n' +
+          '**回复风格**：不要写「我来帮你…」「让我执行…」等固定话术；不要输出「可能的原因和建议」「请提供以下任一信息」等模板式列表。直接执行、根据结果继续或简短说明已尝试与下一步。未明确要求修改外部项目时，默认在 OpenUltron 内完成。'
+        )
+      }
 
       // 0.1 当前模型（从 prompts/current-model.md 或默认）
       const currentModelText = loadPrompt('current-model', { model: useModel })
@@ -275,24 +313,26 @@ class Orchestrator {
       const globalMd = readGlobalMemoryMd()
       if (globalMd) memParts.push(`[全局偏好 - MEMORY.md]\n${globalMd}`)
 
-      // 2. 本应用 SOUL.md（性格/价值观层）
-      const soulMd = readSoulMd()
-      if (soulMd) memParts.push(`[SOUL.md - 性格与原则]\n${soulMd}`)
+      // 2. 本应用 SOUL.md / IDENTITY.md（应用工作室沙箱会话不注入，避免与「改 Hello 页面」冲突）
+      if (!webAppSandbox) {
+        const soulMd = readSoulMd()
+        if (soulMd) memParts.push(`[SOUL.md - 性格与原则]\n${soulMd}`)
 
-      // 2.1 IDENTITY.md（Agent 名字、形象、vibe、代词）
-      const identityMd = readIdentityMd()
-      if (identityMd) memParts.push(`[IDENTITY.md]\n${identityMd}`)
-      // 回复与自我介绍：仅用 IDENTITY/SOUL，禁止通用话术（尤其飞书等渠道）
-      memParts.push(
-        '[回复与自我介绍]\n' +
-        '打招呼、回复「你好」「在吗」或自我介绍时，请按 IDENTITY.md 与 SOUL.md 中的名字、语气与身份来回复。不要自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术；若 IDENTITY 里已有名字与 vibe，就用该名字与语气，不要额外套用上述模板。'
-      )
-      // 上下文消歧 + 正确路径：名字/身份指本应用；文件在应用根目录，非 prompts 下
-      memParts.push(
-        '[名字与身份修改]\n' +
-        '当用户说「改名字」「改身份」「修改角色」「你可以修改名字/身份吗」等且**未明确说是某外部项目**时，指**本应用（OpenUltron）**的身份配置。\n' +
-        '**正确路径**：IDENTITY.md、SOUL.md 位于**应用根目录**（与 prompts 目录同级），例如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md。文件名请使用**大写** IDENTITY.md、SOUL.md，请勿写入 prompts/ 目录或使用 identity.md（小写）。修改时请用 file_operation 写入上述路径，或引导用户点击「编辑我的名字与角色」打开正确文件。'
-      )
+        // 2.1 IDENTITY.md（Agent 名字、形象、vibe、代词）
+        const identityMd = readIdentityMd()
+        if (identityMd) memParts.push(`[IDENTITY.md]\n${identityMd}`)
+        // 回复与自我介绍：仅用 IDENTITY/SOUL，禁止通用话术（尤其飞书等渠道）
+        memParts.push(
+          '[回复与自我介绍]\n' +
+          '打招呼、回复「你好」「在吗」或自我介绍时，请按 IDENTITY.md 与 SOUL.md 中的名字、语气与身份来回复。不要自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术；若 IDENTITY 里已有名字与 vibe，就用该名字与语气，不要额外套用上述模板。'
+        )
+        // 上下文消歧 + 正确路径：名字/身份指本应用；文件在应用根目录，非 prompts 下
+        memParts.push(
+          '[名字与身份修改]\n' +
+          '当用户说「改名字」「改身份」「修改角色」「你可以修改名字/身份吗」等且**未明确说是某外部项目**时，指**本应用（OpenUltron）**的身份配置。\n' +
+          '**正确路径**：IDENTITY.md、SOUL.md 位于**应用根目录**（与 prompts 目录同级），例如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md。文件名请使用**大写** IDENTITY.md、SOUL.md，请勿写入 prompts/ 目录或使用 identity.md（小写）。修改时请用 file_operation 写入上述路径，或引导用户点击「编辑我的名字与角色」打开正确文件。'
+        )
+      }
 
       // 2.2 USER.md（用户信息：姓名、时区、工作、偏好等）
       const userMd = readUserMd()
@@ -567,6 +607,12 @@ class Orchestrator {
                     ti < toolModes.length - 1
                   if (shouldRetryWithoutTools) {
                     console.warn(`[AI] 模型 ${tryModel} 工具调用受限（${classify.kind}），自动改为无工具模式重试，故本轮不会执行 MCP/浏览器等工具:`, modeErr.message)
+                    if (isWebAppSandboxProject(projectPath)) {
+                      wrappedSender.send('ai-chat-token', {
+                        sessionId,
+                        token: '\n\n> ⚠️ 当前模型不允许工具调用，已切换为无工具模式：**本轮不会修改应用文件**。\n\n'
+                      })
+                    }
                     continue
                   }
                   throw modeErr
@@ -1785,6 +1831,17 @@ class Orchestrator {
     if (name.startsWith('mcp__') && this.mcpManager) {
       return await this.mcpManager.callTool(name, args)
     }
+    // manifest.aiTools（§6）：webapp__<appId>__<name>
+    if (name.startsWith('webapp__')) {
+      const sessWeb = this.activeSessions.get(sessionId)
+      const pp = String(sessWeb?.projectPath || '').trim()
+      try {
+        const { executeWebAppTool } = require('../web-apps/ai-tools')
+        return await executeWebAppTool(name, args, pp, sessionId)
+      } catch (e) {
+        return { error: e.message || String(e) }
+      }
+    }
     const tool = this.toolRegistry.getTool(name)
     if (!tool) {
       return { error: `未知工具: ${name}` }
@@ -1800,24 +1857,53 @@ class Orchestrator {
       } catch (_) { /* ignore */ }
     }
 
-    // 身份文件路径兜底：避免 AI 把 IDENTITY/SOUL 写到 /tmp 等错误目录
-    if (name === 'file_operation' && args && typeof args.path === 'string') {
-      const rawPath = String(args.path || '').trim()
-      const normalized = rawPath.replace(/\\/g, '/').toLowerCase()
-      const isIdentityTarget = normalized.endsWith('/identity.md') || normalized === 'identity.md'
-      const isSoulTarget = normalized.endsWith('/soul.md') || normalized === 'soul.md'
-      if (isIdentityTarget) {
-        args = { ...args, path: getAppRootPath('IDENTITY.md') }
-      } else if (isSoulTarget) {
-        args = { ...args, path: getAppRootPath('SOUL.md') }
-      }
-    }
-
     // 强制注入项目路径，避免 AI 遗漏或填错
     // 注意：__main_chat__/__feishu__/__gateway__ 是会话标识，不是实际文件系统路径
     const session = this.activeSessions.get(sessionId)
     const projectPath = String(session?.projectPath || '').trim()
     const hasRealProjectPath = !!projectPath && !projectPath.startsWith('__') && path.isAbsolute(projectPath)
+    const webAppSandbox = hasRealProjectPath && isWebAppSandboxProject(projectPath)
+
+    // 身份文件路径兜底：避免 AI 把 IDENTITY/SOUL 写到 /tmp 等错误目录
+    // 应用工作室（web-apps 沙箱）内不要用全局 IDENTITY/SOUL，否则相对路径 identity.md 会被改写到宿主根，沙箱里「文件完全没变」
+    if (name === 'file_operation' && args && typeof args.path === 'string') {
+      const rawPath = String(args.path || '').trim()
+      const normalized = rawPath.replace(/\\/g, '/').toLowerCase()
+      const isIdentityTarget = normalized.endsWith('/identity.md') || normalized === 'identity.md'
+      const isSoulTarget = normalized.endsWith('/soul.md') || normalized === 'soul.md'
+      if (!webAppSandbox && isIdentityTarget) {
+        args = { ...args, path: getAppRootPath('IDENTITY.md') }
+      } else if (!webAppSandbox && isSoulTarget) {
+        args = { ...args, path: getAppRootPath('SOUL.md') }
+      }
+    }
+
+    // 应用工作室：file_operation 路径一律约束到沙箱根（相对路径拼接；落在沙箱外的绝对路径 → 根目录下同名文件）
+    if (webAppSandbox && name === 'file_operation' && args && typeof args.path === 'string') {
+      const root = path.resolve(projectPath)
+      let fp = String(args.path).trim()
+      if (fp) {
+        if (isRelativeFilePath(fp)) {
+          fp = path.join(root, fp)
+        } else {
+          const abs = path.resolve(fp)
+          if (!abs.startsWith(root + path.sep) && abs !== root) {
+            const redirected = path.join(root, path.basename(abs))
+            try {
+              appLogger?.warn?.('[AI][SandboxApp] file_operation 路径已约束到沙箱根', {
+                sessionId,
+                from: String(args.path),
+                to: redirected
+              })
+            } catch (_) { /* ignore */ }
+            fp = redirected
+          } else {
+            fp = abs
+          }
+        }
+        args = { ...args, path: fp }
+      }
+    }
     const defaultWorkspaceCwd = getWorkspaceRoot()
     if (name === 'execute_command') {
       const rawCwd = args && typeof args.cwd === 'string' ? String(args.cwd).trim() : ''
@@ -1830,13 +1916,50 @@ class Orchestrator {
       if (name === 'git_operation' && !args.repo_path) {
         args = { ...args, repo_path: projectPath }
       }
-      if (name === 'file_operation' && args.path && !args.path.startsWith('/')) {
-        args = { ...args, path: `${projectPath}/${args.path}` }
+      // 相对路径拼到当前会话 projectPath（应用工作室已在上方 webAppSandbox 块处理，勿重复拼接）
+      if (name === 'file_operation' && args.path && isRelativeFilePath(args.path) && !webAppSandbox) {
+        args = { ...args, path: path.join(projectPath, args.path) }
+      }
+      if (name === 'file_operation' && args.path && /web-apps/i.test(projectPath)) {
+        try {
+          appLogger?.info?.('[AI][SandboxApp] file_operation', {
+            sessionId,
+            projectPath,
+            resolvedPath: args.path
+          })
+        } catch (_) { /* ignore */ }
+      }
+      // apply_patch：相对路径拼到 projectPath；应用工作室内绝对路径若落在沙箱外则改写到沙箱根下同名文件
+      if (name === 'apply_patch' && args && Array.isArray(args.changes)) {
+        const root = path.resolve(projectPath)
+        args = {
+          ...args,
+          changes: args.changes.map((ch) => {
+            if (!ch || typeof ch !== 'object' || typeof ch.path !== 'string') return ch
+            let fp = ch.path.trim()
+            if (!fp) return ch
+            if (webAppSandbox) {
+              if (isRelativeFilePath(fp)) {
+                fp = path.join(root, fp)
+              } else {
+                const abs = path.resolve(fp)
+                if (!abs.startsWith(root + path.sep) && abs !== root) {
+                  fp = path.join(root, path.basename(abs))
+                } else {
+                  fp = abs
+                }
+              }
+              return { ...ch, path: fp }
+            }
+            if (path.isAbsolute(fp)) return ch
+            return { ...ch, path: path.join(projectPath, fp) }
+          })
+        }
       }
       if (name === 'analyze_project' && !args.projectPath && !args.project_path) {
         args = { ...args, projectPath }
       }
-    } else if (name === 'file_operation' && args.path && !args.path.startsWith('/')) {
+    } else if (name === 'file_operation' && args.path && isRelativeFilePath(args.path)) {
       // 无真实项目路径时，默认将相对路径落到统一 workspace 根目录
       args = { ...args, path: path.join(defaultWorkspaceCwd, args.path) }
     }

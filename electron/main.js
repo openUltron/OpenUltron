@@ -1,4 +1,15 @@
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, session, protocol, net } = require('electron')
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  shell,
+  dialog,
+  ipcMain,
+  session,
+  protocol,
+  net,
+  Notification: SystemNotification
+} = require('electron')
 const path = require('path')
 const { exec, spawn } = require('child_process')
 const { promisify } = require('util')
@@ -779,6 +790,25 @@ registerChannel('notify-refresh-complete', async (event) => {
   } catch (error) {
     console.error('❌ 发送刷新完成事件失败:', error.message)
     return false
+  }
+})
+
+registerChannel('show-system-notification', async (event, payload = {}) => {
+  try {
+    if (!SystemNotification.isSupported()) {
+      return { success: false, error: '当前系统不支持原生通知' }
+    }
+    const title = String(payload.title != null ? payload.title : 'OpenUltron').slice(0, 200)
+    const body = String(payload.body != null ? payload.body : '').slice(0, 500)
+    const n = new SystemNotification({
+      title: title || 'OpenUltron',
+      body,
+      silent: payload.silent === true
+    })
+    n.show()
+    return { success: true }
+  } catch (e) {
+    return { success: false, error: e.message || String(e) }
   }
 })
 
@@ -2017,21 +2047,119 @@ app.whenReady().then(async () => {
   // 注册 local-resource:// 协议：安全地将应用数据根目录下的文件提供给渲染进程
   // URL 格式：local-resource://相对路径  例：local-resource://screenshots/screenshot-123.png
   const appRootBase = getAppRoot()
-  session.defaultSession.protocol.handle('local-resource', (request) => {
+  /** 与 electron/web-apps/guest-session.js 中 WEB_APP_GUEST_PARTITION 一致 */
+  const WEB_APP_GUEST_PARTITION = 'persist:ou-webapps'
+  // protocol.handle 按 Session 生效；主窗口用 defaultSession，应用预览 webview 用 persist:ou-webapps。
+  // 若仅在 defaultSession 注册，预览分区无法解析 local-resource://，表现为左侧预览空白。
+  function parseWebAppLocFromAnyUrl(raw) {
+    if (!raw || typeof raw !== 'string') return null
+    try {
+      const u = new URL(raw)
+      const pathname = String(u.pathname || '').replace(/^\/+/, '')
+      const parts = pathname.split('/').filter(Boolean)
+      if (parts[0] !== 'web-apps' || parts.length < 3) return null
+      return { appId: parts[1], version: parts[2] }
+    } catch {
+      return null
+    }
+  }
+
+  async function localResourceProtocolHandler(request, options = {}) {
+    const guestMode = options && options.guestMode === true
     try {
       const url = new URL(request.url)
-      // url.host + url.pathname 拼合出相对路径，例如 "screenshots/screenshot-123.png"
-      const relPath = decodeURIComponent((url.host || '') + url.pathname)
-      const fullPath = path.resolve(appRootBase, relPath)
-      // 安全校验：只允许访问应用数据根目录下的文件
+      // 两种形式：local-resource://screenshots/a.png（host+path）或 local-resource:///web-apps/.../index.html（仅 path，避免嵌套 iframe 下对 authority 解析差异）
+      let relPath
+      if (url.host) {
+        relPath = decodeURIComponent((url.host || '') + url.pathname)
+      } else {
+        relPath = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+      }
+      const segments = relPath.replace(/\\/g, '/').split('/').filter((p) => p && p !== '.' && p !== '..')
+      const fullPath = path.join(appRootBase, ...segments)
       if (!fullPath.startsWith(appRootBase + path.sep) && fullPath !== appRootBase) {
         return new Response('Forbidden', { status: 403 })
       }
-      return net.fetch(pathToFileURL(fullPath).toString())
+      const ext = path.extname(fullPath).toLowerCase()
+      if (guestMode) {
+        // 预览分区仅允许访问 web-apps 目录，不允许读取 screenshots/artifacts 等其它本地资源。
+        if (segments[0] !== 'web-apps' || segments.length < 3) {
+          return new Response('Forbidden', { status: 403 })
+        }
+        const target = { appId: segments[1], version: segments[2] }
+        const reqHeaders = request.headers || {}
+        const referrer =
+          request.referrer ||
+          reqHeaders.Referer ||
+          reqHeaders.referer ||
+          reqHeaders.Origin ||
+          reqHeaders.origin ||
+          ''
+        const ctx = parseWebAppLocFromAnyUrl(String(referrer || ''))
+        if (ctx && (ctx.appId !== target.appId || ctx.version !== target.version)) {
+          return new Response('Forbidden', { status: 403 })
+        }
+        // 无 referrer/origin 时只放行入口 HTML 导航，避免无上下文跨应用读取。
+        if (!ctx && ext !== '.html') {
+          return new Response('Forbidden', { status: 403 })
+        }
+      }
+      if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+        return new Response('Not Found', { status: 404 })
+      }
+      // B1：Web 应用 HTML 附加 CSP（与 guest session 出站拦截叠加；§2.1）
+      if (segments[0] === 'web-apps' && ext === '.html') {
+        const buf = fs.readFileSync(fullPath)
+        const csp = [
+          "default-src 'self' local-resource: data: blob:",
+          "script-src 'self' local-resource: 'unsafe-inline'",
+          "style-src 'self' local-resource: 'unsafe-inline'",
+          "img-src 'self' local-resource: data: blob: https:",
+          "font-src 'self' local-resource: data:",
+          "connect-src 'self' local-resource:",
+          "base-uri 'self' local-resource:",
+          "frame-ancestors 'none'"
+        ].join('; ')
+        return new Response(buf, {
+          headers: {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Security-Policy': csp,
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0'
+          }
+        })
+      }
+      const resp = await net.fetch(pathToFileURL(fullPath).toString())
+      if (segments[0] === 'web-apps') {
+        return new Response(resp.body, {
+          status: resp.status,
+          statusText: resp.statusText,
+          headers: {
+            'Content-Type': resp.headers.get('content-type') || 'application/octet-stream',
+            'Cache-Control': 'no-store, no-cache, must-revalidate',
+            Pragma: 'no-cache',
+            Expires: '0'
+          }
+        })
+      }
+      return resp
     } catch (e) {
       return new Response('Internal Error', { status: 500 })
     }
-  })
+  }
+  session.defaultSession.protocol.handle('local-resource', (request) =>
+    localResourceProtocolHandler(request, { guestMode: false })
+  )
+  session.fromPartition(WEB_APP_GUEST_PARTITION).protocol.handle('local-resource', (request) =>
+    localResourceProtocolHandler(request, { guestMode: true })
+  )
+
+  try {
+    require('./web-apps/guest-session').setupWebAppGuestSession()
+  } catch (e) {
+    console.warn('[web-apps] guest session setup failed:', e.message)
+  }
 
   // 配置 webview 使用的持久化 session
   // persist: 前缀会自动持久化 cookies, localStorage, IndexedDB 等
@@ -4376,7 +4504,8 @@ const aiGateway = createGateway({
   getOrchestrator: () => aiOrchestrator,
   getResolvedConfig: getResolvedAIConfig,
   getToolDefinitions: (params) => getToolsForChatWithWait({
-    excludeChannelSend: !params?.feishuChatId && params?.projectPath !== '__feishu__'
+    excludeChannelSend: !params?.feishuChatId && params?.projectPath !== '__feishu__',
+    projectPath: params?.projectPath != null ? String(params.projectPath) : ''
   }),
   getCurrentOpenSession: () => currentOpenSession,
   getConfigForGateway: () => {
@@ -5252,6 +5381,18 @@ function getToolsForChat(opts = {}) {
   const builtinTools = aiToolRegistry.getToolDefinitions()
   const mcpTools = aiMcpManager.getAllToolDefinitions()
   let all = [...builtinTools, ...mcpTools]
+  const pp = String(opts.projectPath || '').trim()
+  if (pp && !pp.startsWith('__')) {
+    try {
+      const { shouldMergeWebAppTools, buildWebAppToolDefinitions } = require('./web-apps/ai-tools')
+      if (shouldMergeWebAppTools(pp, () => store)) {
+        const wa = buildWebAppToolDefinitions(pp)
+        if (wa.length) all = [...all, ...wa]
+      }
+    } catch (e) {
+      console.warn('[web-apps] buildWebAppToolDefinitions:', e.message)
+    }
+  }
   if (opts.excludeChannelSend) {
     all = all.filter((t) => !CHANNEL_SEND_TOOL_REGEX.test(String(t.function?.name || '').trim()))
   }
@@ -8811,6 +8952,61 @@ registerChannel('ai-read-agent-md', async (event, { projectPath }) => {
     return { success: true, content: content || null }
   } catch (error) {
     return { success: false, content: null }
+  }
+})
+
+// Web 应用（~/.openultron/web-apps/）— docs/WEB-APPS-SANDBOX-DESIGN.md
+try {
+  require('./web-apps/registry').registerWebAppsIpc(registerChannel)
+} catch (e) {
+  console.warn('[web-apps] IPC 注册失败:', e.message)
+}
+// 展示名称更新：必须在主进程显式注册（与 registerWebAppsIpc 并列），避免遗漏导致 invoke 报 No handler
+try {
+  const { updateWebAppDisplayName } = require('./web-apps/registry')
+  registerChannel('web-apps-update-name', (event, payload = {}) => updateWebAppDisplayName(payload))
+} catch (e) {
+  console.warn('[web-apps] IPC web-apps-update-name 注册失败:', e.message)
+}
+
+registerChannel('web-apps-get-ai-settings', () => {
+  try {
+    const allow = store.get('aiWebAppToolsAllowlist', [])
+    const allowArr = Array.isArray(allow) ? allow : []
+    const rawScope = store.get('aiWebAppToolsScope', null)
+    let aiWebAppToolsScope =
+      rawScope === 'all' || rawScope === 'allowlist'
+        ? rawScope
+        : allowArr.length > 0
+          ? 'allowlist'
+          : 'all'
+    return {
+      success: true,
+      aiWebAppToolsEnabled: store.get('aiWebAppToolsEnabled', true),
+      aiWebAppToolsAllowlist: allowArr.map((x) => String(x || '').trim()).filter(Boolean),
+      aiWebAppToolsScope
+    }
+  } catch (e) {
+    return { success: false, error: e.message || String(e) }
+  }
+})
+registerChannel('web-apps-set-ai-settings', (event, payload = {}) => {
+  try {
+    if (payload && payload.aiWebAppToolsEnabled !== undefined) {
+      store.set('aiWebAppToolsEnabled', !!payload.aiWebAppToolsEnabled)
+    }
+    if (payload && Array.isArray(payload.aiWebAppToolsAllowlist)) {
+      store.set(
+        'aiWebAppToolsAllowlist',
+        payload.aiWebAppToolsAllowlist.map((x) => String(x || '').trim()).filter(Boolean)
+      )
+    }
+    if (payload && (payload.aiWebAppToolsScope === 'all' || payload.aiWebAppToolsScope === 'allowlist')) {
+      store.set('aiWebAppToolsScope', payload.aiWebAppToolsScope)
+    }
+    return { success: true }
+  } catch (e) {
+    return { success: false, error: e.message || String(e) }
   }
 })
 

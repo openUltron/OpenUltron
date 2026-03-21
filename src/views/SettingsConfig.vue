@@ -12,7 +12,7 @@ import AIConfigPage from '../components/ai/AIConfigPage.vue'
 const route = useRoute()
 const initialTab = computed(() => {
   const t = route.query.tab
-  const allowed = ['config', 'usage', 'feishu', 'backup', 'doctor']
+  const allowed = ['config', 'usage', 'feishu', 'backup', 'doctor', 'webapps']
   return t && allowed.includes(t) ? t : 'config'
 })
 </script>

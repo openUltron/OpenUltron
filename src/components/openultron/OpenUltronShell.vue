@@ -44,6 +44,10 @@
             <Zap :size="16" />
             <span>Skills</span>
           </router-link>
+          <router-link :to="webAppsNavTo" class="nav-item" :class="{ active: webAppsNavActive }">
+            <LayoutGrid :size="16" />
+            <span>应用</span>
+          </router-link>
         </div>
         <div class="nav-group">
           <div class="nav-group-label">{{ t('shell.groupSettings') }}</div>
@@ -75,7 +79,7 @@
     <main class="shell-main">
       <router-view v-slot="{ Component }">
         <transition name="fade" mode="out-in">
-          <keep-alive :include="['ChatView']">
+          <keep-alive :include="['ChatView', 'WebAppStudioView']">
             <component :is="Component" />
           </keep-alive>
         </transition>
@@ -87,11 +91,14 @@
 
 <script setup>
 import { computed, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import { getLastWebAppStudio } from '../../composables/useLastWebAppStudio.js'
 import {
   MessageSquare,
   Radio,
   Clock,
   Zap,
+  LayoutGrid,
   Settings,
   FileText,
   Sun,
@@ -101,6 +108,27 @@ import { useTheme } from '../../composables/useTheme.js'
 import { useLogoUrl } from '../../composables/useLogoUrl.js'
 import { useHealthCheck } from '../../composables/useHealthCheck.js'
 import { useI18n } from '../../composables/useI18n.js'
+
+const route = useRoute()
+const webAppsNavActive = computed(
+  () =>
+    route.path === '/web-apps' ||
+    route.path === '/web-app-studio' ||
+    route.path === '/app-open'
+)
+
+/** 从聊天/设置等页点「应用」时回到上次工作室；在应用库或仅预览页仍进应用库，避免误跳 */
+const webAppsNavTo = computed(() => {
+  const path = route.path
+  if (path === '/web-apps' || path === '/app-open') {
+    return '/web-apps'
+  }
+  const last = getLastWebAppStudio()
+  if (last?.appId && last?.version) {
+    return { path: '/web-app-studio', query: { appId: last.appId, version: last.version } }
+  }
+  return '/web-apps'
+})
 
 const logoUrl = useLogoUrl()
 const { status: healthStatus, label: healthLabel } = useHealthCheck()
@@ -345,6 +373,12 @@ onMounted(() => {
   min-width: 0;
   padding: 0;
   box-sizing: border-box;
+}
+/* 子路由根节点铺满主区高度（工作室/设置等分栏布局依赖） */
+.shell-main > * {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
 }
 
 .fade-enter-active,

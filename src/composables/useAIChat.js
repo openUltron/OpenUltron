@@ -2,7 +2,9 @@
 
 import { ref, reactive, onUnmounted } from 'vue'
 
-export function useAIChat() {
+/** afterToolResult：工具结果已写入消息且非 partial 时调用（仅当前会话） */
+export function useAIChat(hooks = {}) {
+  const { afterToolResult } = hooks
   const messages = ref([])
   const isStreaming = ref(false)
   const currentStreamContent = ref('')
@@ -47,10 +49,13 @@ export function useAIChat() {
   // 生成唯一会话 ID
   const genSessionId = () => `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 
-  // 统一按字符串比较 sessionId，避免 IPC 序列化导致类型不一致而丢事件
-  const isCurrentSession = (data) =>
-    data?.sessionId != null && currentSessionId != null &&
-    String(data.sessionId).trim() === String(currentSessionId).trim()
+  // 统一按字符串比较 sessionId；勿用 String(null) 得到 'null' 与真实 id 比较
+  const isCurrentSession = (data) => {
+    const sid = data?.sessionId != null ? String(data.sessionId).trim() : ''
+    const cur = currentSessionId != null && currentSessionId !== '' ? String(currentSessionId).trim() : ''
+    if (!sid || !cur) return false
+    return sid === cur
+  }
 
   // 注册 IPC 监听器
   const ensureListeners = () => {
@@ -107,6 +112,9 @@ export function useAIChat() {
         if (state?.timer) clearTimeout(state.timer)
         toolResultPushState.delete(data.toolCallId)
         applyResult(data)
+        try {
+          afterToolResult?.(data)
+        } catch (_) { /* ignore */ }
         return
       }
       const now = Date.now()

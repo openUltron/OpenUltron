@@ -30,6 +30,7 @@
         </ul>
       </div>
       <AISettingsPage v-if="activeTab === 'config'" />
+      <WebAppToolsSettingsPage v-else-if="activeTab === 'webapps'" />
       <NotifyChannelsPage v-else-if="activeTab === 'feishu'" />
       <AIBackupPage v-else-if="activeTab === 'backup'" />
       <DoctorPage v-else-if="activeTab === 'doctor'" />
@@ -39,11 +40,12 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
-import { Settings, Send, Archive, Activity } from 'lucide-vue-next'
+import { Settings, Send, Archive, Activity, LayoutGrid } from 'lucide-vue-next'
 import AISettingsPage from './AISettingsPage.vue'
 import NotifyChannelsPage from './NotifyChannelsPage.vue'
 import AIBackupPage from './AIBackupPage.vue'
 import DoctorPage from './DoctorPage.vue'
+import WebAppToolsSettingsPage from './WebAppToolsSettingsPage.vue'
 import { useI18n } from '../../composables/useI18n.js'
 
 const api = () => window.electronAPI?.ai
@@ -55,6 +57,7 @@ const props = defineProps({
 const { t } = useI18n()
 const menuItems = computed(() => ([
   { key: 'config', label: t('config.menuApi'), icon: Settings },
+  { key: 'webapps', label: t('config.menuWebApps'), icon: LayoutGrid },
   { key: 'feishu', label: t('config.menuNotify'), icon: Send },
   { key: 'backup', label: t('config.menuBackup'), icon: Archive },
   { key: 'doctor', label: t('config.menuDoctor'), icon: Activity }
