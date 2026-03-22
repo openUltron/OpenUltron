@@ -7,7 +7,6 @@ const net = require('net')
 const tls = require('tls')
 const path = require('path')
 const { URL } = require('url')
-const { SSEParser } = require('./stream-parser')
 const { estimateTokens, shouldCompress, compressMessages, flushMemoryBeforeCompaction, DEFAULT_CONFIG: COMPRESSION_DEFAULTS } = require('./context-compressor')
 const { slimToolsForChat, shouldSlimToolDefinitions } = require('./slim-tool-definitions')
 const { getTopMemoriesForProject, saveMemory, readGlobalMemoryMd, readSoulMd, readIdentityMd, readAgentDisplayName, readUserMd, readBootMd, readAgentsMd, readToolsMd, readLessonsLearned, appendToDiary } = require('./memory-store')
@@ -19,14 +18,17 @@ const sessionRegistry = require('./session-registry')
 const { logger: appLogger } = require('../app-logger')
 const {
   buildResponsesRequestBody,
-  createResponsesStreamToolState,
-  flushResponsesStreamToolState,
-  handleResponsesStreamEvent,
   getOpenAiResponsesPostUrl,
   isCodexChatgptResponsesUrl,
-  shouldUseOpenAiResponses,
   extractResponsesOutputText
 } = require('./openai-responses')
+const { LLM_TRANSPORT, resolveLlmTransport } = require('./llm-transport')
+const {
+  streamOpenAiChatCompletions,
+  streamOpenAiResponses,
+  streamAnthropicMessages
+} = require('./llm-stream-callers')
+const { isOpenRouterBaseUrl, applyNonStreamOpenAiChatMaxTokens } = require('./openrouter-chat-constants')
 const { mergeModelSelectionIntoConfig } = require('./resolve-provider-config')
 const { createChatRunId } = require('./run-id')
 
@@ -222,11 +224,6 @@ function appendOpenAiPlatformBillingHint(statusCode, hostname, message) {
 
 // Claude 模型前缀
 const CLAUDE_PREFIXES = ['claude-']
-
-/** OpenRouter：若未显式限制 max_tokens，网关可能按模型默认/估算预留额度，易触发 credits 不足 */
-const OPENROUTER_DEFAULT_MAX_TOKENS = 2048
-/** 即使用户在设置里填得很大，也对 OpenRouter 封顶，避免误预留天文数字 */
-const OPENROUTER_MAX_TOKENS_CAP = 16384
 
 class Orchestrator {
   constructor(getAIConfigOrStore, toolRegistry, mcpManager, opts = {}) {
@@ -710,7 +707,7 @@ class Orchestrator {
 
     let openAiKind = ''
     if (!isAnthropic) {
-      if (shouldUseOpenAiResponses(config.apiBaseUrl, config.openAiWireMode, config.apiKey)) {
+      if (resolveLlmTransport(config, false) === LLM_TRANSPORT.OPENAI_RESPONSES) {
         try {
           const u = getOpenAiResponsesPostUrl(config.apiBaseUrl, config.openAiWireMode, config.apiKey)
           openAiKind = isCodexChatgptResponsesUrl(u) ? 'OpenAI-Codex(chatgpt.com)' : 'OpenAI-Responses(platform)'
@@ -726,7 +723,7 @@ class Orchestrator {
 
     // 上下文压缩：在每次调用 LLM 前检查（含工具多轮），避免 prompt 先撑爆再失败
     let compressionConfig = { ...COMPRESSION_DEFAULTS, ...(config.contextCompression && typeof config.contextCompression === 'object' ? config.contextCompression : {}) }
-    if (this._isOpenRouterBaseUrl(config.apiBaseUrl)) {
+    if (isOpenRouterBaseUrl(config.apiBaseUrl)) {
       const soft = Number(compressionConfig.openRouterSoftBudget)
       if (Number.isFinite(soft) && soft > 0) {
         const th = Number(compressionConfig.threshold) || COMPRESSION_DEFAULTS.threshold
@@ -735,10 +732,9 @@ class Orchestrator {
     }
     const fakeSender = { send: () => {} }
     const callForSummary = async (msgs, maxTokens) => {
-      const callFn = this._pickOpenAiLlmCaller(config, isAnthropic)
-      const result = await callFn(
+      const result = await this._callLlmStream(
         { messages: msgs, model: useModel, tools: undefined, temperature: 0, max_tokens: maxTokens || 1000 },
-        config, fakeSender, `summary-${sessionId}`, new AbortController().signal
+        config, fakeSender, `summary-${sessionId}`, new AbortController().signal, isAnthropic
       )
       return result?.content || ''
     }
@@ -854,7 +850,6 @@ class Orchestrator {
             const tryModel = modelCandidates[mi].model
             const tryConfig = modelCandidates[mi].routeConfig || config
             const tryAnthropic = this._isClaudeModel(tryModel)
-            const callFn = this._pickOpenAiLlmCaller(tryConfig, tryAnthropic)
             try {
               // 在流式正文前先插入消息内提示，随后同一 assistant 气泡继续追加备用模型输出
               if (mi > 0 && canSend(wrappedSender)) {
@@ -876,13 +871,13 @@ class Orchestrator {
               for (let ti = 0; ti < toolModes.length; ti++) {
                 const mode = toolModes[ti]
                 try {
-                  response = await callFn({
+                  response = await this._callLlmStream({
                     messages: messagesToSend,
                     model: tryModel,
                     tools: mode.tools,
                     temperature: tryConfig.temperature ?? 0,
                     max_tokens: tryConfig.maxTokens || 0
-                  }, tryConfig, wrappedSender, sessionId, abortController.signal)
+                  }, tryConfig, wrappedSender, sessionId, abortController.signal, tryAnthropic)
                   if (!mode.withTools) {
                     wrappedSender.send('ai-chat-token', {
                       sessionId,
@@ -1324,10 +1319,9 @@ class Orchestrator {
       ].join('\n')
 
       const fakeSender = { send: () => {} }
-      const callFn = this._pickOpenAiLlmCaller(config, isAnthropic)
-      const result = await callFn(
+      const result = await this._callLlmStream(
         { messages: [{ role: 'user', content: extractPrompt }], model, tools: undefined, temperature: 0, max_tokens: 500 },
-        config, fakeSender, `memory-extract-${Date.now()}`, new AbortController().signal
+        config, fakeSender, `memory-extract-${Date.now()}`, new AbortController().signal, isAnthropic
       )
 
       let text = (result?.content || '').trim()
@@ -1456,6 +1450,7 @@ class Orchestrator {
 
     const useModel = overrideModel || config.defaultModel || 'deepseek-v3'
     const isAnthropic = this._isClaudeModel(useModel)
+    const transport = resolveLlmTransport(config, isAnthropic)
 
     const messages = systemPrompt
       ? [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }]
@@ -1464,7 +1459,7 @@ class Orchestrator {
     return new Promise((resolve, reject) => {
       let url, reqBody, headers
 
-      if (isAnthropic) {
+      if (transport === LLM_TRANSPORT.ANTHROPIC) {
         const baseUrl = config.apiBaseUrl.replace(/\/v1\/?$/, '')
         url = new URL(`${baseUrl}/v1/messages`)
         const { system, messages: anthropicMessages } = this._toAnthropicMessages(messages)
@@ -1481,7 +1476,7 @@ class Orchestrator {
           'x-api-key': config.apiKey,
           'anthropic-version': '2023-06-01'
         }
-      } else if (shouldUseOpenAiResponses(config.apiBaseUrl, config.openAiWireMode, config.apiKey)) {
+      } else if (transport === LLM_TRANSPORT.OPENAI_RESPONSES) {
         url = getOpenAiResponsesPostUrl(config.apiBaseUrl, config.openAiWireMode, config.apiKey)
         reqBody = buildResponsesRequestBody(messages, {
           model: useModel,
@@ -1503,13 +1498,7 @@ class Orchestrator {
           stream: false,
           temperature: config.temperature ?? 0
         }
-        if (this._isOpenRouterBaseUrl(config.apiBaseUrl)) {
-          const userCap = Number(config.maxTokens) || 0
-          let mt = userCap > 0 ? Math.min(userCap, OPENROUTER_MAX_TOKENS_CAP) : OPENROUTER_DEFAULT_MAX_TOKENS
-          reqBody.max_tokens = Math.max(256, mt)
-        } else if (config.maxTokens) {
-          reqBody.max_tokens = config.maxTokens
-        }
+        applyNonStreamOpenAiChatMaxTokens(reqBody, config.apiBaseUrl, config.maxTokens)
         headers = {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${config.apiKey}`
@@ -1555,9 +1544,9 @@ class Orchestrator {
           try {
             const data = JSON.parse(body)
             let content = ''
-            if (isAnthropic) {
+            if (transport === LLM_TRANSPORT.ANTHROPIC) {
               content = data.content?.[0]?.text || ''
-            } else if (shouldUseOpenAiResponses(config.apiBaseUrl, config.openAiWireMode, config.apiKey)) {
+            } else if (transport === LLM_TRANSPORT.OPENAI_RESPONSES) {
               content = extractResponsesOutputText(data)
             } else {
               content = data.choices?.[0]?.message?.content || ''
@@ -1626,17 +1615,32 @@ class Orchestrator {
     return msg.includes('operation not allowed') || msg.includes('not allowed')
   }
 
-  _isOpenRouterBaseUrl(apiBaseUrl) {
-    return /openrouter\.ai/i.test(String(apiBaseUrl || ''))
+  _llmStreamDeps() {
+    return {
+      getRetryConfig: (c) => this._getRetryConfig(c),
+      sleep: (ms, signal) => this._sleep(ms, signal),
+      shouldRetryError: (err, attempt, maxRetries) => this._shouldRetryError(err, attempt, maxRetries),
+      getRetryDelayMs: (attempt, baseDelayMs, maxDelayMs) => this._getRetryDelayMs(attempt, baseDelayMs, maxDelayMs),
+      makeRequest: (url, method, headers, signal) => this._makeRequest(url, method, headers, signal),
+      readErrorBody: (res, url, cb) => this._readErrorBody(res, url, cb),
+      normalizeToolArguments: (raw) => this._normalizeToolArguments(raw)
+    }
   }
 
-  /** OpenAI：Chat Completions vs Responses（Codex/OAuth JWT 默认走 Responses） */
-  _pickOpenAiLlmCaller(config, tryAnthropic) {
-    if (tryAnthropic) return this._callAnthropicLLM.bind(this)
-    if (shouldUseOpenAiResponses(config.apiBaseUrl, config.openAiWireMode, config.apiKey)) {
-      return this._callOpenAIResponsesLLM.bind(this)
+  _callLlmStream(body, config, sender, sessionId, signal, isAnthropicModel) {
+    const deps = this._llmStreamDeps()
+    const converters = {
+      toAnthropicMessages: (msgs) => this._toAnthropicMessages(msgs),
+      toAnthropicTools: (tools) => this._toAnthropicTools(tools)
     }
-    return this._callOpenAILLM.bind(this)
+    const t = resolveLlmTransport(config, isAnthropicModel)
+    if (t === LLM_TRANSPORT.ANTHROPIC) {
+      return streamAnthropicMessages(deps, converters, body, config, sender, sessionId, signal)
+    }
+    if (t === LLM_TRANSPORT.OPENAI_RESPONSES) {
+      return streamOpenAiResponses(deps, body, config, sender, sessionId, signal)
+    }
+    return streamOpenAiChatCompletions(deps, body, config, sender, sessionId, signal)
   }
 
   /**
@@ -1705,416 +1709,6 @@ class Orchestrator {
     } catch {
       return {}
     }
-  }
-
-  // ========== OpenAI 兼容 API ==========
-  _callOpenAILLM(body, config, sender, sessionId, signal) {
-    const { maxRetries, baseDelayMs, maxDelayMs } = this._getRetryConfig(config)
-
-    const parseOpenRouterAffordMaxTokens = (message) => {
-      const m = String(message || '').match(/can only afford\s+(\d+)/i)
-      if (m && m[1]) {
-        const afford = Number(m[1])
-        if (Number.isFinite(afford) && afford > 0) return afford
-      }
-      return null
-    }
-
-    // For OpenRouter 402 credits/max_tokens errors:
-    // do a single retry with smaller max_tokens to avoid showing failure to users.
-    let openrouterCreditRetryUsed = false
-    let openrouterMaxTokensForced = null
-
-    const attemptOnce = (attempt) => new Promise((resolve, reject) => {
-      if (signal.aborted) { reject(new Error('已取消')); return }
-
-      const url = new URL(`${config.apiBaseUrl}/chat/completions`)
-      const reqBody = { ...body, stream: true }
-      // OpenRouter：必须显式限制 max_tokens，否则按模型默认（如 65536）预留额度，易触发余额不足
-      if (this._isOpenRouterBaseUrl(config.apiBaseUrl)) {
-        if (openrouterMaxTokensForced != null && openrouterMaxTokensForced > 0) {
-          reqBody.max_tokens = Math.max(256, Math.min(openrouterMaxTokensForced, OPENROUTER_MAX_TOKENS_CAP))
-        } else {
-        const userCap = Number(config.maxTokens) || 0
-        let mt = Number(reqBody.max_tokens) || 0
-        if (userCap > 0) {
-          mt = Math.min(userCap, OPENROUTER_MAX_TOKENS_CAP)
-        } else if (!mt || mt <= 0) {
-          mt = OPENROUTER_DEFAULT_MAX_TOKENS
-        } else {
-          mt = Math.min(mt, OPENROUTER_MAX_TOKENS_CAP)
-        }
-        reqBody.max_tokens = Math.max(256, mt)
-        }
-      } else {
-        // 非 OpenRouter：max_tokens=0 表示不限制，不传该字段让 API 使用模型默认值
-        if (!reqBody.max_tokens) delete reqBody.max_tokens
-      }
-      // 显式指定 tool_choice，避免部分网关/代理不传时模型不调用工具
-      if (Array.isArray(reqBody.tools) && reqBody.tools.length > 0) {
-        if (reqBody.tool_choice === undefined) reqBody.tool_choice = 'auto'
-        console.log('[AI] 请求带工具', reqBody.tools.length, '个, tool_choice:', reqBody.tool_choice)
-      }
-      const postData = JSON.stringify(reqBody)
-
-      const onError = (err) => {
-        // Special retry: OpenRouter credits不足 / max_tokens 过大（402）时自动降 max_tokens
-        if (!openrouterCreditRetryUsed &&
-          this._isOpenRouterBaseUrl(config.apiBaseUrl) &&
-          Number(err?.httpStatus) === 402
-        ) {
-          const afford = parseOpenRouterAffordMaxTokens(err?.message)
-          if (afford != null) {
-            openrouterCreditRetryUsed = true
-            // 留一点余量给输入+系统开销：afford - 512；并给一个下限
-            const reduced = Math.max(256, Math.floor(afford - 512))
-            // 若 reduced 没有比当前更小，仍降到默认 2048 兜底
-            openrouterMaxTokensForced = reduced > 0 ? reduced : OPENROUTER_DEFAULT_MAX_TOKENS
-            console.warn('[AI] OpenRouter 402 credits/max_tokens，自动重试（max_tokens 降低为）', openrouterMaxTokensForced)
-            this._sleep(300, signal)
-              .then(() => attemptOnce(attempt + 1).then(resolve).catch(reject))
-              .catch(() => reject(err))
-            return
-          }
-        }
-
-        if (this._shouldRetryError(err, attempt, maxRetries)) {
-          const delay = this._getRetryDelayMs(attempt, baseDelayMs, maxDelayMs)
-          const target = `${url.hostname}${url.pathname}`
-          const code = err?.code ? ` code=${String(err.code)}` : ''
-          console.warn(`[AI] API 调用失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries}) [${target}]${code}：`, err.message)
-          this._sleep(delay, signal)
-            .then(() => attemptOnce(attempt + 1).then(resolve, reject))
-            .catch(() => reject(err))
-          return
-        }
-        reject(err)
-      }
-
-      const req = this._makeRequest(url, 'POST', {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-        'Content-Length': Buffer.byteLength(postData)
-      }, signal)
-      // 流式请求超时（如上游无响应或卡住），避免一直“转圈”且无报错
-      const STREAM_TIMEOUT_MS = 120000
-      req.setTimeout(STREAM_TIMEOUT_MS, () => {
-        if (!req.destroyed) req.destroy(new Error(`请求超时（${STREAM_TIMEOUT_MS / 1000} 秒内无响应）`))
-      })
-
-      const parser = new SSEParser()
-      let fullContent = ''
-      let toolCalls = []
-      let toolCallBuffers = {}
-
-      req.on('response', (res) => {
-        if (res.statusCode !== 200) {
-          this._readErrorBody(res, url, onError)
-          return
-        }
-        res.setEncoding('utf-8')
-        res.on('data', (chunk) => {
-          if (signal.aborted) { req.destroy(); return }
-          const events = parser.parse(chunk)
-          for (const event of events) {
-            if (signal.aborted) { req.destroy(); return }
-            if (event.type === 'done' || event.type !== 'data') continue
-            const choice = event.data.choices?.[0]
-            if (!choice?.delta) continue
-
-            if (choice.delta.content) {
-              fullContent += choice.delta.content
-              if (canSend(sender)) sender.send('ai-chat-token', { sessionId, token: choice.delta.content })
-            }
-
-            if (choice.delta.tool_calls) {
-              for (const tc of choice.delta.tool_calls) {
-                const idx = tc.index ?? 0
-                if (!toolCallBuffers[idx]) {
-                  toolCallBuffers[idx] = { id: tc.id || '', name: tc.function?.name || '', arguments: '' }
-                }
-                if (tc.id) toolCallBuffers[idx].id = tc.id
-                if (tc.function?.name) toolCallBuffers[idx].name = tc.function.name
-                if (tc.function?.arguments) toolCallBuffers[idx].arguments += tc.function.arguments
-              }
-            }
-
-            if (choice.finish_reason) {
-              toolCalls = Object.values(toolCallBuffers).map((tc, idx) => ({
-                id: (tc.id && String(tc.id).trim()) || `call_${idx}_${Date.now()}`,
-                type: 'function',
-                function: { name: tc.name || '', arguments: this._normalizeToolArguments(tc.arguments) }
-              }))
-            }
-          }
-        })
-        res.on('end', () => {
-          if (signal.aborted) {
-            reject(new Error('已取消'))
-            return
-          }
-          if (toolCalls.length === 0 && Object.keys(toolCallBuffers).length > 0) {
-            toolCalls = Object.values(toolCallBuffers).map((tc, idx) => ({
-              id: (tc.id && String(tc.id).trim()) || `call_${idx}_${Date.now()}`,
-              type: 'function',
-              function: { name: tc.name || '', arguments: this._normalizeToolArguments(tc.arguments) }
-            }))
-          }
-          resolve({ content: fullContent, toolCalls })
-        })
-        res.on('error', onError)
-      })
-
-      req.on('error', onError)
-      req.write(postData)
-      req.end()
-    })
-
-    return attemptOnce(0)
-  }
-
-  /**
-   * Responses 形态：JWT+自动 或 codex 模式 → `chatgpt.com/backend-api/codex/responses`；
-   * responses(Platform) 模式 → `api.openai.com/v1/responses`。
-   * 不在 Responses 与 Chat Completions 之间自动切换；失败由上层按模型池/备用模型处理。
-   */
-  _callOpenAIResponsesLLM(body, config, sender, sessionId, signal) {
-    const { maxRetries, baseDelayMs, maxDelayMs } = this._getRetryConfig(config)
-    const responsesPostUrl = getOpenAiResponsesPostUrl(config.apiBaseUrl, config.openAiWireMode, config.apiKey)
-
-    const attemptOnce = (attempt) => new Promise((resolve, reject) => {
-      if (signal.aborted) { reject(new Error('已取消')); return }
-
-      const url = responsesPostUrl
-      const reqBody = buildResponsesRequestBody(body.messages, body, {
-        codexChatgptBackend: isCodexChatgptResponsesUrl(responsesPostUrl)
-      })
-      if (Array.isArray(reqBody.tools) && reqBody.tools.length > 0) {
-        if (reqBody.tool_choice === undefined) reqBody.tool_choice = 'auto'
-        console.log('[AI] Responses 请求带工具', reqBody.tools.length, '个, tool_choice:', reqBody.tool_choice)
-      }
-      const postData = JSON.stringify(reqBody)
-
-      const onError = (err) => {
-        if (this._shouldRetryError(err, attempt, maxRetries)) {
-          const delay = this._getRetryDelayMs(attempt, baseDelayMs, maxDelayMs)
-          const target = `${url.hostname}${url.pathname}`
-          const code = err?.code ? ` code=${String(err.code)}` : ''
-          // 注：delay 为退避等待，非请求超时；单连接流式超时见下方 STREAM_TIMEOUT_MS（默认 120s）。ECONNRESET 多为网络/代理断连，非「超时太短」
-          console.warn(`[AI] Responses API 调用失败，将在 ${delay}ms 后重试 (${attempt + 1}/${maxRetries}) [${target}]${code}：`, err.message)
-          this._sleep(delay, signal)
-            .then(() => attemptOnce(attempt + 1).then(resolve, reject))
-            .catch(() => reject(err))
-          return
-        }
-        reject(err)
-      }
-
-      const req = this._makeRequest(url, 'POST', {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-        'Content-Length': Buffer.byteLength(postData)
-      }, signal)
-      // 单请求「长时间无字节」才触发；与 TLS 握手/中途 read ECONNRESET 无关（后者走上方 onError 重试）
-      const STREAM_TIMEOUT_MS = 120000
-      req.setTimeout(STREAM_TIMEOUT_MS, () => {
-        if (!req.destroyed) req.destroy(new Error(`请求超时（${STREAM_TIMEOUT_MS / 1000} 秒内无响应）`))
-      })
-
-      const parser = new SSEParser()
-      let fullContent = ''
-      let toolCalls = []
-      const seenToolIds = new Set()
-      const responsesToolState = createResponsesStreamToolState()
-
-      req.on('response', (res) => {
-        if (res.statusCode !== 200) {
-          this._readErrorBody(res, url, onError)
-          return
-        }
-        res.setEncoding('utf-8')
-        res.on('data', (chunk) => {
-          if (signal.aborted) { req.destroy(); return }
-          const events = parser.parse(chunk)
-          for (const event of events) {
-            if (signal.aborted) { req.destroy(); return }
-            if (event.type === 'done') continue
-            if (event.type !== 'data') continue
-            const parsed = event.data
-            if (!parsed || typeof parsed !== 'object') continue
-            const h = handleResponsesStreamEvent(parsed, responsesToolState)
-            if (h.deltaText) {
-              fullContent += h.deltaText
-              if (canSend(sender)) sender.send('ai-chat-token', { sessionId, token: h.deltaText })
-            }
-            if (h.toolCalls && h.toolCalls.length) {
-              for (const tc of h.toolCalls) {
-                const id = (tc.id != null && String(tc.id).trim())
-                  ? String(tc.id).trim()
-                  : `call_${toolCalls.length}_${Date.now()}`
-                if (!seenToolIds.has(id)) {
-                  seenToolIds.add(id)
-                  toolCalls.push({ ...tc, id })
-                }
-              }
-            }
-          }
-        })
-        res.on('end', () => {
-          if (signal.aborted) {
-            reject(new Error('已取消'))
-            return
-          }
-          for (const tc of flushResponsesStreamToolState(responsesToolState, seenToolIds)) {
-            toolCalls.push(tc)
-          }
-          resolve({ content: fullContent, toolCalls })
-        })
-        res.on('error', onError)
-      })
-
-      req.on('error', onError)
-      req.write(postData)
-      req.end()
-    })
-
-    return attemptOnce(0)
-  }
-
-  // ========== Anthropic Messages API ==========
-  _callAnthropicLLM(body, config, sender, sessionId, signal) {
-    return new Promise((resolve, reject) => {
-      if (signal.aborted) { reject(new Error('已取消')); return }
-
-      // Anthropic 端点：baseUrl 去掉末尾 /v1 后加 /v1/messages
-      const baseUrl = config.apiBaseUrl.replace(/\/v1\/?$/, '')
-      const url = new URL(`${baseUrl}/v1/messages`)
-
-      // 转换消息格式
-      const { system, messages: anthropicMessages } = this._toAnthropicMessages(body.messages)
-
-      // 转换工具格式
-      const anthropicTools = body.tools ? this._toAnthropicTools(body.tools) : undefined
-
-      const reqBody = {
-        model: body.model,
-        max_tokens: body.max_tokens || 16384, // Anthropic 必须指定，0 时用 16384
-        temperature: body.temperature,
-        stream: true,
-        messages: anthropicMessages
-      }
-      if (system) reqBody.system = system
-      if (anthropicTools && anthropicTools.length > 0) reqBody.tools = anthropicTools
-
-      const postData = JSON.stringify(reqBody)
-
-      const req = this._makeRequest(url, 'POST', {
-        'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
-        'anthropic-version': '2023-06-01',
-        'Content-Length': Buffer.byteLength(postData)
-      }, signal)
-      const STREAM_TIMEOUT_MS = 120000
-      req.setTimeout(STREAM_TIMEOUT_MS, () => {
-        if (!req.destroyed) req.destroy(new Error(`请求超时（${STREAM_TIMEOUT_MS / 1000} 秒内无响应）`))
-      })
-
-      const parser = new SSEParser()
-      let fullContent = ''
-      let toolCalls = []
-      // content blocks: index -> { type, id?, name?, text?, input? }
-      let contentBlocks = {}
-
-      req.on('response', (res) => {
-        if (res.statusCode !== 200) {
-          this._readErrorBody(res, url, reject)
-          return
-        }
-        res.setEncoding('utf-8')
-        res.on('data', (chunk) => {
-          if (signal.aborted) { req.destroy(); return }
-          const events = parser.parse(chunk)
-          for (const event of events) {
-            if (signal.aborted) { req.destroy(); return }
-            if (event.type !== 'data') continue
-            const d = event.data
-            if (!d || !d.type) continue
-
-            switch (d.type) {
-              case 'content_block_start': {
-                const idx = d.index
-                const block = d.content_block || {}
-                contentBlocks[idx] = {
-                  type: block.type,
-                  id: block.id || '',
-                  name: block.name || '',
-                  text: block.text || '',
-                  input: ''
-                }
-                break
-              }
-              case 'content_block_delta': {
-                const idx = d.index
-                const delta = d.delta || {}
-                const block = contentBlocks[idx]
-                if (!block) break
-                if (delta.type === 'text_delta' && delta.text) {
-                  block.text += delta.text
-                  fullContent += delta.text
-                  if (canSend(sender)) sender.send('ai-chat-token', { sessionId, token: delta.text })
-                } else if (delta.type === 'input_json_delta' && delta.partial_json) {
-                  block.input += delta.partial_json
-                }
-                break
-              }
-              case 'message_delta': {
-                // 结束，收集 tool_use blocks
-                const stopReason = d.delta?.stop_reason
-                if (stopReason === 'tool_use' || stopReason === 'end_turn') {
-                  for (const [, block] of Object.entries(contentBlocks)) {
-                    if (block.type === 'tool_use') {
-                      toolCalls.push({
-                        id: block.id,
-                        type: 'function',
-                        function: {
-                          name: block.name,
-                          arguments: block.input
-                        }
-                      })
-                    }
-                  }
-                }
-                break
-              }
-            }
-          }
-        })
-        res.on('end', () => {
-          if (signal.aborted) {
-            reject(new Error('已取消'))
-            return
-          }
-          // 兜底：如果 message_delta 没触发也要收集
-          if (toolCalls.length === 0) {
-            for (const [, block] of Object.entries(contentBlocks)) {
-              if (block.type === 'tool_use') {
-                toolCalls.push({
-                  id: block.id,
-                  type: 'function',
-                  function: { name: block.name, arguments: block.input }
-                })
-              }
-            }
-          }
-          resolve({ content: fullContent, toolCalls })
-        })
-        res.on('error', reject)
-      })
-
-      req.on('error', reject)
-      req.write(postData)
-      req.end()
-    })
   }
 
   // ---------- 格式转换 ----------

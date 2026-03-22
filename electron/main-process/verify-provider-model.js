@@ -61,13 +61,18 @@ function createVerifyProviderModel(deps) {
         try { err = JSON.parse(r.body)?.error?.message || r.body } catch { /* ignore */ }
         return { success: false, error: `HTTP ${r.status}: ${(err || '').toString().slice(0, 200)}` }
       }
+      const { LLM_TRANSPORT, resolveLlmTransport } = require('../ai/llm-transport')
+      const { applyNonStreamOpenAiChatMaxTokens } = require('../ai/openrouter-chat-constants')
       const {
-        shouldUseOpenAiResponses,
         buildResponsesRequestBody,
         getOpenAiResponsesPostUrl,
         isCodexChatgptResponsesUrl
       } = require('../ai/openai-responses')
-      if (shouldUseOpenAiResponses(baseUrl, config.openAiWireMode, config.apiKey)) {
+      const transport = resolveLlmTransport(
+        { apiBaseUrl: baseUrl, openAiWireMode: config.openAiWireMode, apiKey: config.apiKey },
+        false
+      )
+      if (transport === LLM_TRANSPORT.OPENAI_RESPONSES) {
         const urlObj = getOpenAiResponsesPostUrl(baseUrl, config.openAiWireMode, config.apiKey)
         const url = urlObj.href
         const rb = buildResponsesRequestBody(
@@ -83,11 +88,13 @@ function createVerifyProviderModel(deps) {
         return { success: false, error: msgStr }
       }
       const url = `${baseUrl}/chat/completions`
-      const r = await doPost(url, {
+      const chatBody = {
         model,
-        messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 1
-      }, { 'Authorization': `Bearer ${config.apiKey}` })
+        messages: [{ role: 'user', content: 'hi' }]
+      }
+      applyNonStreamOpenAiChatMaxTokens(chatBody, baseUrl, config.maxTokens)
+      if (chatBody.max_tokens == null) chatBody.max_tokens = 1
+      const r = await doPost(url, chatBody, { 'Authorization': `Bearer ${config.apiKey}` })
       if (r.status === 200) return { success: true }
       let err = r.body
       try { err = JSON.parse(r.body)?.error?.message || r.body } catch { /* ignore */ }
