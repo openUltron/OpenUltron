@@ -34,6 +34,37 @@ const DEFAULT_CONFIG = {
 
 const COMPRESSION_SUMMARY_MARKER = '[对话摘要（早期消息已压缩）]'
 
+/**
+ * 压缩切分不得落在「工具轮」中间，否则 recent 会以 tool 开头、或丢掉 assistant(tool_calls) 与 tool 的配对，导致下一轮 Responses/Chat 请求非法。
+ * @param {Array<{role:string,tool_calls?:*,toolCalls?:*}>} dialogMsgs
+ * @param {number} splitIdx - `recent = dialogMsgs.slice(splitIdx)` 的起始下标
+ */
+function alignCompressionSplitIndex(dialogMsgs, splitIdx) {
+  const n = dialogMsgs.length
+  let i = Math.max(0, Math.min(splitIdx, n))
+  // 1) recent 不得以 tool 开头：回退到本轮带 tool_calls 的 assistant
+  if (i < n && dialogMsgs[i].role === 'tool') {
+    let k = i
+    while (k > 0 && dialogMsgs[k - 1].role === 'tool') k--
+    const j = k - 1
+    if (j >= 0 && dialogMsgs[j].role === 'assistant') {
+      const tc = dialogMsgs[j].tool_calls || dialogMsgs[j].toolCalls
+      if (tc && tc.length) i = j
+    }
+  }
+  // 2) 若 split 紧挨在一段 tool 结果之上，且再往前是 assistant(tool_calls)，必须把整块并入 recent（不能把 tool 留在摘要里、assistant 留在 recent）
+  if (i > 0) {
+    let j = i - 1
+    while (j >= 0 && dialogMsgs[j].role === 'tool') j--
+    if (j >= 0) {
+      const m = dialogMsgs[j]
+      const tc = m.tool_calls || m.toolCalls
+      if (m.role === 'assistant' && tc && tc.length) i = j
+    }
+  }
+  return i
+}
+
 /** 限制堆叠的「对话摘要」system 条数，避免反复压缩越压 system 越大 */
 function capCompressionSystemMessages(systemMsgs, maxKeep = 2) {
   const list = Array.isArray(systemMsgs) ? systemMsgs : []
@@ -139,8 +170,9 @@ async function compressMessages(messages, config = {}, callLLM) {
     return messages  // 不需要压缩
   }
 
-  const toCompress = dialogMsgs.slice(0, dialogMsgs.length - cfg.keepRecent)
-  const recentMsgs = dialogMsgs.slice(dialogMsgs.length - cfg.keepRecent)
+  let splitIdx = alignCompressionSplitIndex(dialogMsgs, dialogMsgs.length - cfg.keepRecent)
+  const toCompress = dialogMsgs.slice(0, splitIdx)
+  const recentMsgs = dialogMsgs.slice(splitIdx)
 
   const sliceLen = 1800
   let dialogBody = toCompress.map(m => dialogMessageForSummaryLine(m, sliceLen)).filter(Boolean).join('\n\n')
@@ -206,6 +238,7 @@ module.exports = {
   shouldCompress,
   compressMessages,
   flushMemoryBeforeCompaction,
+  alignCompressionSplitIndex,
   DEFAULT_CONFIG,
   COMPRESSION_SUMMARY_MARKER
 }

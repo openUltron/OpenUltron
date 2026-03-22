@@ -58,11 +58,18 @@ function buildResponsesRequestBody(messages, body, options = {}) {
     if (m.role === 'assistant') {
       const text = normalizeTextContent(m.content)
       if (m.tool_calls && m.tool_calls.length) {
-        if (text) {
+        if (text && String(text).trim()) {
           items.push({
             type: 'message',
             role: 'assistant',
             content: [textContentPart(text, options, 'assistant')]
+          })
+        } else {
+          // 多轮工具：仅 tool_calls、无正文时仍要有 assistant 消息块，再跟 function_call（部分 Responses 后端否则与后续 function_call_output 配对不稳）
+          items.push({
+            type: 'message',
+            role: 'assistant',
+            content: [textContentPart('', options, 'assistant')]
           })
         }
         for (const tc of m.tool_calls) {
@@ -121,7 +128,10 @@ function buildResponsesRequestBody(messages, body, options = {}) {
       }
     })
     req.tool_choice = body.tool_choice ?? 'auto'
-    req.parallel_tool_calls = true
+    // ChatGPT Codex 后端对 parallel_tool_calls 支持不稳定；省略以避免工具被静默忽略或 400
+    if (!options.codexChatgptBackend) {
+      req.parallel_tool_calls = true
+    }
   }
   if (options.codexChatgptBackend) {
     req.store = false
@@ -134,10 +144,48 @@ function buildResponsesRequestBody(messages, body, options = {}) {
 }
 
 /**
+ * 跨 SSE 事件累积 function_call.arguments（与 openai-node ResponseStream 一致）。
+ * @returns {{ byOutputIndex: Record<number, { name: string, call_id: string, arguments: string }> }}
+ */
+function createResponsesStreamToolState() {
+  return { byOutputIndex: Object.create(null), byItemId: Object.create(null) }
+}
+
+/**
+ * 流结束时补全：仅加入尚未在 seenCallIds 中出现过的 call_id（与上层 seenToolIds 配合）。
+ * @param {{ byOutputIndex: Record<number, object> }} state
+ * @param {Set<string>} [seenCallIds]
+ * @returns {Array<{id:string,type:string,function:{name:string,arguments:string}}>}
+ */
+function flushResponsesStreamToolState(state, seenCallIds) {
+  const list = []
+  if (!state || !state.byOutputIndex) return list
+  const emitted = new Set()
+  for (const k of Object.keys(state.byOutputIndex)) {
+    const e = state.byOutputIndex[k]
+    if (!e || !e.name) continue
+    const id = String(e.call_id || e.id || '').trim() || `call_flush_${k}_${Date.now()}`
+    if (emitted.has(id)) continue
+    emitted.add(id)
+    if (seenCallIds && seenCallIds.has(id)) continue
+    if (seenCallIds) seenCallIds.add(id)
+    const args = e.arguments != null && String(e.arguments).length ? String(e.arguments) : '{}'
+    list.push({
+      id,
+      type: 'function',
+      function: { name: String(e.name), arguments: args }
+    })
+  }
+  return list
+}
+
+/**
  * 解析 Responses SSE 中 data JSON，更新文本增量与工具调用。
+ * @param {object} parsed
+ * @param {ReturnType<typeof createResponsesStreamToolState>} [toolState] 传入时处理 output_item.added / function_call_arguments.delta
  * @returns {{ deltaText?: string, toolCalls?: Array<{id:string,type:string,function:{name:string,arguments:string}}>, done?: boolean }}
  */
-function handleResponsesStreamEvent(parsed) {
+function handleResponsesStreamEvent(parsed, toolState) {
   const out = {}
   if (!parsed || typeof parsed !== 'object') return out
   const t = parsed.type
@@ -145,16 +193,92 @@ function handleResponsesStreamEvent(parsed) {
     out.deltaText = String(parsed.delta)
     return out
   }
-  if (t === 'response.output_item.done' && parsed.item) {
+  // 与官方流一致：先 added 登记 output 槽位，再 delta 拼接 arguments
+  if (toolState && t === 'response.output_item.added' && parsed.item) {
+    const idx = parsed.output_index
     const it = parsed.item
-    if (it.type === 'function_call') {
+    if (typeof idx === 'number' && it && it.type === 'function_call') {
+      const cid = String(it.call_id || it.id || '').trim()
+      const slot = {
+        name: String(it.name || ''),
+        call_id: cid,
+        id: String(it.id || it.call_id || '').trim(),
+        arguments: typeof it.arguments === 'string' ? it.arguments : JSON.stringify(it.arguments ?? {})
+      }
+      toolState.byOutputIndex[idx] = slot
+      const rowId = String(it.id || '').trim()
+      if (rowId) toolState.byItemId[rowId] = slot
+    }
+    return out
+  }
+  if (toolState && t === 'response.function_call_arguments.delta') {
+    const idx = parsed.output_index
+    const delta = parsed.delta != null ? String(parsed.delta) : ''
+    const itemRowId = String(parsed.item_id || '').trim()
+    if (!delta) return out
+    let slot = typeof idx === 'number' ? toolState.byOutputIndex[idx] : null
+    if (!slot && itemRowId) slot = toolState.byItemId[itemRowId]
+    if (!slot && itemRowId) {
+      slot = { name: '', call_id: '', id: itemRowId, arguments: '' }
+      toolState.byItemId[itemRowId] = slot
+      if (typeof idx === 'number') toolState.byOutputIndex[idx] = slot
+    }
+    if (slot) slot.arguments = (slot.arguments || '') + delta
+    return out
+  }
+  // 新版 Responses 流：工具调用常以该事件结束（未必再发带完整 item 的 output_item.done）
+  if (t === 'response.function_call_arguments.done') {
+    // 文档形态：整包在 `item` 内；部分线路仍可能发扁平字段（name / arguments / item_id）
+    const it = parsed.item && typeof parsed.item === 'object' ? parsed.item : null
+    if (it && it.type === 'function_call') {
+      const args = typeof it.arguments === 'string' ? it.arguments : JSON.stringify(it.arguments || {})
       out.toolCalls = [
         {
           id: String(it.call_id || it.id || '').trim() || `call_${Date.now()}`,
           type: 'function',
           function: {
             name: String(it.name || ''),
-            arguments: typeof it.arguments === 'string' ? it.arguments : JSON.stringify(it.arguments || {})
+            arguments: args || '{}'
+          }
+        }
+      ]
+      return out
+    }
+    const itemId = String(parsed.item_id || '').trim()
+    const name = String(parsed.name || '')
+    const args = typeof parsed.arguments === 'string' ? parsed.arguments : JSON.stringify(parsed.arguments ?? {})
+    if (name) {
+      out.toolCalls = [
+        {
+          id: itemId || `call_${Date.now()}`,
+          type: 'function',
+          function: { name, arguments: args || '{}' }
+        }
+      ]
+    }
+    return out
+  }
+  if (t === 'response.output_item.done' && parsed.item) {
+    const it = parsed.item
+    if (it.type === 'function_call') {
+      const idx = parsed.output_index
+      let args = typeof it.arguments === 'string' ? it.arguments : JSON.stringify(it.arguments || {})
+      if (
+        toolState &&
+        typeof idx === 'number' &&
+        toolState.byOutputIndex[idx] &&
+        (!args || args === '{}' || args === 'null')
+      ) {
+        const acc = toolState.byOutputIndex[idx].arguments
+        if (acc && String(acc).trim()) args = String(acc)
+      }
+      out.toolCalls = [
+        {
+          id: String(it.call_id || it.id || '').trim() || `call_${Date.now()}`,
+          type: 'function',
+          function: {
+            name: String(it.name || ''),
+            arguments: args || '{}'
           }
         }
       ]
@@ -264,6 +388,8 @@ function extractResponsesOutputText(data) {
 
 module.exports = {
   buildResponsesRequestBody,
+  createResponsesStreamToolState,
+  flushResponsesStreamToolState,
   handleResponsesStreamEvent,
   getOpenAiResponsesPostUrl,
   isCodexChatgptResponsesUrl,

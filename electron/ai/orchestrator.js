@@ -19,6 +19,8 @@ const sessionRegistry = require('./session-registry')
 const { logger: appLogger } = require('../app-logger')
 const {
   buildResponsesRequestBody,
+  createResponsesStreamToolState,
+  flushResponsesStreamToolState,
   handleResponsesStreamEvent,
   getOpenAiResponsesPostUrl,
   isCodexChatgptResponsesUrl,
@@ -1887,6 +1889,10 @@ class Orchestrator {
       const reqBody = buildResponsesRequestBody(body.messages, body, {
         codexChatgptBackend: isCodexChatgptResponsesUrl(responsesPostUrl)
       })
+      if (Array.isArray(reqBody.tools) && reqBody.tools.length > 0) {
+        if (reqBody.tool_choice === undefined) reqBody.tool_choice = 'auto'
+        console.log('[AI] Responses 请求带工具', reqBody.tools.length, '个, tool_choice:', reqBody.tool_choice)
+      }
       const postData = JSON.stringify(reqBody)
 
       const onError = (err) => {
@@ -1919,6 +1925,7 @@ class Orchestrator {
       let fullContent = ''
       let toolCalls = []
       const seenToolIds = new Set()
+      const responsesToolState = createResponsesStreamToolState()
 
       req.on('response', (res) => {
         if (res.statusCode !== 200) {
@@ -1935,17 +1942,19 @@ class Orchestrator {
             if (event.type !== 'data') continue
             const parsed = event.data
             if (!parsed || typeof parsed !== 'object') continue
-            const h = handleResponsesStreamEvent(parsed)
+            const h = handleResponsesStreamEvent(parsed, responsesToolState)
             if (h.deltaText) {
               fullContent += h.deltaText
               if (canSend(sender)) sender.send('ai-chat-token', { sessionId, token: h.deltaText })
             }
             if (h.toolCalls && h.toolCalls.length) {
               for (const tc of h.toolCalls) {
-                const id = tc.id && String(tc.id).trim()
-                if (id && !seenToolIds.has(id)) {
+                const id = (tc.id != null && String(tc.id).trim())
+                  ? String(tc.id).trim()
+                  : `call_${toolCalls.length}_${Date.now()}`
+                if (!seenToolIds.has(id)) {
                   seenToolIds.add(id)
-                  toolCalls.push(tc)
+                  toolCalls.push({ ...tc, id })
                 }
               }
             }
@@ -1955,6 +1964,9 @@ class Orchestrator {
           if (signal.aborted) {
             reject(new Error('已取消'))
             return
+          }
+          for (const tc of flushResponsesStreamToolState(responsesToolState, seenToolIds)) {
+            toolCalls.push(tc)
           }
           resolve({ content: fullContent, toolCalls })
         })
