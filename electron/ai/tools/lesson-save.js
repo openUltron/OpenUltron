@@ -1,6 +1,6 @@
 // 工具：将经验教训写入 LESSONS_LEARNED.md（自进化专用，替代用 file_operation 写该文件）
 const { appendLesson } = require('../memory-store')
-const { logger: appLogger } = require('../app-logger')
+const { logger: appLogger } = require('../../app-logger')
 
 const definition = {
   description: '将一条经验教训写入知识库 LESSONS_LEARNED.md。用于自进化或对话后反思：记录失败原因与正确做法、成功模式、可复用规律。每条会按日期与类别自动排版追加。知识库会在每次对话开始时自动注入给 AI，因此写详细才能被后续直接利用。',

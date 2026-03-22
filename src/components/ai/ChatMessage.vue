@@ -306,7 +306,8 @@ const toolLabel = (name) => {
     analyze_project: t('chatMessage.analyzeProject'),
     user_confirmation: t('chatMessage.requestConfirmation'),
     webview_control: t('chatMessage.browser'),
-    feishu_send_message: t('chatMessage.feishuSend')
+    feishu_send_message: t('chatMessage.feishuSend'),
+    read_app_log: t('chatMessage.readAppLog')
   }
   return map[name] || name
 }
@@ -339,6 +340,10 @@ const toolSummary = (tc) => {
     }
     if (tc.name === 'feishu_send_message') return args.text ? t('chatMessage.sendText') : args.image_base64 || args.image_key ? t('chatMessage.sendImage') : args.file_key || args.file_path ? t('chatMessage.sendFile') : t('chatMessage.send')
     if (tc.name === 'sessions_spawn') return args.role_name ? `${t('chatMessage.childAgent')}（${args.role_name}）` : t('chatMessage.childAgent')
+    if (tc.name === 'read_app_log') {
+      const k = args.keyword ? ` · ${args.keyword}` : ''
+      return `${args.lines || 800} lines${k}`
+    }
     return ''
   } catch {
     return ''

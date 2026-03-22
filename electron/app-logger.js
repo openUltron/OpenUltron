@@ -123,23 +123,70 @@ function getLogPath() {
   return LOG_FILE
 }
 
+/** 单次从末尾读取的最大字节数，避免超大 app.log 一次性读入内存 */
+const TAIL_READ_MAX_BYTES = 3 * 1024 * 1024
+
 /** 读取最后 N 行（从文件末尾往前读，返回字符串） */
 function readTail(lines = 2000) {
   ensureLogDir()
   if (!fs.existsSync(LOG_FILE)) return ''
-  const content = fs.readFileSync(LOG_FILE, 'utf8')
-  const all = content.split('\n').filter(Boolean)
-  const tail = all.slice(-Math.max(1, lines))
+  const stat = fs.statSync(LOG_FILE)
+  if (stat.size === 0) return ''
+  const lineCount = Math.max(1, lines)
+  let text
+  if (stat.size <= TAIL_READ_MAX_BYTES) {
+    text = fs.readFileSync(LOG_FILE, 'utf8')
+  } else {
+    const fd = fs.openSync(LOG_FILE, 'r')
+    try {
+      const start = stat.size - TAIL_READ_MAX_BYTES
+      const buf = Buffer.alloc(stat.size - start)
+      fs.readSync(fd, buf, 0, buf.length, start)
+      text = buf.toString('utf8')
+      const firstNl = text.indexOf('\n')
+      if (firstNl >= 0) text = text.slice(firstNl + 1)
+    } finally {
+      fs.closeSync(fd)
+    }
+  }
+  const all = text.split('\n').filter(Boolean)
+  const tail = all.slice(-lineCount)
   return tail.join('\n')
+}
+
+function readPackageMeta() {
+  try {
+    const pkg = require(path.join(__dirname, '..', 'package.json'))
+    return { name: pkg.name || 'OpenUltron', version: String(pkg.version || 'unknown') }
+  } catch {
+    return { name: 'OpenUltron', version: 'unknown' }
+  }
 }
 
 /**
  * 供 AI 定位/分析问题：返回带说明的最近 N 行文本
+ * @param {number} lines
+ * @param {{ keyword?: string }} [opts]
  */
-function getForAi(lines = 500) {
-  const tail = readTail(lines)
-  const header = `--- OpenUltron 应用日志（最近 ${lines} 行，供 AI 定位问题） ---`
-  return tail ? header + '\n\n' + tail : header + '\n\n（暂无日志）'
+function getForAi(lines = 500, opts = {}) {
+  let tail = readTail(lines)
+  const kw = opts && opts.keyword != null ? String(opts.keyword).trim().toLowerCase() : ''
+  if (kw) {
+    const hit = tail.split('\n').filter((l) => l.toLowerCase().includes(kw))
+    tail = hit.length
+      ? hit.join('\n')
+      : '（当前尾部日志中无包含该关键词的行；可去掉 keyword 或增大 lines 后重试）'
+  }
+  const meta = readPackageMeta()
+  const header = [
+    '--- OpenUltron 应用日志（供 AI / 技术支持分析） ---',
+    `应用: ${meta.name} ${meta.version} | 平台: ${process.platform} | 日志文件: ${LOG_FILE}`,
+    `以下为最近至多 ${lines} 行（按物理行计，堆栈可能占多行）${kw ? ` | 已按关键词过滤: ${opts.keyword}` : ''}`,
+    '提示: console.log 默认不落盘；WARN/ERROR 与显式 logger 会写入本文件。',
+    '---',
+    ''
+  ].join('\n')
+  return tail ? header + tail : header + '（暂无日志内容）'
 }
 
 /**

@@ -74,6 +74,7 @@ function createDefaultRegistry(options = {}) {
     ['analyze_project', './tools/analyze-project'],
     ['execute_command', './tools/execute-command'],
     ['query_command_log', './tools/query-command-log'],
+    ['read_app_log', './tools/read-app-log'],
     ['run_script', './tools/run-script'],
     ['git_operation', './tools/git-operation'],
     ['file_operation', './tools/file-operation'],

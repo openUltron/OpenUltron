@@ -6,6 +6,7 @@
       <button class="doctor-run-btn" :disabled="loading" @click="runDoctor">
         {{ loading ? t('doctor.checking') : t('doctor.run') }}
       </button>
+      <router-link class="doctor-logs-link" to="/settings/logs">{{ t('doctor.viewLogs') }}</router-link>
     </div>
     <div v-if="error" class="doctor-error">{{ error }}</div>
     <div v-else-if="result" class="doctor-result">
@@ -95,6 +96,17 @@ async function runDoctor() {
 .doctor-run-btn:disabled {
   opacity: 0.7;
   cursor: not-allowed;
+}
+.doctor-logs-link {
+  display: inline-block;
+  margin-left: 12px;
+  font-size: 13px;
+  color: var(--ou-link, var(--ou-accent));
+  text-decoration: none;
+  vertical-align: middle;
+}
+.doctor-logs-link:hover {
+  text-decoration: underline;
 }
 .doctor-error {
   font-size: 13px;

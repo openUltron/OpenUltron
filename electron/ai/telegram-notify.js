@@ -4,14 +4,10 @@ const fs = require('fs')
 const path = require('path')
 const os = require('os')
 const crypto = require('crypto')
-const { execFile } = require('child_process')
-const { promisify } = require('util')
 const openultronConfig = require('../openultron-config')
 const feishuNotify = require('./feishu-notify')
-const { resolveFfmpegPath } = feishuNotify
+const { execFfmpegWithFallback } = feishuNotify
 const { redactSensitiveText } = require('../core/sensitive-text')
-
-const execFileAsync = promisify(execFile)
 const API_BASE = 'api.telegram.org'
 
 function getConfig() {
@@ -130,27 +126,18 @@ async function synthesizeEdgeTtsToMp3(text, outputPath, options = {}) {
 }
 
 async function convertMp3ToOggOpus(inputMp3, outputOgg) {
-  const ffmpegBin = resolveFfmpegPath()
-  try {
-    await execFileAsync(ffmpegBin, [
-      '-y',
-      '-i', inputMp3,
-      '-ac', '1',
-      '-ar', '48000',
-      '-c:a', 'libopus',
-      '-b:a', '32k',
-      outputOgg
-    ], {
-      timeout: 120000,
-      maxBuffer: 4 * 1024 * 1024
-    })
-  } catch (e) {
-    const msg = String(e?.stderr || e?.message || 'ffmpeg 转码失败').trim()
-    if (/not found|enoent/i.test(msg)) {
-      throw new Error('未检测到 ffmpeg。请先安装 ffmpeg（macOS: brew install ffmpeg）')
-    }
-    throw new Error(`ffmpeg 转码失败: ${msg.slice(0, 300)}`)
-  }
+  await execFfmpegWithFallback([
+    '-y',
+    '-i', inputMp3,
+    '-ac', '1',
+    '-ar', '48000',
+    '-c:a', 'libopus',
+    '-b:a', '32k',
+    outputOgg
+  ], {
+    timeout: 120000,
+    maxBuffer: 4 * 1024 * 1024
+  })
 }
 
 async function sendVoiceByPath(token, chatId, filePath, caption) {

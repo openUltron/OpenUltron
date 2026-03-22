@@ -408,63 +408,113 @@ async function ffprobeDurationSec(filePath) {
   }
 }
 
-function resolveFfmpegPath() {
+/** 可执行 ffmpeg 路径候选（有序）。macOS 上优先 Homebrew：ffmpeg-static 偶发 spawn -88 等无法执行，系统 ffmpeg 更稳。 */
+function getFfmpegCandidates() {
+  const ordered = []
+  const add = (p) => {
+    if (!p || ordered.includes(p)) return
+    ordered.push(p)
+  }
+  const plat = process.platform
+  if (plat === 'darwin') {
+    add('/opt/homebrew/bin/ffmpeg')
+    add('/usr/local/bin/ffmpeg')
+  } else if (plat === 'linux') {
+    add('/usr/bin/ffmpeg')
+    add('/usr/local/bin/ffmpeg')
+  }
   const bundled = resolveFfmpegBundledPath('ffmpeg')
-  if (bundled) return bundled
-  const candidates = ['/usr/local/bin/ffmpeg', '/opt/homebrew/bin/ffmpeg', '/usr/bin/ffmpeg', 'ffmpeg']
-  for (const p of candidates) {
+  if (bundled) add(bundled)
+  if (plat === 'darwin' || plat === 'linux') {
+    add('/usr/bin/ffmpeg')
+  }
+  add('ffmpeg')
+  return ordered
+}
+
+function resolveFfmpegPath() {
+  for (const p of getFfmpegCandidates()) {
     if (p === 'ffmpeg') return p
-    try { if (fs.existsSync(p)) return p } catch (_) {}
+    try {
+      if (fs.existsSync(p)) return p
+    } catch (_) {}
   }
   return 'ffmpeg'
 }
 
-async function convertMp3ToOpus(inputMp3, outputOpus) {
-  const ffmpegBin = resolveFfmpegPath()
-  try {
-    await execFileAsync(ffmpegBin, [
-      '-y',
-      '-i', inputMp3,
-      '-ac', '1',
-      '-ar', '16000',
-      '-c:a', 'libopus',
-      '-b:a', '24k',
-      outputOpus
-    ], {
-      timeout: 120000,
-      maxBuffer: 4 * 1024 * 1024
-    })
-  } catch (e) {
-    const msg = String(e?.stderr || e?.message || 'ffmpeg 转码失败').trim()
-    if (/not found|enoent/i.test(msg)) {
-      throw new Error('未检测到 ffmpeg。请先安装 ffmpeg（macOS: brew install ffmpeg）')
-    }
-    throw new Error(`ffmpeg 转码失败: ${msg.slice(0, 300)}`)
+function shouldRetryFfmpegWithNextBinary(err) {
+  if (!err) return true
+  if (err.code === 'ENOENT') return true
+  const msg = String(err.message || '')
+  if (/ENOENT|Unknown system error|ENOTSUP|spawn ENO|EACCES|cannot execute|Exec format error/i.test(msg)) return true
+  const stderr = String(err.stderr || '').trim()
+  if (stderr.length > 0) return false
+  if (typeof err.code === 'number' && err.code !== 0) return false
+  return /spawn/i.test(msg)
+}
+
+function formatFfmpegFailure(err) {
+  const msg = String(err?.stderr || err?.message || 'ffmpeg 转码失败').trim()
+  if (/not found|enoent/i.test(msg)) {
+    return new Error('未检测到 ffmpeg。请先安装 ffmpeg（macOS: brew install ffmpeg）')
   }
+  return new Error(`ffmpeg 转码失败: ${msg.slice(0, 300)}`)
+}
+
+/**
+ * 依次尝试多个 ffmpeg 路径，仅在「疑似无法启动进程」时换下一个；若进程已跑起来但转码失败则不再换。
+ */
+/** @returns {Promise<{ stdout: string, stderr: string }>} */
+async function execFfmpegWithFallback(argv, execOpts = {}) {
+  const candidates = getFfmpegCandidates()
+  let lastErr = null
+  for (const bin of candidates) {
+    if (bin !== 'ffmpeg' && !fs.existsSync(bin)) continue
+    try {
+      const { stdout = '', stderr = '' } = await execFileAsync(bin, argv, execOpts)
+      return { stdout: String(stdout || ''), stderr: String(stderr || '') }
+    } catch (e) {
+      lastErr = e
+      if (shouldRetryFfmpegWithNextBinary(e)) {
+        try {
+          appLogger?.warn?.('[Feishu] ffmpeg 路径失败，尝试下一候选', { bin, err: String(e?.message || e).slice(0, 120) })
+        } catch (_) {}
+        continue
+      }
+      throw formatFfmpegFailure(e)
+    }
+  }
+  throw formatFfmpegFailure(lastErr)
+}
+
+async function convertMp3ToOpus(inputMp3, outputOpus) {
+  await execFfmpegWithFallback([
+    '-y',
+    '-i', inputMp3,
+    '-ac', '1',
+    '-ar', '16000',
+    '-c:a', 'libopus',
+    '-b:a', '24k',
+    outputOpus
+  ], {
+    timeout: 120000,
+    maxBuffer: 4 * 1024 * 1024
+  })
 }
 
 async function convertAudioToOpus(inputAudio, outputOpus) {
-  const ffmpegBin = resolveFfmpegPath()
-  try {
-    await execFileAsync(ffmpegBin, [
-      '-y',
-      '-i', inputAudio,
-      '-ac', '1',
-      '-ar', '16000',
-      '-c:a', 'libopus',
-      '-b:a', '24k',
-      outputOpus
-    ], {
-      timeout: 120000,
-      maxBuffer: 4 * 1024 * 1024
-    })
-  } catch (e) {
-    const msg = String(e?.stderr || e?.message || 'ffmpeg 转码失败').trim()
-    if (/not found|enoent/i.test(msg)) {
-      throw new Error('未检测到 ffmpeg。请先安装 ffmpeg（macOS: brew install ffmpeg）')
-    }
-    throw new Error(`ffmpeg 转码失败: ${msg.slice(0, 300)}`)
-  }
+  await execFfmpegWithFallback([
+    '-y',
+    '-i', inputAudio,
+    '-ac', '1',
+    '-ar', '16000',
+    '-c:a', 'libopus',
+    '-b:a', '24k',
+    outputOpus
+  ], {
+    timeout: 120000,
+    maxBuffer: 4 * 1024 * 1024
+  })
 }
 
 async function synthesizeEdgeTtsToMp3(text, outputPath, options = {}) {
@@ -484,6 +534,9 @@ async function synthesizeEdgeTtsToMp3(text, outputPath, options = {}) {
     volume: options.volume || 'default',
     timeout: Number(options.timeout) > 0 ? Number(options.timeout) : 20000
   }
+  if (options.saveSubtitles === true) cfg.saveSubtitles = true
+  const proxy = options.proxy != null && String(options.proxy).trim()
+  if (proxy) cfg.proxy = proxy
   const tts = new EdgeTTS(cfg)
   await tts.ttsPromise(String(text), outputPath)
   if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) {
@@ -1311,5 +1364,7 @@ module.exports = {
   deleteMessageReaction,
   CONFIG_PATH,
   resolveFfmpegPath,
+  getFfmpegCandidates,
+  execFfmpegWithFallback,
   resolveFfprobePath
 }

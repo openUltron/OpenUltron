@@ -6,9 +6,11 @@ const { logger: appLogger } = require('../../app-logger')
 const { getWorkspaceRoot } = require('../../app-root')
 
 const definition = {
-  description: `使用内置 Edge TTS 将文本合成为语音文件（输出为 mp3）。音色可用 tts_voice_manager(list_voices) 查询，或传别名/默认音色。
+  description: `使用内置 Edge TTS（node-edge-tts）将文本合成为音频文件。
 
-生成后的文件路径可传给 feishu_send_voice_message(audio_file_path) 发送语音消息。不要使用系统命令 edge-tts，请用本工具。`,
+**通用能力**：与 Edge 在线 TTS 一致的参数——output_format（码率/封装）、pitch、rate、volume、timeout；可选 save_subtitles、proxy。音色可用 tts_voice_manager(list_voices) 或传 shortName / 别名。
+
+**便捷默认**：不传 output_format 时为 24kHz 48kbps 单声道 mp3。生成路径可传给 feishu_send_voice_message(audio_file_path)。不要使用系统 CLI「edge-tts」，请用本工具。`,
   parameters: {
     type: 'object',
     properties: {
@@ -19,9 +21,38 @@ const definition = {
       },
       output_path: {
         type: 'string',
-        description: '输出文件路径（可选）。不传则生成到工作空间 audio 目录，文件名自动生成'
+        description: '输出文件路径（可选）。不传则生成到工作空间 audio 目录，文件名自动生成（默认 .mp3）'
       },
-      lang: { type: 'string', description: '语言代码（可选，默认 zh-CN）' }
+      lang: { type: 'string', description: 'BCP-47 语言代码（可选，默认 zh-CN）' },
+      output_format: {
+        type: 'string',
+        description:
+          'Edge 输出格式 id（可选）。示例：audio-24khz-48kbitrate-mono-mp3（默认）、audio-24khz-96kbitrate-mono-mp3。更多见微软 Edge TTS 格式列表。'
+      },
+      pitch: {
+        type: 'string',
+        description: '音高（可选）。default 或如 +10Hz、-5Hz（与 node-edge-tts / Edge 一致）'
+      },
+      rate: {
+        type: 'string',
+        description: '语速（可选）。default 或如 +20%、-10%'
+      },
+      volume: {
+        type: 'string',
+        description: '音量（可选）。default 或如 +10%、-5%'
+      },
+      timeout: {
+        type: 'number',
+        description: '单次合成超时毫秒（可选，默认 20000）'
+      },
+      save_subtitles: {
+        type: 'boolean',
+        description: '为 true 时尝试生成字幕文件（由 node-edge-tts 写入，与音频同目录）'
+      },
+      proxy: {
+        type: 'string',
+        description: 'HTTPS 代理 URL（可选），需访问 Edge TTS 服务时使用'
+      }
     },
     required: ['text']
   }
@@ -43,19 +74,38 @@ async function execute(args = {}, context = {}) {
 
   const voice = args.voice != null ? String(args.voice).trim() : undefined
   const lang = args.lang != null ? String(args.lang).trim() : undefined
+  const outputFormat =
+    args.output_format != null && String(args.output_format).trim()
+      ? String(args.output_format).trim()
+      : undefined
+  const pitch = args.pitch != null && String(args.pitch).trim() ? String(args.pitch).trim() : undefined
+  const rate = args.rate != null && String(args.rate).trim() ? String(args.rate).trim() : undefined
+  const volume = args.volume != null && String(args.volume).trim() ? String(args.volume).trim() : undefined
+  const timeout = args.timeout != null ? Number(args.timeout) : undefined
+  const saveSubtitles = args.save_subtitles === true
+  const proxy = args.proxy != null && String(args.proxy).trim() ? String(args.proxy).trim() : undefined
   const defaultDir = path.join(getWorkspaceRoot(), 'audio')
   const outputPath = makeOutputPath(args.output_path, defaultDir)
 
   appLogger?.info?.('[EdgeTtsTool] edge_tts_synthesize 调用', {
     text_len: text.length,
     voice: voice || '(默认)',
-    output_path: outputPath
+    output_path: outputPath,
+    output_format: outputFormat || '(默认)',
+    has_proxy: Boolean(proxy)
   })
 
   try {
     await feishuNotify.synthesizeEdgeTtsToMp3(text, outputPath, {
       voice: voice ? feishuNotify.resolveTtsVoice(voice) || voice : undefined,
-      lang: lang || 'zh-CN'
+      lang: lang || 'zh-CN',
+      outputFormat,
+      pitch,
+      rate,
+      volume,
+      timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : undefined,
+      saveSubtitles,
+      proxy
     })
   } catch (e) {
     appLogger?.warn?.('[EdgeTtsTool] 合成失败', { error: e?.message })
