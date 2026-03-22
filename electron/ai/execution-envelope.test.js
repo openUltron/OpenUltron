@@ -36,4 +36,15 @@ describe('execution-envelope', () => {
     expect(e.error.retriable).toBe(false)
     expect(e.summary).toMatch(/invalid receive_id/i)
   })
+
+  it('buildExecutionEnvelope metrics carries parent_run_id and sub_session_id', () => {
+    const e = buildExecutionEnvelope({
+      success: true,
+      result: 'ok',
+      parentRunId: 'run-abc',
+      subSessionId: 'sub-xyz'
+    }, 'internal')
+    expect(e.metrics.parent_run_id).toBe('run-abc')
+    expect(e.metrics.sub_session_id).toBe('sub-xyz')
+  })
 })

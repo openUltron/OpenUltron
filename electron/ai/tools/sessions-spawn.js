@@ -66,12 +66,14 @@ function createSessionsSpawnTool(runSubChat) {
         }
       }
 
+      const parentRunId = String(context.runId || '').trim()
       const out = await runSubChat({
         task: String(task).trim(),
         systemPrompt: system_prompt && String(system_prompt).trim() ? String(system_prompt).trim() : undefined,
         roleName: role_name != null && String(role_name).trim() !== '' ? String(role_name).trim() : undefined,
         runtime: runtime != null && String(runtime).trim() !== '' ? String(runtime).trim() : undefined,
         parentSessionId,
+        parentRunId: parentRunId || undefined,
         feishuChatId: context.feishuChatId || context.remoteId || '',
         feishuTenantKey: context.feishuTenantKey || '',
         feishuDocHost: context.feishuDocHost || '',
@@ -103,7 +105,13 @@ function createSessionsSpawnTool(runSubChat) {
         envelope
       }
     } catch (e) {
-      const out = { success: false, error: e.message || String(e), runtime: 'internal' }
+      const parentRunId = String(context.runId || '').trim()
+      const out = {
+        success: false,
+        error: e.message || String(e),
+        runtime: 'internal',
+        parentRunId: parentRunId || undefined
+      }
       return { ...out, envelope: buildExecutionEnvelope(out, 'internal') }
     }
   }

@@ -26,6 +26,7 @@ const {
   extractResponsesOutputText
 } = require('./openai-responses')
 const { mergeModelSelectionIntoConfig } = require('./resolve-provider-config')
+const { createChatRunId } = require('./run-id')
 
 /** 是否为相对路径（与仅以 `/` 开头区分，兼容 Windows 绝对路径） */
 function isRelativeFilePath(p) {
@@ -236,6 +237,7 @@ class Orchestrator {
 
   // ---------- 启动 Agent 对话循环 ----------
   async startChat({ sessionId, messages, model, tools, sender, config: externalConfig, projectPath, panelId, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId }) {
+    const chatRunId = createChatRunId(sessionId)
     let config = externalConfig || this.getConfig()
     const requestedModel = model && String(model).trim() ? String(model).trim() : ''
     // 用户所选模型若绑定到另一供应商（modelBindings / fallbackRoutes），必须切换 apiBaseUrl/apiKey/openAiWireMode，否则会误用默认供应商（如仍走 Codex 的 chatgpt.com）
@@ -256,6 +258,7 @@ class Orchestrator {
     const abortController = new AbortController()
     this.activeSessions.set(sessionId, {
       abortController,
+      chatRunId,
       projectPath: projectPath || '',
       feishuChatId: feishuChatId || '',
       feishuTenantKey: feishuTenantKey || '',
@@ -276,7 +279,7 @@ class Orchestrator {
     })
 
     if (isWebAppSandboxProject(projectPath)) {
-      appLogger.info('[AI][WebAppSandbox] startChat', { projectPath: String(projectPath || '').trim(), sessionId })
+      appLogger.info('[AI][WebAppSandbox] startChat', { runId: chatRunId, projectPath: String(projectPath || '').trim(), sessionId })
     }
 
     // 包装 sender，拦截关键事件更新注册表（HTTP 调用时 sender 为 null，不推送）
@@ -306,6 +309,15 @@ class Orchestrator {
     const poolFallbacks = allowedPool.filter(id => id !== useModel)
     const fallbackModels = [...new Set([...poolFallbacks, ...configuredFallbacks].filter(Boolean))]  // 故障转移备用模型列表
     const fallbackRoutes = Array.isArray(config.fallbackRoutes) ? config.fallbackRoutes : []
+    try {
+      appLogger.info('[AI] chatRun.start', {
+        runId: chatRunId,
+        sessionId,
+        registryId,
+        model: useModel,
+        projectPath: String(projectPath || '').trim().slice(0, 200)
+      })
+    } catch (_) {}
     const isAnthropic = this._isClaudeModel(useModel)
     const maxIterations = config.maxToolIterations || 0 // 0 = 不限制（安全上限 200）
     const safeMax = maxIterations > 0 ? maxIterations : 200
@@ -680,6 +692,7 @@ class Orchestrator {
         if (canSend(sender)) {
           wrappedSender.send('ai-chat-usage', {
             sessionId,
+            runId: chatRunId,
             iteration,
             usage: estimateTokenBreakdown(currentMessages)
           })
@@ -808,6 +821,7 @@ class Orchestrator {
           for (const toolCall of normalizedToolCalls) {
             wrappedSender.send('ai-chat-tool-call', {
               sessionId,
+              runId: chatRunId,
               toolCall: {
                 id: toolCall.id,
                 name: toolCall.function.name,
@@ -828,7 +842,7 @@ class Orchestrator {
                 if (isScreenshotTool) {
                   appLogger?.info?.('[AI][ToolCall] 执行截图相关工具', { name: toolName, sessionId, argsPreview: JSON.stringify(args).slice(0, 200) })
                 }
-                result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId, toolCall.id)
+                result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId, toolCall.id, chatRunId)
               } catch (e) {
                 result = {
                   error: e.message,
@@ -880,6 +894,7 @@ class Orchestrator {
               }
               wrappedSender.send('ai-chat-tool-result', {
                 sessionId,
+                runId: chatRunId,
                 toolCallId: toolCall.id,
                 name: toolCall.function.name,
                 result: resultStr
@@ -2286,7 +2301,7 @@ class Orchestrator {
     })
   }
 
-  async _executeTool(name, args, sender, sessionId, toolCallId = '') {
+  async _executeTool(name, args, sender, sessionId, toolCallId = '', runId = '') {
     if (!this.toolRegistry) {
       return { error: `工具系统未初始化` }
     }
@@ -2452,6 +2467,7 @@ class Orchestrator {
       sessionId,
       projectPath,
       toolCallId,
+      runId: String(runId || session?.chatRunId || '').trim(),
       channel: session?.feishuChatId ? 'feishu' : 'main',
       remoteId: session?.feishuChatId || '',
       feishuChatId: session?.feishuChatId || '',

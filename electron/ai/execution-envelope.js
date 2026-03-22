@@ -40,7 +40,9 @@ function buildExecutionEnvelope(out = {}, runtime = 'internal') {
     metrics: {
       elapsed_ms: Number.isFinite(Number(out.elapsedMs)) ? Number(out.elapsedMs) : undefined,
       retries: Math.max(0, (Array.isArray(out.attemptedRuntimes) ? out.attemptedRuntimes.length : 1) - 1),
-      runtime: String(out.runtime || runtime || 'internal')
+      runtime: String(out.runtime || runtime || 'internal'),
+      parent_run_id: out.parentRunId != null && String(out.parentRunId).trim() ? String(out.parentRunId).trim() : undefined,
+      sub_session_id: out.subSessionId != null && String(out.subSessionId).trim() ? String(out.subSessionId).trim() : undefined
     }
   }
   return envelope

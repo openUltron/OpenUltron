@@ -28,8 +28,8 @@
    - 现状：`electron/ai/execution-envelope.js` 已有基础，需在 `sessions_spawn` 完成路径与 Feishu 等投递侧 **强制规范化**。
 
 2. **关键路径自动化测试**  
-   - 已覆盖（Vitest）：`ai-config-normalize.js`、`resolve-provider-config.js`、`capability-router.js`、`execution-envelope.js`。  
-   - 仍建议补齐：`openai-responses.js`（Codex vs Platform 请求体差异）等。  
+   - 已覆盖（Vitest）：`ai-config-normalize.js`、`resolve-provider-config.js`、`capability-router.js`、`execution-envelope.js`、`openai-responses.js`、`run-id.js`。  
+   - 可按需扩展：流式边界用例、更多供应商适配回归等。  
    - 工具：Vitest + Node 环境即可，不必先上 E2E。
 
 ---
@@ -46,7 +46,7 @@
 
 ## P2 — 可观测性与运维
 
-- 为每次 `startChat` / 子 Agent run 打 **统一 `runId`**，日志与 tool 结果可关联。  
+- 为每次 `startChat` 生成 **`runId`**（`electron/ai/run-id.js`）：已写入 **`ai-chat-usage`**、**`ai-chat-tool-call` / `ai-chat-tool-result`**、**`[AI] chatRun.start`**；**`sessions_spawn` → `runSubChat`** 接收 **`parentRunId`**，**`execution-envelope.metrics`** 含 **`parent_run_id` / `sub_session_id`**，**`[SubAgentDispatch]`** 日志同字段。  
 - 错误分类（已有 `_classifyLlmError`）可 **落盘统计**，便于看「哪家供应商、哪类模型」故障率高。  
 - `main.js` **按域拆分**（渠道、Gateway、配置、MCP），降低单文件认知成本。  
   - 实施指南：**`docs/MAIN-PROCESS-MODULARIZATION.md`**（分阶段迁出 `main-process/ipc/*`，避免循环依赖）。  

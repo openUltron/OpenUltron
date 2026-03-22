@@ -34,7 +34,7 @@
 | `capability-router.js` + `main.js` 注入 | 已有 |
 | 全链路强制规范化（IM 完成路径、Feishu 投递与 envelope 对齐） | 进行中，见 [OPTIMIZATION-ROADMAP.md](../OPTIMIZATION-ROADMAP.md) P0 |
 | Artifact Hub 单一真相源 | 部分实现，持续收敛 |
-| 结构化观测日志（RouteDecision / DeliveryAttempt / RunState） | 规划中 |
+| 结构化观测日志（RouteDecision / DeliveryAttempt / RunState） | 部分：主会话 `runId` → 工具 IPC、`SubAgentDispatch` 的 `parentRunId`、`envelope.metrics.parent_run_id` |
 
 ## 验收方向（摘录）
 
