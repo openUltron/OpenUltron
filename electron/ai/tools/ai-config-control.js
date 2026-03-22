@@ -1,16 +1,16 @@
-// AI 配置控制工具：让 AI 可切换模型、修改 API Key、切换供应商（主会话配置；子任务用 sessions_spawn 指定 provider/model）
+// AI 配置控制工具：主会话 switch_* / set_apikey；另支持读写入站 imCoordinator（get_im_coordinator / set_im_coordinator）。子任务模型用 sessions_spawn 指定。
 
 const { normalizeModelPool, finalizeAiModelFields } = require('../ai-config-normalize')
 
 const definition = {
-  description: '修改主会话的 AI 配置：切换供应商、切换模型、或设置某供应商的 API Key。切换前建议先调用 verify_provider_model(provider=..., model=...) 确认该组合可用，再调用本工具，否则错配可能导致主会话无法对话。为子任务指定模型请用 sessions_spawn，勿用本工具改主会话。switch_provider 会同时切换默认模型；switch_model 可同时传 provider 以连带切换供应商。',
+  description: '修改主会话的 AI 配置（switch_* / set_apikey），或读写入站协调 Agent 的 imCoordinator 开关（get_im_coordinator / set_im_coordinator，写入 openultron.json，需用户确认）。切换供应商/模型前建议先调用 verify_provider_model。为子任务指定模型请用 sessions_spawn，勿用 switch_* 改主会话以免错配。',
   parameters: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['switch_provider', 'switch_model', 'set_apikey'],
-        description: 'switch_provider: 切换当前供应商（并同步默认模型）；switch_model: 切换当前模型，可选填 provider 则连带切换供应商；set_apikey: 设置某供应商的 API Key'
+        enum: ['switch_provider', 'switch_model', 'set_apikey', 'get_im_coordinator', 'set_im_coordinator'],
+        description: 'switch_provider / switch_model / set_apikey：主会话 AI；get_im_coordinator：读取 imCoordinator；set_im_coordinator：设置 include_sessions_spawn（飞书/TG/钉钉入站协调是否暴露 sessions_spawn）'
       },
       provider: {
         type: 'string',
@@ -23,6 +23,10 @@ const definition = {
       api_key: {
         type: 'string',
         description: 'API Key。set_apikey 时必填'
+      },
+      include_sessions_spawn: {
+        type: 'boolean',
+        description: 'set_im_coordinator 时必填：是否允许入站协调 Agent 使用 sessions_spawn'
       }
     },
     required: ['action']
@@ -35,7 +39,35 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
   }
 
   async function execute(args) {
-    const { action, provider, model, api_key } = args || {}
+    const { action, provider, model, api_key, include_sessions_spawn } = args || {}
+
+    if (action === 'get_im_coordinator') {
+      try {
+        const oc = require('../../openultron-config')
+        return { success: true, ...oc.getImCoordinator() }
+      } catch (e) {
+        return { success: false, error: e.message || String(e) }
+      }
+    }
+
+    if (action === 'set_im_coordinator') {
+      if (include_sessions_spawn === undefined || include_sessions_spawn === null) {
+        return { success: false, error: 'set_im_coordinator 需要参数 include_sessions_spawn（布尔）' }
+      }
+      try {
+        const oc = require('../../openultron-config')
+        const on = !!include_sessions_spawn
+        oc.setImCoordinator({ include_sessions_spawn: on })
+        return {
+          success: true,
+          message: `已设置 imCoordinator.include_sessions_spawn=${on}`,
+          ...oc.getImCoordinator()
+        }
+      } catch (e) {
+        return { success: false, error: e.message || String(e) }
+      }
+    }
+
     const legacy = getAIConfig()
     if (!legacy || !legacy.raw || !Array.isArray(legacy.raw.providers)) {
       return { success: false, error: '无法读取当前 AI 配置' }

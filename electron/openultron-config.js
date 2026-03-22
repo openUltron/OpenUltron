@@ -116,6 +116,11 @@ const DEFAULT_PROXY = {
   no_proxy: ''
 }
 
+/** 飞书/Telegram/钉钉 入站协调 Agent：是否在工具列表中包含 sessions_spawn（默认 false，与历史行为一致） */
+const DEFAULT_IM_COORDINATOR = {
+  include_sessions_spawn: false
+}
+
 /** 默认含 ClawHub；list_remote 对 type=clawhub 走搜索 API（见 get-skill.js） */
 const DEFAULT_SKILLS_SOURCES = [
   { name: 'ClawHub', url: 'https://clawhub.ai/', enabled: true, type: 'clawhub' }
@@ -226,6 +231,9 @@ function readAll() {
       ai = { ...ai, providers: mergeProviders(DEFAULT_AI.providers, ai.providers) }
       ai.modelPool = normalizeModelPool(ai.modelPool, ai.defaultModel)
       ai.modelBindings = normalizeModelBindings(ai.modelBindings, ai.providers, ai.modelPool, ai.defaultProvider)
+      const imCoordinator = data.imCoordinator && typeof data.imCoordinator === 'object'
+        ? { ...DEFAULT_IM_COORDINATOR, ...data.imCoordinator }
+        : { ...DEFAULT_IM_COORDINATOR }
       return {
         ai,
         feishu: { ...DEFAULT_FEISHU, ...data.feishu },
@@ -234,7 +242,8 @@ function readAll() {
         webhooks,
         hardware,
         proxy: { ...DEFAULT_PROXY, ...(data.proxy && typeof data.proxy === 'object' ? data.proxy : {}) },
-        skills: skillsBlock
+        skills: skillsBlock,
+        imCoordinator
       }
     } catch (e) {
       console.warn('[openultron-config] 读取失败，使用默认:', e.message)
@@ -268,7 +277,8 @@ function readAll() {
     webhooks: [],
     hardware: { ...DEFAULT_HARDWARE },
     proxy: { ...DEFAULT_PROXY },
-    skills: normalizeSkillsBlock({})
+    skills: normalizeSkillsBlock({}),
+    imCoordinator: { ...DEFAULT_IM_COORDINATOR }
   }
   writeAll(merged)
   if (didMerge) {
@@ -486,6 +496,26 @@ function setProxy(partial) {
   writeAll(all)
 }
 
+function getImCoordinator() {
+  const all = readAll()
+  const m = all.imCoordinator && typeof all.imCoordinator === 'object' ? all.imCoordinator : {}
+  return {
+    include_sessions_spawn: m.include_sessions_spawn === true
+  }
+}
+
+function setImCoordinator(partial) {
+  const all = readAll()
+  const cur = getImCoordinator()
+  all.imCoordinator = {
+    include_sessions_spawn:
+      partial && partial.include_sessions_spawn !== undefined
+        ? !!partial.include_sessions_spawn
+        : cur.include_sessions_spawn
+  }
+  writeAll(all)
+}
+
 module.exports = {
   getPath,
   readAll,
@@ -508,6 +538,8 @@ module.exports = {
   setWebhooks,
   getProxy,
   setProxy,
+  getImCoordinator,
+  setImCoordinator,
   ensureMerged,
   DEFAULT_AI,
   DEFAULT_FEISHU,
@@ -515,4 +547,5 @@ module.exports = {
   DEFAULT_DINGTALK,
   DEFAULT_HARDWARE,
   DEFAULT_PROXY,
+  DEFAULT_IM_COORDINATOR,
 }

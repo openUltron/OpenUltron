@@ -6,6 +6,21 @@
     </div>
     <p class="feishu-desc">{{ t('notify.desc') }}</p>
 
+    <section class="feishu-section im-coordinator-section">
+      <h3 class="feishu-section-title">{{ t('notify.imCoordinatorTitle') }}</h3>
+      <p class="feishu-desc im-coordinator-desc">{{ t('notify.imCoordinatorDesc') }}</p>
+      <div class="feishu-row feishu-row-check">
+        <label class="feishu-check-label">
+          <input
+            v-model="imCoordinatorIncludeSessionsSpawn"
+            type="checkbox"
+            @change="saveImCoordinatorDebounced"
+          />
+          <span>{{ t('notify.imCoordinatorIncludeSessionsSpawn') }}</span>
+        </label>
+      </div>
+    </section>
+
     <!-- 平台切换 -->
     <div class="notify-platform-tabs">
       <button
@@ -317,6 +332,9 @@ const platforms = computed(() => ([
 ]))
 const activePlatform = ref('feishu')
 
+const imCoordinatorIncludeSessionsSpawn = ref(false)
+const imCoordinatorApi = () => window.electronAPI?.imCoordinator
+
 const appId = ref('')
 const appSecret = ref('')
 const defaultChatId = ref('')
@@ -370,6 +388,24 @@ const dingtalkError = ref('')
 const api = () => window.electronAPI?.feishu
 const telegramApi = () => window.electronAPI?.telegram
 const dingtalkApi = () => window.electronAPI?.dingtalk
+
+async function loadImCoordinator() {
+  const r = await imCoordinatorApi()?.getConfig?.()
+  if (r?.success) {
+    imCoordinatorIncludeSessionsSpawn.value = r.include_sessions_spawn === true
+  }
+}
+
+async function saveImCoordinator() {
+  if (!imCoordinatorApi()?.setConfig) return
+  await imCoordinatorApi().setConfig({ include_sessions_spawn: imCoordinatorIncludeSessionsSpawn.value })
+}
+
+let saveImCoordinatorDebounceTimer = null
+function saveImCoordinatorDebounced() {
+  clearTimeout(saveImCoordinatorDebounceTimer)
+  saveImCoordinatorDebounceTimer = setTimeout(saveImCoordinator, 400)
+}
 
 async function loadConfig() {
   const res = await api()?.getConfig?.()
@@ -602,6 +638,7 @@ async function toggleReceive() {
 }
 
 onMounted(() => {
+  loadImCoordinator()
   loadConfig()
   loadTelegramConfig()
   loadDingtalkConfig()

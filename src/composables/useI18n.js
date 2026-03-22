@@ -200,6 +200,9 @@ const messages = {
     notify: {
       title: '消息通知',
       desc: '配置主流 IM 平台后，AI 或系统可向指定群/会话发送文本通知（任务完成、报错提醒等）；部分平台支持接收消息并触发 AI 会话。',
+      imCoordinatorTitle: '入站协调 Agent',
+      imCoordinatorDesc: '作用于飞书、Telegram、钉钉「由消息触发的会话」中的协调 Agent：默认不暴露 sessions_spawn，系统提示与工具列表一致；开启后与子会话派发能力一致（仍不包含各 IM 的 send 工具）。',
+      imCoordinatorIncludeSessionsSpawn: '协调 Agent 允许 sessions_spawn（派生子会话）',
       platformFeishu: '飞书',
       platformTelegram: 'Telegram',
       platformDingtalk: '钉钉',
@@ -559,6 +562,9 @@ const messages = {
     notify: {
       title: 'Notifications',
       desc: 'After configuring IM platforms, AI or system can send text notifications to target chats; some platforms can also receive messages to trigger AI sessions.',
+      imCoordinatorTitle: 'Inbound coordinator agent',
+      imCoordinatorDesc: 'For Feishu / Telegram / DingTalk sessions started from inbound messages: the coordinator omits sessions_spawn by default so the system prompt matches the tool list; enable to align with sub-session spawn (channel send tools stay excluded).',
+      imCoordinatorIncludeSessionsSpawn: 'Allow coordinator agent to use sessions_spawn',
       platformFeishu: 'Feishu',
       platformTelegram: 'Telegram',
       platformDingtalk: 'DingTalk',

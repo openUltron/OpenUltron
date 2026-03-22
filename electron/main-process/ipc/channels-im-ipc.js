@@ -204,6 +204,24 @@ function registerChannelsImIpc (deps) {
     return { success: true }
   })
 
+  registerChannel('im-coordinator-get-config', () => {
+    try {
+      const oc = require('../../openultron-config')
+      return { success: true, ...oc.getImCoordinator() }
+    } catch (e) {
+      return { success: false, include_sessions_spawn: false, message: e.message }
+    }
+  })
+  registerChannel('im-coordinator-set-config', (event, payload) => {
+    try {
+      const oc = require('../../openultron-config')
+      oc.setImCoordinator(payload && typeof payload === 'object' ? payload : {})
+      return { success: true, ...oc.getImCoordinator() }
+    } catch (e) {
+      return { success: false, message: e.message }
+    }
+  })
+
   registerChannel('feishu-get-config', () => {
     try {
       const config = feishuNotify.getConfig()

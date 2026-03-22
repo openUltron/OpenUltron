@@ -233,6 +233,11 @@ export function installBrowserPolyfill(baseUrl = DEFAULT_API_BASE) {
       receiveStop: () => invoke('feishu-receive-stop', [])
     },
 
+    imCoordinator: {
+      getConfig: () => invoke('im-coordinator-get-config', []),
+      setConfig: (payload) => invoke('im-coordinator-set-config', [payload || {}])
+    },
+
     cron: {
       list: () => invoke('cron-list', []),
       add: (task) => invoke('cron-add', [task]),

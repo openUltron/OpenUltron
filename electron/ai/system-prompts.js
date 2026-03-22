@@ -15,7 +15,7 @@ const PROMPTS_DIR = 'prompts'
  * 用当前内置默认覆盖（覆盖前会把旧版同名文件拷到 prompts/_backup_rev_<修订>_<时间>/）。
  * 未递增修订则只补全缺失的 .md，不覆盖用户已改文件。
  */
-const PROMPTS_DEFAULTS_REVISION = 3
+const PROMPTS_DEFAULTS_REVISION = 5
 
 const REVISION_FILE = '.defaults-revision'
 
@@ -122,6 +122,9 @@ function getDefaultPrompts() {
 - 配置项及用途：**app_key** / **app_secret**（应用凭证）；**default_chat_id** / **default_robot_code**（可选，通知用）；**receive_enabled**、**voice_reply_enabled**、**notify_on_complete**（会话结束时向 default_chat_id+robot 发摘要，需二者已填）；**allowFrom**（"*" 或 conversationId/用户 ID 数组）。
 - 鉴权与调用（明确）：钉钉开放平台 API 通常需 access_token。access_token 获取：\`GET https://oapi.dingtalk.com/gettoken?appkey=<app_key>&appsecret=<app_secret>\`，响应 \`access_token\`。调用业务 API 时在 URL 或 body 中带 \`access_token\`。内置能力已使用；未内置接口可写脚本先 gettoken 再请求对应 API（密钥勿在回复中展示）。
 - 引导用户：钉钉开放平台创建应用获 app_key/app_secret；按需配置接收与 allowFrom。
+
+**imCoordinator（飞书 / Telegram / 钉钉 入站协调 Agent）**
+- **include_sessions_spawn**：默认 false。为 true 时，入站「协调 Agent」工具列表包含 **sessions_spawn**，系统提示与之一致；为 false 时协调 Agent 与主窗口不同，须在当前会话内直接完成，不得假设可派生子 Agent。可在应用「消息通知」页切换，或由 AI 在用户确认后调用 **ai_config_control**：action=**get_im_coordinator** 读取；action=**set_im_coordinator** 且 **include_sessions_spawn**=true/false 写入。
 
 **5. webhooks（外部触发）**
 - 配置项及用途：**webhooks[]**，每项 **path**（如 "ci-build"）、**secret**（可选）、**description**（可选）。用途：外部系统通过 POST 本机 webhook 触发一次 Agent。
