@@ -1,7 +1,7 @@
 {
   "name": "openultron",
   "private": true,
-  "version": "1.0.26",
+  "version": "1.0.29",
   "description": "OpenUltron - Super-agent desktop: multi-model, tools & MCP, sub-agent dispatch, Feishu/Telegram/DingTalk in-chat. Not just chat—your AI runs tasks, keeps context, and delivers results.",
   "author": "OpenUltron",
   "license": "MIT",
