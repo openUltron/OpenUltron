@@ -10,8 +10,10 @@ function buildWebAppStudioSandboxMemoryBlock(sandboxRoot) {
   return (
     '[当前应用 - 应用工作室沙箱 · 最高优先级]\n' +
     '你正在 **应用工作室** 中编辑 **一个已安装的 Web 沙箱应用**（不是 OpenUltron 主程序仓库）。\n' +
+    '**禁止**调用 **webapp_studio_invoke** 或 **sessions_spawn**：你已在应用根目录内，请直接用 file_operation / apply_patch / execute_command 修改本目录；委派工具仅供主会话从外部改沙箱时使用。\n' +
     `本会话 **projectPath**（沙箱应用根目录，绝对路径）为：\n\`${root}\`\n` +
     '相对路径默认基于该目录；修改 index.html/css/manifest.json 会直接影响预览。\n' +
+    '**全栈交付**：用户若同时要求「界面 / 前端 / 表单 / 上传 / 按钮 / 页面 / index.html」与「接口 / API / 后端 / service」等，必须在**同一轮交付**内**同时**改入口页（通常为 **index.html**，若有独立 css/js 也要改）与 **service.js**（或项目实际服务端入口）。**禁止**只改后端、不动 UI 就声称功能已完成；若任务清单分列前端与后端条款，收工前须核对两条线均有实质改动（不仅是 package.json）。\n' +
     '必须实际写文件后再汇报结果（file_operation/apply_patch/execute_command），不要只给方案。\n' +
     '改应用展示名优先改 manifest.json 的 name；改页面文字优先改应用目录内入口页面，禁止改 ~/.openultron/IDENTITY.md、SOUL.md。\n' +
     '仅当工具返回成功才能宣称“已完成”。\n' +

@@ -1,5 +1,24 @@
 'use strict'
 
+const path = require('path')
+const { getWebAppsRoot } = require('../web-apps/registry')
+
+/**
+ * 应用工作室侧栏：会话已绑定某沙箱应用根目录，应直接改文件，勿再 webapp_studio_invoke / sessions_spawn。
+ * @param {string} pp projectPath
+ */
+function isWebAppStudioChatProject(pp) {
+  const raw = String(pp || '').trim()
+  if (!raw || raw.startsWith('__')) return false
+  try {
+    const root = path.resolve(getWebAppsRoot())
+    const abs = path.resolve(raw)
+    return abs === root || abs.startsWith(root + path.sep)
+  } catch (_) {
+    return false
+  }
+}
+
 /**
  * 主进程对话工具列表：builtin + MCP，Web App 工具按需合并；协调 Agent 系统提示。
  */
@@ -8,6 +27,8 @@ function createAiChatToolsAccess(deps) {
 
   const CHROME_DEVTOOLS_TOOL_PREFIX_REGEX = /^mcp__chrome[-_]devtools__/
   const CHANNEL_SEND_TOOL_REGEX = /^(feishu_send_message|telegram_send_message|dingtalk_send_message)$/
+  /** 已在 ~/.openultron/web-apps/... 内编辑时，禁止再委派进沙箱（与子 Agent getToolsForSubChat 对齐） */
+  const DELEGATE_OUT_OF_STUDIO_TOOLS = new Set(['webapp_studio_invoke', 'sessions_spawn'])
   let _loggedNoChromeDevtoolsOnce = false
 
   function coordinatorIncludesSessionsSpawn() {
@@ -38,6 +59,9 @@ function createAiChatToolsAccess(deps) {
     }
     if (opts.excludeChannelSend) {
       all = all.filter((t) => !CHANNEL_SEND_TOOL_REGEX.test(String(t.function?.name || '').trim()))
+    }
+    if (isWebAppStudioChatProject(pp)) {
+      all = all.filter((t) => !DELEGATE_OUT_OF_STUDIO_TOOLS.has(String(t?.function?.name || '').trim()))
     }
     const chromeDevtools = all.filter((t) => CHROME_DEVTOOLS_TOOL_PREFIX_REGEX.test(t.function?.name || ''))
     const rest = all.filter((t) => !CHROME_DEVTOOLS_TOOL_PREFIX_REGEX.test(t.function?.name || ''))

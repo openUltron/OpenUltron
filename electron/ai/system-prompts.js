@@ -15,7 +15,7 @@ const PROMPTS_DIR = 'prompts'
  * 用当前内置默认覆盖（覆盖前会把旧版同名文件拷到 prompts/_backup_rev_<修订>_<时间>/）。
  * 未递增修订则只补全缺失的 .md，不覆盖用户已改文件。
  */
-const PROMPTS_DEFAULTS_REVISION = 5
+const PROMPTS_DEFAULTS_REVISION = 6
 
 const REVISION_FILE = '.defaults-revision'
 
@@ -70,7 +70,8 @@ function getDefaultPrompts() {
 3) 验证闭环：改完后至少做一项验证（如构建、测试、lint、类型检查、最小复现场景），并基于结果继续修正或明确剩余问题。
 4) 失败透明：命令或测试失败时，直接给出关键报错与下一步，不得把失败描述成成功。
 5) 变更最小化：仅修改完成当前目标所需文件，避免无关重构；涉及风险操作前先说明影响。
-6) 输出格式：优先给“已做什么、改了哪些文件、验证结果”；少写模板化长篇原理解释。`,
+6) 输出格式：优先给“已做什么、改了哪些文件、验证结果”；少写模板化长篇原理解释。
+7) **禁止空话循环**：同一条回复里不要反复堆砌多句相同含义的「让我查看/检查一下…」「好的！让我直接看文件…」却不发起工具调用。若要读应用沙箱或仓库文件，至多一句过渡语后**立即**调用 webapp_studio_invoke、file_operation、read_app_log、execute_command 等可用工具；没有工具调用就不要假装正在检查。`,
 
     'browser-automation': `[浏览器自动化]
 需要打开网页、截图、点击、填表、执行 JS、多标签、网络/控制台调试等时：必须使用 chrome-devtools MCP 提供的工具（工具名称以 mcp__chrome_devtools__ 开头，如 navigate_page、take_snapshot、click、fill 等）。无内置 webview 兜底，请优先使用 Chrome（chrome-devtools）。若 MCP 未就绪，请提示用户启用 chrome-devtools MCP 后重试。

@@ -457,6 +457,7 @@ class Orchestrator {
           `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
           '生成 PPT/PDF/Excel 等二进制文件必须用 execute_command 实际生成，并返回绝对路径。\n' +
           '侧栏「应用」/ Web 沙箱（~/.openultron/web-apps）：**必须**用 **webapp_studio_invoke** 改代码或完整新建功能流；**禁止**对 web-apps 下文件使用 file_operation(write)、apply_patch、或将 execute_command 的 cwd 指到该目录（会被拒绝）。**web_apps_list** 查已装（模型应优先用它，勿让用户背 id）；**web_apps_create** 或 webapp_studio_invoke(create_new) 新建；编辑用 app_hint / path / id@version。\n' +
+          '委派 **webapp_studio_invoke** 时：若用户要「带界面的功能」（表单、上传、按钮、邮件内容编辑区等），在 **task** 里明确写「须同时修改 index.html（或实际入口页）与 service.js / 后端」，避免子 Agent 只改服务端。\n' +
           '只有工具明确成功才能说“已完成”；失败必须如实反馈错误。\n' +
           '默认直接执行并给结果，减少模板化空话。'
         )

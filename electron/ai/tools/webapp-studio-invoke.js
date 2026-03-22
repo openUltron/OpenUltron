@@ -20,7 +20,7 @@ const definition = {
       task: {
         type: 'string',
         description:
-          '交给应用工作室 Agent 的任务说明（user 消息）。create_new=true 时可省略，将使用简短默认说明。'
+          '交给应用工作室 Agent 的任务说明（user 消息）。create_new=true 时可省略，将使用简短默认说明。若需求含页面/表单/上传等，须写清「同时改 index.html（或入口页）与 service.js」；含糊任务易导致子 Agent 只改后端。'
       },
       project_path: { type: 'string', description: '应用根绝对路径；与其它定位方式择一' },
       app_id: { type: 'string', description: 'manifest.id；可与 version 同传，或单独传（仅一个已装版本时）' },
