@@ -8,6 +8,7 @@
 |------|------|
 | [OPTIMIZATION-ROADMAP.md](./OPTIMIZATION-ROADMAP.md) | 智能体 / 工程化优先级（P0–P3） |
 | [OPENAI-CODEX-AND-CHAT-COMPLETIONS.md](./OPENAI-CODEX-AND-CHAT-COMPLETIONS.md) | Codex 与 Chat Completions 线路差异 |
+| [GATEWAY-WEBSOCKET.md](./GATEWAY-WEBSOCKET.md) | 本地 Gateway WebSocket 协议摘要（`runId`、事件字段） |
 
 ## 主进程与拆分
 

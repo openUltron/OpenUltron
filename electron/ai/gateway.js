@@ -13,6 +13,7 @@
 const http = require('http')
 const WebSocket = require('ws')
 const { getWorkspaceRoot } = require('../app-root')
+const { mapAiChatChannelToGatewayWsEvent } = require('./gateway-ws-events')
 
 const DEFAULT_PORT = 28790
 
@@ -246,35 +247,8 @@ function createGateway(opts) {
     const projectPath = msgProjectPath != null && String(msgProjectPath).trim() !== '' ? String(msgProjectPath).trim() : '__gateway__'
     const wsSender = {
       send: (channel, data) => {
-        const rid = data && data.runId != null ? data.runId : undefined
-        if (channel === 'ai-chat-token') {
-          send(ws, { event: 'token', sessionId, requestId: id, runId: rid, token: data.token })
-        } else if (channel === 'ai-chat-tool-call') {
-          send(ws, { event: 'tool_call', sessionId, requestId: id, runId: rid, toolCall: data.toolCall })
-        } else if (channel === 'ai-chat-tool-result') {
-          send(ws, {
-            event: 'tool_result',
-            sessionId,
-            requestId: id,
-            runId: rid,
-            toolCallId: data.toolCallId,
-            name: data.name,
-            result: data.result
-          })
-        } else if (channel === 'ai-chat-usage') {
-          send(ws, {
-            event: 'usage',
-            sessionId,
-            requestId: id,
-            runId: rid,
-            iteration: data.iteration,
-            usage: data.usage
-          })
-        } else if (channel === 'ai-chat-complete') {
-          send(ws, { event: 'complete', sessionId, requestId: id, runId: rid, messages: data.messages })
-        } else if (channel === 'ai-chat-error') {
-          send(ws, { event: 'error', sessionId, requestId: id, runId: rid, error: data.error })
-        }
+        const ev = mapAiChatChannelToGatewayWsEvent(channel, data, { sessionId, requestId: id })
+        if (ev) send(ws, ev)
       }
     }
     runChat({ sessionId, projectPath, messages, model, tools, fromAppWindow }, wsSender).catch((e) => {

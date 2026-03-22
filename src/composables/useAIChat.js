@@ -295,6 +295,13 @@ export function useAIChat(hooks = {}) {
               }
             }
           },
+          onUsage: (payload) => {
+            tokenUsage.value = {
+              iteration: Number(payload?.iteration) || 0,
+              usage: payload?.usage || null,
+              runId: payload?.runId != null && String(payload.runId).trim() ? String(payload.runId).trim() : null
+            }
+          },
           onComplete: () => {
             isStreaming.value = false
             currentStreamContent.value = ''
@@ -357,7 +364,7 @@ export function useAIChat(hooks = {}) {
   /**
    * 浏览器模式：通过 Gateway WebSocket 发聊天，带 sessionId/projectPath 以便主进程同会话同步
    */
-  async function sendMessageViaGatewayWs({ wsUrl, sessionId, projectPath, messages: msgList, model, tools, onToken, onToolCall, onToolResult, onComplete, onError }) {
+  async function sendMessageViaGatewayWs({ wsUrl, sessionId, projectPath, messages: msgList, model, tools, onToken, onToolCall, onToolResult, onUsage, onComplete, onError }) {
     return new Promise((resolve, reject) => {
       let ws
       let finished = false
@@ -405,8 +412,25 @@ export function useAIChat(hooks = {}) {
           case 'tool_call':
             if (data.toolCall && onToolCall) onToolCall(data.toolCall)
             break
-          case 'tool_result':
-            if (data.toolResult != null && onToolResult) onToolResult(data.toolResult.toolCallId || data.toolResult.id, data.toolResult.result)
+          case 'tool_result': {
+            if (!onToolResult) break
+            let tcid = data.toolCallId
+            let res = data.result
+            if ((tcid == null || tcid === '') && data.toolResult != null && typeof data.toolResult === 'object') {
+              tcid = data.toolResult.toolCallId || data.toolResult.id
+              res = data.toolResult.result
+            }
+            if (tcid != null && tcid !== '') onToolResult(tcid, res)
+            break
+          }
+          case 'usage':
+            if (onUsage) {
+              onUsage({
+                iteration: Number(data.iteration) || 0,
+                usage: data.usage || null,
+                runId: data.runId != null && String(data.runId).trim() ? String(data.runId).trim() : null
+              })
+            }
             break
           case 'complete':
             if (onComplete) onComplete()

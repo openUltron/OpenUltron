@@ -102,7 +102,7 @@ npm run release:all
 ## Documentation
 
 See **[docs/README.md](./docs/README.md)** for the full index (roadmap, main-process split, web sandbox, skills, plans).  
-Quick links: [Optimization roadmap](./docs/OPTIMIZATION-ROADMAP.md), [Web sandbox design](./docs/WEB-APPS-SANDBOX-DESIGN.md), [Skills / ClawHub](./docs/SKILLS-PACK-COMPAT.md).  
+Quick links: [Optimization roadmap](./docs/OPTIMIZATION-ROADMAP.md), [Gateway WebSocket](./docs/GATEWAY-WEBSOCKET.md), [Web sandbox design](./docs/WEB-APPS-SANDBOX-DESIGN.md), [Skills / ClawHub](./docs/SKILLS-PACK-COMPAT.md).  
 Sidebar **Apps**: library **`/web-apps`**, fullscreen preview **`/app-open`**, studio **`/web-app-studio`** (preview + AI chat).
 
 ---
