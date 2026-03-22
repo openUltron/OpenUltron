@@ -2,7 +2,7 @@
 
 本文与 [`MAIN-PROCESS-MODULARIZATION.md`](./MAIN-PROCESS-MODULARIZATION.md) 配套：**已拆模块**见该文 §10；此处列出 **尚未迁出内容** 与 **建议执行顺序**，目标是把 `electron/main.js` 收敛为「生命周期 + 聚合注册 + 少量无法外移的胶水」。
 
-> 统计口径：`main.js` 内仍约有 **~100 条** `registerChannel(...)`（随分支略有浮动，以 `rg "^registerChannel\\(" electron/main.js` 为准）。
+> 统计口径：`main.js` 内仍约有 **~90+ 条** `registerChannel(...)`（随分支略有浮动；阶段 1 完成后减少 7 条，以 `rg "^registerChannel\\(" electron/main.js` 为准）。
 
 ---
 
@@ -46,10 +46,10 @@
 
 原则：**每阶段一个可合并 PR**；迁出后 **channel 名、入参、返回值、事件名不变**；优先 **低耦合 → 高耦合**。
 
-### 阶段 1 — 扩展（低风险）
+### 阶段 1 — 扩展（低风险）✅ 已落地
 
-- **产出**：`main-process/ipc/browser-extensions.js`（或 `chrome-extensions.js`）
-- **动作**：整体剪切 `get-extensions` … `remove-extension`；`registerBrowserExtensionsIpc({ registerChannel, session, store, dialog, getMainWindow, … })`
+- **产出**：`main-process/ipc/browser-extensions.js`
+- **动作**：`get-extensions` … `remove-extension` + 启动后清空 `loadedExtensions` 的 `setTimeout` 与原逻辑一致
 - **验收**：加载/开关/卸载扩展与现网一致
 
 ### 阶段 2 — Coze（中风险）

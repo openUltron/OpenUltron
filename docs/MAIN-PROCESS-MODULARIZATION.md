@@ -37,6 +37,7 @@ electron/
       shell-spawn-command.js       # 已存在：execute-command、execute-command-realtime、kill-command-process、Git index.lock
       external-open.js             # 已存在：open-cursor、open-terminal、get-available-terminals、open-in-finder、open-external
       browser-favorites-passwords.js # 已存在：浏览器收藏 CRUD/导入导出、密码相关 IPC
+      browser-extensions.js          # 已存在：Chrome 扩展加载/列表/开关/卸载（persist:main）
       window-shell.js        # （可选后续）与上并列时再细分
       fs-dialog.js           # （命名占位）更多文件类 IPC 可并入或拆出
       terminal-process.js    # execute-command、PTY、kill
@@ -181,3 +182,4 @@ require('./main-process/ipc/ai-config').register({ app, store, registerChannel, 
 | 2026-03-19 | `main-process/ipc/shell-spawn-command.js` | `execute-command`、`execute-command-realtime`、`kill-command-process`；进程 Map 与 `checkAndRemoveGitLock` 内聚于模块（另导出 `isGitWriteCommand` / `checkAndRemoveGitLock` 供测试复用） |
 | 2026-03-19 | `main-process/ipc/external-open.js` | Cursor / 终端 / 已装终端列表 / 访达 / `openExternal`；注入 `shell`、`getAppRoot` |
 | 2026-03-19 | `main-process/ipc/browser-favorites-passwords.js` | 内置浏览器收藏与密码 IPC；注入 `store`、`dialog`、`getMainWindow`、`safeLog`/`safeError` |
+| 2026-03-19 | `main-process/ipc/browser-extensions.js` | `get-extensions`、`load-extension-*`、`toggle-extension`、`remove-extension`；`loadedExtensions` Map 内聚于模块 |
