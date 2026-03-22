@@ -30,8 +30,10 @@ electron/
     inbound-model-command.js # 已存在：渠道 /model 解析与全局默认模型
     ipc/                     # 按域拆分的「只负责 registerChannel」模块
       window-logs-notifications.js # 已存在：log/logs-*、window-*、refresh、系统通知、get-api-base-url
+      store-config-snapshot.js     # 已存在：delete-saved-config、get/set-current-config
+      fs-dialog-basic.js           # 已存在：show-open/save-dialog、read-file、save-file、read-image-as-base64
       window-shell.js        # （可选后续）与上并列时再细分
-      fs-dialog.js           # 打开/保存、读写文件
+      fs-dialog.js           # （命名占位）更多文件类 IPC 可并入或拆出
       terminal-process.js    # execute-command、PTY、kill
       browser-favorites.js   # 收藏夹 CRUD
       browser-passwords.js   # 密码管理
@@ -169,3 +171,5 @@ require('./main-process/ipc/ai-config').register({ app, store, registerChannel, 
 |------|------|------|
 | — | `main-process/inbound-model-command.js` | 渠道 `/model`、`applyGlobalDefaultModel` |
 | 2026-03-19 | `main-process/ipc/window-logs-notifications.js` | `log-to-frontend`、`logs-*`、`window-*`、`toggle-maximize`、刷新相关、`show-system-notification`、`get-api-base-url`（`getMainWindow` / `getApiServerPort` 由 main 注入） |
+| 2026-03-19 | `main-process/ipc/store-config-snapshot.js` | `delete-saved-config`、`get-current-config`、`set-current-config` |
+| 2026-03-19 | `main-process/ipc/fs-dialog-basic.js` | `show-open-dialog`、`show-save-dialog`、`read-file`、`save-file`、`read-image-as-base64` |

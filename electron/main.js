@@ -30,6 +30,8 @@ const aiBrowserManager = require('./ai/browser-window-manager')
 const { resolveCapabilityRoute, detectRequestedExternalRuntime } = require('./ai/capability-router')
 const { getLogPath, readTail, getForAi, logger: appLogger, patchConsole } = require('./app-logger')
 const { registerWindowLogsAndNotificationsIpc } = require('./main-process/ipc/window-logs-notifications')
+const { registerStoreConfigSnapshotIpc } = require('./main-process/ipc/store-config-snapshot')
+const { registerFsDialogBasicIpc } = require('./main-process/ipc/fs-dialog-basic')
 const { filterSessionsList, isRunSessionId } = require('./ai/sessions-list-filter')
 const skillPack = require('./ai/skill-pack')
 const { stopAllWebAppServices } = require('./web-apps/process-manager')
@@ -737,135 +739,12 @@ ipcMain.handle('save-config', (event, payload) => invokeRegistry.invoke('save-co
 ipcMain.handle('save-saved-configs', (event, data) => invokeRegistry.invoke('save-saved-configs', [data]))
 ipcMain.handle('get-saved-configs', () => invokeRegistry.invoke('get-saved-configs', []))
 
-registerChannel('delete-saved-config', async (event, index) => {
-  try {
-    const savedConfigs = store.get('savedConfigs', [])
-    if (index >= 0 && index < savedConfigs.length) {
-      const deletedConfig = savedConfigs[index]
-      savedConfigs.splice(index, 1)
-      store.set('savedConfigs', savedConfigs)
-      console.log(`✅ 已删除保存配置: ${deletedConfig.path}`)
-      return { success: true, message: '删除成功' }
-    } else {
-      console.error('❌ 无效的保存配置索引:', index)
-      return { success: false, message: '无效的索引' }
-    }
-  } catch (error) {
-    console.error('❌ 删除保存配置失败:', error.message)
-    return { success: false, message: `删除失败: ${error.message}` }
-  }
-})
+registerStoreConfigSnapshotIpc({ registerChannel, store })
 
-registerChannel('get-current-config', async (event, data) => {
-  try {
-    const configKey = data && data.path ? data.path : 'default'
-    const currentConfig = store.get(`current-config-${configKey}`, null)
-    console.log(`📖 获取当前配置${configKey}:`, currentConfig ? '已存在' : 'null')
-    return { success: true, config: currentConfig }
-  } catch (error) {
-    console.error(`❌ 获取当前配置失败:`, error.message)
-    return { success: false, message: `获取失败: ${error.message}`, config: null }
-  }
-})
-
-registerChannel('set-current-config', async (event, data) => {
-  try {
-    const configKey = data.path || 'default'
-    store.set(`current-config-${configKey}`, data.config)
-    console.log(`💾 保存当前配置${configKey}:`, data.config)
-    return { success: true }
-  } catch (error) {
-    console.error(`❌ 保存当前配置失败:`, error.message)
-    return { success: false, message: `保存失败: ${error.message}` }
-  }
-})
-
-// 文件系统操作处理器
-registerChannel('show-open-dialog', async (event, options) => {
-  try {
-    const { dialog } = require('electron')
-    const result = await dialog.showOpenDialog(mainWindow, options)
-    console.log(`📁 打开对话框:`, result.canceled ? '已取消' : `${result.filePaths.length}个路径`)
-    return result
-  } catch (error) {
-    console.error(`❌ 打开对话框失败:`, error.message)
-    return { canceled: true, filePaths: [] }
-  }
-})
-
-// 读取图片文件并返回 base64
-registerChannel('read-image-as-base64', async (event, filePath) => {
-  try {
-    const fs = require('fs')
-    const path = require('path')
-    
-    // 获取文件扩展名来确定 MIME 类型
-    const ext = path.extname(filePath).toLowerCase()
-    const mimeTypes = {
-      '.jpg': 'image/jpeg',
-      '.jpeg': 'image/jpeg',
-      '.png': 'image/png',
-      '.gif': 'image/gif',
-      '.bmp': 'image/bmp',
-      '.webp': 'image/webp',
-      '.svg': 'image/svg+xml',
-      '.ico': 'image/x-icon'
-    }
-    const mimeType = mimeTypes[ext] || 'image/jpeg'
-    
-    // 读取文件并转换为 base64
-    const imageBuffer = fs.readFileSync(filePath)
-    const base64 = imageBuffer.toString('base64')
-    const dataUrl = `data:${mimeType};base64,${base64}`
-    
-    console.log(`🖼️ 读取图片成功: ${filePath} (${(imageBuffer.length / 1024).toFixed(1)}KB)`)
-    return { success: true, dataUrl }
-  } catch (error) {
-    console.error(`❌ 读取图片失败:`, error.message)
-    return { success: false, error: error.message }
-  }
-})
-
-// 显示保存对话框
-registerChannel('show-save-dialog', async (event, options) => {
-  const { dialog } = require('electron')
-  try {
-    const result = await dialog.showSaveDialog(mainWindow, {
-      title: options.title || '保存文件',
-      defaultPath: options.defaultPath,
-      filters: options.filters || [{ name: '所有文件', extensions: ['*'] }]
-    })
-    return result
-  } catch (error) {
-    console.error('显示保存对话框失败:', error)
-    return { canceled: true, error: error.message }
-  }
-})
-
-// 保存文件
-registerChannel('save-file', async (event, data) => {
-  const fs = require('fs')
-  try {
-    fs.writeFileSync(data.filePath, data.content, 'utf-8')
-    console.log(`💾 文件保存成功: ${data.filePath}`)
-    return { success: true }
-  } catch (error) {
-    console.error('保存文件失败:', error)
-    return { success: false, error: error.message }
-  }
-})
-
-// 读取文件
-registerChannel('read-file', async (event, filePath) => {
-  const fs = require('fs')
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8')
-    console.log(`📖 文件读取成功: ${filePath}`)
-    return content
-  } catch (error) {
-    console.error('读取文件失败:', error)
-    throw error
-  }
+registerFsDialogBasicIpc({
+  registerChannel,
+  dialog,
+  getMainWindow: () => mainWindow
 })
 
 // 检查并处理 Git 锁文件
