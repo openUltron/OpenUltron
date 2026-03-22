@@ -15,6 +15,7 @@
 | **`electron/main-process/ipc/store-config-snapshot.js`** | `savedConfigs` 删除与按路径的 current-config 快照 IPC。 |
 | **`electron/main-process/ipc/fs-dialog-basic.js`** | 打开/保存对话框与基础同步文件读写 IPC。 |
 | **`electron/main-process/ipc/shell-spawn-command.js`** | bash 执行、实时输出、取消子进程与 Git `index.lock` 处理 IPC。 |
+| **`electron/main-process/ipc/external-open.js`** | Cursor、系统终端、访达、`shell.openExternal` 等 IPC。 |
 
 ---
 

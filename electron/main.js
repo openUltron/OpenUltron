@@ -33,6 +33,7 @@ const { registerWindowLogsAndNotificationsIpc } = require('./main-process/ipc/wi
 const { registerStoreConfigSnapshotIpc } = require('./main-process/ipc/store-config-snapshot')
 const { registerFsDialogBasicIpc } = require('./main-process/ipc/fs-dialog-basic')
 const { registerShellSpawnCommandIpc } = require('./main-process/ipc/shell-spawn-command')
+const { registerExternalOpenIpc } = require('./main-process/ipc/external-open')
 const { filterSessionsList, isRunSessionId } = require('./ai/sessions-list-filter')
 const skillPack = require('./ai/skill-pack')
 const { stopAllWebAppServices } = require('./web-apps/process-manager')
@@ -734,151 +735,10 @@ registerFsDialogBasicIpc({
 
 registerShellSpawnCommandIpc({ registerChannel })
 
-registerChannel('open-cursor', async (event, data) => {
-  try {
-    console.log(`🎨 尝试打开Cursor: ${data.path}`)
-    console.log(`🔍 当前工作目录: ${process.cwd()}`)
-    console.log(`🔍 Process PATH: ${process.env.PATH}`)
-    
-    const { spawn } = require('child_process')
-    const { shell } = require('electron')
-    
-    // 尝试使用绝对路径
-    const cursorPaths = [
-      '/usr/local/bin/cursor',
-      '/Applications/Cursor.app/Contents/Resources/app/bin/cursor',
-      'cursor' // 最后尝试相对路径
-    ]
-    
-    for (const cursorPath of cursorPaths) {
-      try {
-        console.log(`🚀 尝试路径: ${cursorPath}`)
-        
-        // 先测试命令是否存在
-        const testChild = spawn(cursorPath, ['--version'], { 
-          stdio: 'pipe'
-        })
-        
-        let versionOutput = ''
-        testChild.stdout.on('data', (data) => {
-          versionOutput += data.toString()
-        })
-        
-        await new Promise((resolve, reject) => {
-          testChild.on('close', (code) => {
-            resolve(code)
-          })
-          testChild.on('error', (err) => {
-            reject(err)
-          })
-        })
-        
-        console.log(`✅ Cursor路径有效 ${cursorPath}, 版本输出: ${versionOutput.trim()}`)
-        
-        // 如果测试成功，正式打开
-        const child = spawn(cursorPath, [data.path], { 
-          detached: true,
-          stdio: 'ignore'
-        })
-        
-        child.unref()
-        console.log(`✅ 成功启动Cursor打开: ${data.path}`)
-        return { success: true }
-        
-      } catch (error) {
-        console.log(`❌ 路径 ${cursorPath} 失败: ${error.message}`)
-        continue
-      }
-    }
-    
-    // 所有路径都失败了，降级到Finder
-    console.log(`❌ 所有Cursor路径都失败，降级到在Finder中显示文件夹`)
-    shell.showItemInFolder(data.path)
-    return { success: true, fallback: true, message: 'cursor命令不可用，已在Finder中打开文件夹' }
-    
-  } catch (error) {
-    console.error(`❌ 打开Cursor完全失败:`, error.message)
-    const { shell } = require('electron')
-    shell.showItemInFolder(data.path)
-    return { success: false, message: `打开失败: ${error.message}` }
-  }
-})
-
-registerChannel('open-terminal', async (event, data) => {
-  try {
-    const projectPath = data.path
-    const terminalApp = data.terminalApp || 'terminal'
-    console.log(`💻 打开终端: ${terminalApp} -> ${projectPath}`)
-    const { spawn } = require('child_process')
-
-    const appNameMap = {
-      terminal: 'Terminal',
-      iterm2: 'iTerm',
-      warp: 'Warp',
-      alacritty: 'Alacritty',
-      kitty: 'kitty',
-      hyper: 'Hyper',
-      tabby: 'Tabby',
-      rio: 'Rio'
-    }
-    const appName = appNameMap[terminalApp] || 'Terminal'
-    spawn('open', ['-a', appName, projectPath], { detached: true, stdio: 'ignore' })
-    return { success: true }
-  } catch (error) {
-    console.error(`❌ 打开终端失败:`, error.message)
-    return { success: false, message: `打开失败: ${error.message}` }
-  }
-})
-
-// 检测已安装的终端应用
-registerChannel('get-available-terminals', async () => {
-  const terminals = [
-    { id: 'terminal', name: 'Terminal', desc: 'macOS 内置终端' }
-  ]
-  const checks = [
-    { id: 'iterm2', name: 'iTerm2', desc: '功能强大的终端', path: '/Applications/iTerm.app' },
-    { id: 'warp', name: 'Warp', desc: 'AI 驱动的现代终端', path: '/Applications/Warp.app' },
-    { id: 'alacritty', name: 'Alacritty', desc: '基于 GPU 加速的终端', path: '/Applications/Alacritty.app' },
-    { id: 'kitty', name: 'Kitty', desc: '基于 GPU 的快速终端', path: '/Applications/kitty.app' },
-    { id: 'hyper', name: 'Hyper', desc: '基于 Electron 的终端', path: '/Applications/Hyper.app' },
-    { id: 'tabby', name: 'Tabby', desc: '可定制的现代终端', path: '/Applications/Tabby.app' },
-    { id: 'rio', name: 'Rio', desc: '基于 Rust 的终端', path: '/Applications/Rio.app' }
-  ]
-  for (const t of checks) {
-    if (fs.existsSync(t.path)) {
-      terminals.push({ id: t.id, name: t.name, desc: t.desc })
-    }
-  }
-  return { success: true, terminals }
-})
-
-registerChannel('open-in-finder', async (event, data) => {
-  try {
-    let filePath = data.path
-    // 支持 local-resource:// URL（如截图）
-    if (filePath && filePath.startsWith('local-resource://')) {
-      const url = new URL(filePath)
-      const relPath = decodeURIComponent((url.host || '') + url.pathname)
-      filePath = path.resolve(getAppRoot(), relPath)
-    }
-    console.log(`📂 在访达中打开: ${filePath}`)
-    await shell.openPath(filePath)
-    return { success: true }
-  } catch (error) {
-    console.error(`❌ 打开访达失败:`, error.message)
-    return { success: false, message: `打开失败: ${error.message}` }
-  }
-})
-
-registerChannel('open-external', async (event, url) => {
-  try {
-    console.log(`🌐 打开外部链接: ${url}`)
-    await shell.openExternal(url)
-    return { success: true }
-  } catch (error) {
-    console.error(`❌ 打开外部链接失败:`, error.message)
-    return { success: false, message: `打开失败: ${error.message}` }
-  }
+registerExternalOpenIpc({
+  registerChannel,
+  shell,
+  getAppRoot
 })
 
 // 全局方法：在新标签页中打开 URL（渲染进程请求）
