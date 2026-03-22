@@ -2958,6 +2958,14 @@ const mcpConfigFile = require('./ai/mcp-config-file')
 const conversationFile = require('./ai/conversation-file')
 const memoryStore = require('./ai/memory-store')
 const commandExecutionLog = require('./ai/command-execution-log')
+const { finalizeAiModelFields } = require('./ai/ai-config-normalize')
+const { createInboundModelCommandHandlers } = require('./main-process/inbound-model-command')
+const { parseInboundModelCommand, applyGlobalDefaultModel } = createInboundModelCommandHandlers({
+  app,
+  store,
+  BrowserWindow,
+  aiConfigFile
+})
 
 function getAIConfigLegacy() {
   const data = aiConfigFile.readAIConfig(app, store)
@@ -5098,32 +5106,6 @@ registerChannel('ai-get-billing', async (event, { type, baseUrl: providerBaseUrl
 // 保存 AI 配置（写入 openultron.json 的 ai 字段）
 registerChannel('ai-save-config', async (event, payload) => {
   try {
-    const normalizePool = (pool, defaultModel) => {
-      const list = Array.isArray(pool) ? pool.map(x => String(x || '').trim()).filter(Boolean) : []
-      const uniq = [...new Set(list)]
-      const dm = String(defaultModel || '').trim()
-      if (dm && !uniq.includes(dm)) uniq.unshift(dm)
-      return uniq
-    }
-    const normalizeBindings = (bindings, providers, pool, fallbackProvider) => {
-      const allow = new Set((providers || []).map(p => String(p?.baseUrl || '').trim()).filter(Boolean))
-      const out = {}
-      const src = bindings && typeof bindings === 'object' ? bindings : {}
-      for (const [k, v] of Object.entries(src)) {
-        const model = String(k || '').trim()
-        const provider = String(v || '').trim()
-        if (!model || !provider) continue
-        if (allow.size > 0 && !allow.has(provider)) continue
-        out[model] = provider
-      }
-      const fb = String(fallbackProvider || '').trim()
-      for (const m of pool || []) {
-        const model = String(m || '').trim()
-        if (!model) continue
-        if (!out[model] && fb) out[model] = fb
-      }
-      return out
-    }
     const data = aiConfigFile.readAIConfig(app, store)
     if (payload.raw !== undefined) {
       const raw = payload.raw
@@ -5151,8 +5133,7 @@ registerChannel('ai-save-config', async (event, payload) => {
         if (config.apiKey !== undefined) provider.apiKey = config.apiKey || ''
       }
     }
-    data.modelPool = normalizePool(data.modelPool, data.defaultModel)
-    data.modelBindings = normalizeBindings(data.modelBindings, data.providers, data.modelPool, data.defaultProvider)
+    finalizeAiModelFields(data)
     aiConfigFile.writeAIConfig(app, data)
     const verify = aiConfigFile.readAIConfig(app, store)
     if (verify.defaultProvider !== data.defaultProvider) {
@@ -5168,69 +5149,6 @@ registerChannel('ai-save-config', async (event, payload) => {
     return { success: false, message: error.message }
   }
 })
-
-/** 飞书/Telegram/钉钉 首行 `/model <id>` 或 `/模型 <id>`，与 App 内 /model 一致，写入全局 defaultModel */
-function parseInboundModelCommand (rawText) {
-  const t = String(rawText || '').trim()
-  if (!t) return null
-  const lines = t.split(/\r?\n/)
-  const first = lines[0].trim()
-  const m = first.match(/^\/(model|模型)\s+(.+)$/i)
-  if (!m) return null
-  const modelId = String(m[2] || '').trim().replace(/^["']|["']$/g, '')
-  if (!modelId) return null
-  const remainderText = lines.slice(1).join('\n').trim()
-  return { modelId, remainderText }
-}
-
-/** 将全局主模型写入 openultron.json（与设置页、ai_config_control 一致） */
-function applyGlobalDefaultModel (modelId) {
-  const mid = String(modelId || '').trim()
-  if (!mid) return { success: false, error: '未指定模型 ID' }
-  try {
-    const normalizePool = (pool, defaultModel) => {
-      const list = Array.isArray(pool) ? pool.map(x => String(x || '').trim()).filter(Boolean) : []
-      const uniq = [...new Set(list)]
-      const dm = String(defaultModel || '').trim()
-      if (dm && !uniq.includes(dm)) uniq.unshift(dm)
-      return uniq
-    }
-    const normalizeBindings = (bindings, providers, pool, fallbackProvider) => {
-      const allow = new Set((providers || []).map(p => String(p?.baseUrl || '').trim()).filter(Boolean))
-      const out = {}
-      const src = bindings && typeof bindings === 'object' ? bindings : {}
-      for (const [k, v] of Object.entries(src)) {
-        const model = String(k || '').trim()
-        const provider = String(v || '').trim()
-        if (!model || !provider) continue
-        if (allow.size > 0 && !allow.has(provider)) continue
-        out[model] = provider
-      }
-      const fb = String(fallbackProvider || '').trim()
-      for (const mm of pool || []) {
-        const model = String(mm || '').trim()
-        if (!model) continue
-        if (!out[model] && fb) out[model] = fb
-      }
-      return out
-    }
-    const data = aiConfigFile.readAIConfig(app, store)
-    const pool = normalizePool(data.modelPool, data.defaultModel)
-    if (pool.length > 0 && !pool.includes(mid)) {
-      return { success: false, error: `模型 "${mid}" 不在全局模型池中` }
-    }
-    data.defaultModel = mid
-    data.modelPool = normalizePool(data.modelPool, data.defaultModel)
-    data.modelBindings = normalizeBindings(data.modelBindings, data.providers, data.modelPool, data.defaultProvider)
-    aiConfigFile.writeAIConfig(app, data)
-    BrowserWindow.getAllWindows().forEach((win) => {
-      if (win.webContents && !win.webContents.isDestroyed()) win.webContents.send('ai-config-updated')
-    })
-    return { success: true }
-  } catch (e) {
-    return { success: false, error: e.message || String(e) }
-  }
-}
 
 // 获取模型列表
 registerChannel('ai-fetch-models', async (event, options) => {

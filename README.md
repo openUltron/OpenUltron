@@ -103,6 +103,8 @@ npm run release:all
 
 ## 设计文档
 
+- [优化与演进路线图（工程化 / 智能体能力）](./docs/OPTIMIZATION-ROADMAP.md)
+- [主进程 main.js 模块化拆分蓝图](./docs/MAIN-PROCESS-MODULARIZATION.md)
 - [OpenAI：Codex 与 Chat Completions（为何 Codex 能用但本应用报 429）](./docs/OPENAI-CODEX-AND-CHAT-COMPLETIONS.md)
 - [技能包与 ClawHub 兼容说明](./docs/SKILLS-PACK-COMPAT.md)
 - [Web 沙箱应用（可打包/安装/依赖声明）](./docs/WEB-APPS-SANDBOX-DESIGN.md)

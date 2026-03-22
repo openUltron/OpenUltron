@@ -1,5 +1,7 @@
 // AI 配置控制工具：让 AI 可切换模型、修改 API Key、切换供应商（主会话配置；子任务用 sessions_spawn 指定 provider/model）
 
+const { normalizeModelPool, finalizeAiModelFields } = require('../ai-config-normalize')
+
 const definition = {
   description: '修改主会话的 AI 配置：切换供应商、切换模型、或设置某供应商的 API Key。切换前建议先调用 verify_provider_model(provider=..., model=...) 确认该组合可用，再调用本工具，否则错配可能导致主会话无法对话。为子任务指定模型请用 sessions_spawn，勿用本工具改主会话。switch_provider 会同时切换默认模型；switch_model 可同时传 provider 以连带切换供应商。',
   parameters: {
@@ -39,14 +41,7 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
       return { success: false, error: '无法读取当前 AI 配置' }
     }
     const data = { ...legacy.raw }
-    const normalizePool = (pool, defaultModel) => {
-      const list = Array.isArray(pool) ? pool.map(x => String(x || '').trim()).filter(Boolean) : []
-      const uniq = [...new Set(list)]
-      const dm = String(defaultModel || '').trim()
-      if (dm && !uniq.includes(dm)) uniq.unshift(dm)
-      return uniq
-    }
-    data.modelPool = normalizePool(data.modelPool, data.defaultModel)
+    data.modelPool = normalizeModelPool(data.modelPool, data.defaultModel)
     const providers = data.providers.slice()
 
     const resolveProvider = (nameOrUrl) => {
@@ -60,7 +55,7 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
       const p = resolveProvider(provider.trim())
       if (!p) return { success: false, error: `未找到供应商: ${provider}，可选: ${providers.map(x => x.name).join(', ')}` }
       data.defaultProvider = p.baseUrl
-      data.modelPool = normalizePool(data.modelPool, data.defaultModel)
+      finalizeAiModelFields(data)
       writeAIConfig(data)
       return { success: true, message: `已切换到 ${p.name}，主模型保持为: ${data.defaultModel}` }
     }
@@ -68,7 +63,7 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
     if (action === 'switch_model') {
       if (!model || !model.trim()) return { success: false, error: '请指定模型 ID' }
       const modelId = model.trim()
-      const pool = normalizePool(data.modelPool, data.defaultModel)
+      const pool = normalizeModelPool(data.modelPool, data.defaultModel)
       if (pool.length > 0 && !pool.includes(modelId)) {
         return { success: false, error: `模型 "${modelId}" 不在全局模型池中，请先在设置页加入模型池` }
       }
@@ -78,8 +73,8 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
         if (!p) return { success: false, error: `未找到供应商: ${provider}` }
         data.defaultProvider = p.baseUrl
         data.defaultModel = modelId
-        data.modelPool = normalizePool(data.modelPool, data.defaultModel)
         data.providers = providers
+        finalizeAiModelFields(data)
         writeAIConfig(data)
         return { success: true, message: `已切换到 ${p.name}，模型: ${modelId}` }
       }
@@ -92,8 +87,8 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
         }
       }
       data.defaultModel = modelId
-      data.modelPool = normalizePool(data.modelPool, data.defaultModel)
       data.providers = providers
+      finalizeAiModelFields(data)
       writeAIConfig(data)
       return { success: true, message: `已切换当前模型为: ${modelId}` }
     }
@@ -105,6 +100,7 @@ function createAIConfigControlTool(getAIConfig, writeAIConfig, getValidatedModel
       if (!p) return { success: false, error: `未找到供应商: ${provider}` }
       p.apiKey = String(api_key).trim()
       data.providers = providers
+      finalizeAiModelFields(data)
       writeAIConfig(data)
       return { success: true, message: `已为 ${p.name} 设置 API Key` }
     }
