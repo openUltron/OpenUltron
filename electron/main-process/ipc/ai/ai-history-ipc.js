@@ -278,9 +278,10 @@ function registerAiHistoryIpc (deps) {
     }
   })
   
-  const EVOLVE_MIN_INTERVAL_MS = 3 * 60 * 1000
+  /** 会话蒸馏：拉长间隔，避免与主对话、自动记忆提取争抢上游导致超时 */
+  const EVOLVE_MIN_INTERVAL_MS = 15 * 60 * 1000
   const EVOLVE_MIN_DIALOG_MESSAGES = 6
-  const EVOLVE_MIN_NEW_MESSAGES = 4
+  const EVOLVE_MIN_NEW_MESSAGES = 8
   /** 蒸馏时注入已有 LESSONS 的最大字符数（尾部截取，优先保留近期条目） */
   const EVOLVE_EXISTING_LESSONS_MAX_CHARS = 6000
   const evolveSessionState = new Map() // key => { lastTs, lastDialogCount, running }
@@ -416,7 +417,8 @@ function registerAiHistoryIpc (deps) {
         prompt,
         systemPrompt,
         config,
-        model: config.defaultModel || 'deepseek-v3'
+        model: config.defaultModel || 'deepseek-v3',
+        timeoutMs: 90000
       })
       const raw = (result && typeof result === 'string') ? result.trim() : ''
       const jsonStr = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()

@@ -189,6 +189,8 @@ class Orchestrator {
     this.registerScreenshotPath = typeof opts.registerScreenshotPath === 'function' ? opts.registerScreenshotPath : null
     /** 可选：每轮会话注入「技能 id 列表」到 system，与 ~/.openultron/skills 磁盘一致，避免前端未刷新导致模型看不到技能 */
     this.getSkillsForPrompt = typeof opts.getSkillsForPrompt === 'function' ? opts.getSkillsForPrompt : null
+    /** 自动碎片记忆提取：按会话节流，避免每轮对话都打 LLM */
+    this._memoryExtractState = new Map()
   }
 
   getConfig() {
@@ -1020,7 +1022,7 @@ class Orchestrator {
       await ensurePromptCompressed({ maxPasses: 2, notify: false, bypassCooldown: true })
       wrappedSender.send('ai-chat-complete', { sessionId, messages: currentMessages })
       sessionRegistry.markComplete(registryId)
-      this._extractMemoriesAsync(currentMessages, projectPath, config, useModel, isAnthropic)
+      this._extractMemoriesAsync(currentMessages, projectPath, config, useModel, isAnthropic, sessionId)
       this._notifyFeishuOnComplete(currentMessages)
       return { success: true, messages: currentMessages }
     } catch (error) {
@@ -1029,7 +1031,7 @@ class Orchestrator {
         await ensurePromptCompressed({ maxPasses: 2, notify: false, bypassCooldown: true })
         wrappedSender.send('ai-chat-complete', { sessionId, messages: currentMessages })
         sessionRegistry.markComplete(registryId)
-        this._extractMemoriesAsync(currentMessages, projectPath, config, useModel, isAnthropic)
+        this._extractMemoriesAsync(currentMessages, projectPath, config, useModel, isAnthropic, sessionId)
         this._notifyFeishuOnComplete(currentMessages)
         return { success: true, messages: currentMessages }
       } else {
@@ -1145,33 +1147,68 @@ class Orchestrator {
     return null  // 无循环
   }
 
+  _memoryExtractStateKey(projectPath, sessionId) {
+    const pp = String(projectPath || '').trim()
+    const sid = sessionId != null && String(sessionId).trim() ? String(sessionId).trim() : '_'
+    return `${pp}::${sid}`
+  }
+
+  /**
+   * 自动记忆提取节流：与每轮对话解耦，避免并发挤爆上游导致超时。
+   * 首次需足够轮次；之后需间隔 + 新增对话条数双门槛。
+   */
+  _shouldRunAutoMemoryExtract(projectPath, sessionId, dialogCount) {
+    const MIN_INTERVAL_MS = 20 * 60 * 1000
+    const MIN_DIALOG_MESSAGES = 6
+    const MIN_NEW_MESSAGES = 12
+    const key = this._memoryExtractStateKey(projectPath, sessionId)
+    const state = this._memoryExtractState.get(key) || {}
+    if (state.running) return { ok: false, reason: 'already_running' }
+    if (dialogCount < MIN_DIALOG_MESSAGES) return { ok: false, reason: 'too_few_messages' }
+    const lastTs = Number(state.lastTs || 0)
+    const now = Date.now()
+    if (lastTs > 0 && now - lastTs < MIN_INTERVAL_MS) return { ok: false, reason: 'cooldown' }
+    const prevCount = Number(state.lastDialogCount || 0)
+    if (prevCount > 0 && dialogCount - prevCount < MIN_NEW_MESSAGES) {
+      return { ok: false, reason: 'delta_too_small' }
+    }
+    return { ok: true, reason: 'ready', key }
+  }
+
   // 异步提取对话中的记忆（后台运行，不影响用户体验）
-  async _extractMemoriesAsync(messages, projectPath, config, model, isAnthropic) {
+  async _extractMemoriesAsync(messages, projectPath, config, model, isAnthropic, sessionId) {
     // 仅对包含有效对话的消息执行
     const dialogMsgs = messages.filter(m => m.role === 'user' || m.role === 'assistant')
     if (dialogMsgs.length < 2) return
 
-    // 构造记忆提取 prompt
-    const dialogText = dialogMsgs
-      .slice(-20)  // 只分析最近 20 条
-      .map(m => {
-        const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
-        return `[${m.role}]: ${text.slice(0, 1000)}`
-      })
-      .join('\n\n')
+    const gate = this._shouldRunAutoMemoryExtract(projectPath, sessionId, dialogMsgs.length)
+    if (!gate.ok) return
 
-    const extractPrompt = [
-      '分析以下对话，提取值得长期记住的关键信息（用户偏好、项目配置、重要结论、解决方案等）。',
-      '每条记忆不超过100字，最多提取5条，格式为 JSON 数组：',
-      '[{"content": "...", "tags": ["tag1", "tag2"]}]',
-      '如无值得记忆的信息，返回空数组 []。',
-      '只输出 JSON，不要其它说明。',
-      '',
-      '对话内容：',
-      dialogText
-    ].join('\n')
+    const stateKey = gate.key
+    const prev = this._memoryExtractState.get(stateKey) || {}
+    this._memoryExtractState.set(stateKey, { ...prev, running: true })
 
     try {
+      // 构造记忆提取 prompt
+      const dialogText = dialogMsgs
+        .slice(-20)  // 只分析最近 20 条
+        .map(m => {
+          const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+          return `[${m.role}]: ${text.slice(0, 1000)}`
+        })
+        .join('\n\n')
+
+      const extractPrompt = [
+        '分析以下对话，提取值得长期记住的关键信息（用户偏好、项目配置、重要结论、解决方案等）。',
+        '每条记忆不超过100字，最多提取5条，格式为 JSON 数组：',
+        '[{"content": "...", "tags": ["tag1", "tag2"]}]',
+        '如无值得记忆的信息，返回空数组 []。',
+        '只输出 JSON，不要其它说明。',
+        '',
+        '对话内容：',
+        dialogText
+      ].join('\n')
+
       const fakeSender = { send: () => {} }
       const callFn = this._pickOpenAiLlmCaller(config, isAnthropic)
       const result = await callFn(
@@ -1214,10 +1251,20 @@ class Orchestrator {
       }
       // 写入当日 Markdown 日记
       if (savedContents.length > 0) appendToDiary(savedContents)
-      console.log(`[AI] 自动提取 ${items.length} 条记忆`)
+      if (savedContents.length > 0) {
+        console.log(`[AI] 自动提取 ${savedContents.length} 条记忆`)
+      }
     } catch (e) {
       // 静默失败，不影响主流程
       console.warn('[AI] 记忆提取失败:', e.message)
+    } finally {
+      const s = this._memoryExtractState.get(stateKey) || {}
+      this._memoryExtractState.set(stateKey, {
+        ...s,
+        running: false,
+        lastTs: Date.now(),
+        lastDialogCount: dialogMsgs.length
+      })
     }
   }
 
@@ -1266,7 +1313,7 @@ class Orchestrator {
     return this._generateTextOnce(opts)
   }
 
-  async _generateTextOnce({ prompt, model: overrideModel, systemPrompt, config: externalConfig } = {}) {
+  async _generateTextOnce({ prompt, model: overrideModel, systemPrompt, config: externalConfig, timeoutMs } = {}) {
     const config = externalConfig || this.getConfig()
     if (!config.apiKey || !String(config.apiKey).trim()) {
       const isOpenRouter = /openrouter\.ai/i.test(config.apiBaseUrl || '')
@@ -1342,13 +1389,14 @@ class Orchestrator {
 
       const isHttps = url.protocol === 'https:'
       const httpModule = isHttps ? https : http
+      const socketTimeout = Number(timeoutMs) > 0 ? Number(timeoutMs) : 30000
       const req = httpModule.request({
         hostname: url.hostname,
         port: url.port || (isHttps ? 443 : 80),
         path: url.pathname + url.search,
         method: 'POST',
         headers,
-        timeout: 30000
+        timeout: socketTimeout
       })
 
       req.on('response', (res) => {
