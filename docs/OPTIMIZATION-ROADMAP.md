@@ -51,7 +51,7 @@
 - 错误分类（已有 `_classifyLlmError`）可 **落盘统计**，便于看「哪家供应商、哪类模型」故障率高。  
 - `main.js` **按域拆分**（渠道、Gateway、配置、MCP），降低单文件认知成本。  
   - 实施指南：**`docs/MAIN-PROCESS-MODULARIZATION.md`**（分阶段迁出 `main-process/ipc/*`，避免循环依赖）。  
-  - **剩余 ~100 条 `registerChannel` 的分阶段清单与里程碑**：**`docs/MAIN-PROCESS-REMAINING-PLAN.md`**。
+  - **剩余约 40+ 条 `registerChannel`（main.js 顶层）的分阶段清单与里程碑**：**`docs/MAIN-PROCESS-REMAINING-PLAN.md`**（阶段 2–5、7 薄 IPC、8 部分已落地；AI 大块与飞书 inbound 仍在 main）。
 
 ---
 

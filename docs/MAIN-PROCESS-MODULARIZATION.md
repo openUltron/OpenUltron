@@ -2,7 +2,7 @@
 
 `electron/main.js` 体量极大（约 1 万行），集中了 **IPC、`registerChannel`、渠道编排、AI 编排、浏览器/扩展、文件与终端** 等逻辑。本文说明 **如何按域拆分**、**依赖方向**、**迁移顺序与风险**，与 `OPTIMIZATION-ROADMAP.md` P2 对齐。
 
-**剩余 channel 与分阶段收尾清单**：见 [`MAIN-PROCESS-REMAINING-PLAN.md`](./MAIN-PROCESS-REMAINING-PLAN.md)（约 ~100 条待迁出时的执行顺序与里程碑）。
+**剩余 channel 与分阶段收尾清单**：见 [`MAIN-PROCESS-REMAINING-PLAN.md`](./MAIN-PROCESS-REMAINING-PLAN.md)（`main.js` 内 **直接** `registerChannel('...')` 已基本迁出；仍以 `rg "registerChannel\\(" electron/main.js` 为准，多为注入到子模块的变量名）。
 
 ---
 
@@ -30,6 +30,18 @@ electron/
     register-channel.js      # 可选：封装 ipcMain.handle + invokeRegistry（与现 registerChannel 一致）
     deps.js                  # 可选：集中导出 app/store/mainWindow 等（慎用，防成上帝对象）
     inbound-model-command.js # 已存在：渠道 /model 解析与全局默认模型
+    skills-runtime.js        # 已存在：~/.openultron/skills 读写、内置技能初始化、chokidar 热刷新与缓存
+    mcp-http-bridge.js       # 已存在：本地 HTTP `/mcp` 桥（open_file / open_diff / refresh）
+    mcp-json-config.js       # 已存在：解析 mcp.json、合并内置 chrome-devtools MCP
+    main-window.js           # 已存在：主窗口、生产 dist 静态服务、应用菜单
+    proxy-and-ai-config-helpers.js # 已存在：系统代理写入 env、contextCompression/toolDefinitions 合并
+    local-resource-protocol.js # 已存在：local-resource:// 双分区注册 + web-apps guest session
+    ai-resolved-config.js    # 已存在：getResolvedAIConfig / getResolvedAIConfigForProvider
+    verify-provider-model.js # 已存在：verifyProviderModel（Anthropic / OpenAI responses / chat/completions）
+    ai-chat-artifacts.js     # 已存在：registerImageBase64ForChat、registerScreenshotFilePathForChat
+    ai-configured-providers.js # 已存在：getConfiguredProvidersWithKey、orderProvidersForModel（模型验证 IPC）
+    external-subagent-cli.js # 已存在：EXTERNAL_SUBAGENT_SPECS、runCliCommand、scanExternalSubAgents、代理 env 变体
+    subagent-dispatch.js     # 已存在：sessions_spawn 派发（internal / 外部 CLI、超时、commandLogs）
     ipc/                     # 按域拆分的「只负责 registerChannel」模块
       window-logs-notifications.js # 已存在：log/logs-*、window-*、refresh、系统通知、get-api-base-url
       store-config-snapshot.js     # 已存在：delete-saved-config、get/set-current-config
@@ -183,3 +195,43 @@ require('./main-process/ipc/ai-config').register({ app, store, registerChannel, 
 | 2026-03-19 | `main-process/ipc/external-open.js` | Cursor / 终端 / 已装终端列表 / 访达 / `openExternal`；注入 `shell`、`getAppRoot` |
 | 2026-03-19 | `main-process/ipc/browser-favorites-passwords.js` | 内置浏览器收藏与密码 IPC；注入 `store`、`dialog`、`getMainWindow`、`safeLog`/`safeError` |
 | 2026-03-19 | `main-process/ipc/browser-extensions.js` | `get-extensions`、`load-extension-*`、`toggle-extension`、`remove-extension`；`loadedExtensions` Map 内聚于模块 |
+| 2026-03-19 | `main-process/register-channel.js` | `createRegisterChannel(ipcMain, invokeRegistry)`，与原先 `registerChannel` 行为一致 |
+| 2026-03-19 | `main-process/ipc/coze-ipc.js`、`electron/coze/commit-message.js` | 扣子配置、commit message、check-auth、logout |
+| 2026-03-19 | `main-process/ipc/workspace-ipc.js` | `workspace-*` |
+| 2026-03-19 | `main-process/ipc/web-apps-settings-ipc.js` | Web 应用 AI 设置、`web-apps-update-name` |
+| 2026-03-19 | `main-process/ipc/agent-md-ipc.js` | Agent / SOUL / USER / BOOT / IDENTITY 等 MD 路径与打开 |
+| 2026-03-19 | `main-process/ipc/cron-ipc.js` | `cron-*` |
+| 2026-03-19 | `main-process/ipc/skills-ipc.js` | `ai-get/save/delete-skill` |
+| 2026-03-19 | `main-process/ipc/mcp-admin-ipc.js` | MCP 配置读写、导入 Claude、状态、重连、禁用、启停单服务 |
+| 2026-03-19 | `main-process/ipc/backup-ipc.js` | 备份 JSON/ZIP、恢复、技能包导入导出 |
+| 2026-03-19 | `main-process/ipc/ai/gateway-session-ipc.js` | `get-gateway-ws-url`、`ai-report/get-current-session` |
+| 2026-03-19 | `main-process/ipc/channels-im-ipc.js` | 飞书/Telegram/钉钉 状态与配置、`doctor-run`、`webhook-trigger`、飞书通知与 OAuth、发消息等薄 IPC |
+| 2026-03-19 | `main-process/ipc/ai/session-constants.js` | `MAIN_CHAT_PROJECT`、各渠道 project 常量、`SESSION_SOURCES` |
+| 2026-03-19 | `main-process/ipc/ai/chat-history-helpers.js` | `createChatHistoryHelpers`：`persistToolArtifactsToRegistry`、`stripToolExecutionFromMessages`、`mergeCompactedConversationMessages`；导出 `stripRawToolCallXml` |
+| 2026-03-19 | `main-process/ipc/ai/ai-history-ipc.js` | `ai-save/load/clear-chat-history`、session summary、conversations、sessions、`ai-evolve-from-session` 等；返回 `triggerAutoEvolveFromSession` 供飞书入站调用 |
+| 2026-03-19 | `main-process/ipc/ai/ai-verify-model-ipc.js` | `ai-verify-model` |
+| 2026-03-19 | `main-process/ipc/ai/ai-config-proxy-ipc.js` | `ai-generate-commit-message`、`ai-get/save-config`、Codex key、proxy、onboarding、备份恢复、用量/账单 |
+| 2026-03-19 | `main-process/ipc/ai/ai-models-ipc.js` | `ai-fetch-models`、`ai-get-models` |
+| 2026-03-19 | `main-process/ipc/ai/ai-tools-attachments-ipc.js` | `ai-get-tools`、`ai-model-supports-vision`、`ai-upload-attachments` |
+| 2026-03-19 | `main-process/ipc/ai/ai-chat-session-ipc.js` | `ai-chat-start/stop`、session 视图/元数据/注入、`ai-editor-open-files-response` |
+| 2026-03-19 | `main-process/ipc/ai/ai-external-subagents-ipc.js` | `ai-list-external-subagents` |
+| 2026-03-19 | `electron/ai/inbound-message-text.js` | `createInboundMessageTextHelpers`：入站回复文本清洗、截图路径/base64 解析、`getAssistantText` / `extractLatestVisibleText` 等（main 注入 path/fs/appRoot/stripRawToolCallXml） |
+| 2026-03-19 | `main-process/ipc/ai/gateway-side-effects.js` | `createGatewaySideEffectHandlers`：`onToolResult`、`onChatCompleteAny`（应用内飞书）、`forwardToMainWindow`、`onRemoteUserMessage`、`onChatComplete`（`eventBus` 由 main 提前创建后注入） |
+| 2026-03-19 | `main-process/channel-run-state.js` | `createChannelRunState`：IM 同会话多 run 的 Map/Set 与 `stopPreviousRunsForChannel` / `waitForPreviousRuns`（注入 `aiOrchestrator`） |
+| 2026-03-19 | `main-process/ipc/channels-session-completed-send.js` | `registerChannelsSessionCompletedSend`：`chat.session.completed` 出站产物登记、`rememberSessionArtifacts`、`chatChannelRegistry.send`、飞书失败兜底 |
+| 2026-03-19 | `main-process/im-tool-call-format.js` | `parseToolCallArgs`、`formatCommandFromToolCall`（主进程直跑重试与飞书流式命令行展示共用） |
+| 2026-03-19 | `main-process/im-channel-message-pipeline.js` | `registerImChannelMessagePipeline`：`chat.message.received` → `processMessageReplace` / `handleChatMessageReceived`（飞书/TG/钉钉协调 Agent 全链路） |
+| 2026-03-19 | `main-process/im-channel-artifacts.js` | `createImChannelArtifactHandlers`：会话产物缓存、`registerArtifactsFromItems`、飞书引用解析与 `registerReferenceArtifactsFromMessages` |
+| 2026-03-19 | `main-process/im-channel-session-page-target.js` | `createSessionPageTargetHelpers`：`findRecentPageTarget` / `findRecentHtmlArtifact`（子 Agent 委派时注入主会话网页上下文） |
+| 2026-03-19 | `main-process/ai-chat-tools-access.js` | `createAiChatToolsAccess`：`getToolsForChat` / `getToolsForChatWithWait` / `getToolsForSubChat` / `getToolsForCoordinatorChat`、`getCoordinatorSystemPrompt`（须在 `createGateway` 之前初始化） |
+| 2026-03-19 | `main-process/im-channel-master-agent-fallbacks.js` | `createImChannelMasterAgentFallbacks`：`rescueReplyByMasterAgent`、`runMainAgentDirectRetry`（及未接线出口的 `refineReplyByMasterAgent`）；依赖 `im-tool-call-format` |
+| 2026-03-19 | `main-process/mcp-start-saved.js` | `createStartSavedMcpServers`：`app.whenReady` 后按 mcp.json 启动 MCP；chrome-devtools 失败提示 |
+| 2026-03-19 | `main-process/heartbeat-runner.js` | `createHeartbeatRunner`：`HEARTBEAT.md` 巡检、`startHeartbeat` / `runHeartbeat`（供 `cronScheduler`） |
+| 2026-03-19 | `main-process/vision-model-support.js` | `createVisionModelSupport`：`modelSupportsVision`（供 `ai-tools-attachments-ipc`） |
+| 2026-03-19 | `main-process/im-channels-bootstrap.js` | `setupImChannels`：适配器注册、`registerImChannelMessagePipeline`、`registerChannelsSessionCompletedSend`、`registerChannelsImIpc`；`channel-run-state` 由 main 在 `aiOrchestrator` 后立即创建并注入（保证 `stop_previous_task` / `wait_for_previous_run` 工具注册可用） |
+| 2026-03-19 | `main-process/main-window-tab-forwarding.js` | `registerMainWindowTabForwarding`：`request-open-url-in-new-tab` IPC + `web-contents-created` 拦截新窗口 → 主窗口新标签 |
+| 2026-03-19 | `main-process/app-ready-bootstrap.js` | `registerAppWhenReady`：`app.whenReady` 内协议、webview session、窗口、MCP HTTP bridge、invoke API、`aiGateway`、MCP 子进程、Heartbeat、cron、飞书、skills 重绑；**须在 main 末尾调用**（闭包依赖已初始化的 `aiGateway` 等） |
+| 2026-03-19 | `main-process/app-quit-activate.js` | `registerAppQuitActivate`：`app.isQuiting`、`before-quit`（skills watcher、web-apps、MCP bridge、API、Gateway、UI server、session flush）、`window-all-closed`、`activate` |
+| 2026-03-19 | `main-process/invoke-config-ipc.js` | `registerInvokeConfigForwardingIpc`：`get-config` / `set-config` / `get-all-configs` / `save-config` / `save-saved-configs` / `get-saved-configs` → `invokeRegistry` |
+| 2026-03-19 | `main-process/safe-console.js` | `createSafeConsoleLoggers`：`safeLog` / `safeError`（防 EPIPE） |
+| 2026-03-19 | `main-process/ai-core-stack-bootstrap.js` | `bootstrapAiCoreStack(deps)`：Skills IPC、AI 配置/MCP 管理、Orchestrator、子 Agent 派发、Gateway 与各 AI IPC、工具批量注册、Heartbeat 运行器；`skillPack` / `filterSessionsList` / `FEISHU_PROJECT` 内聚于模块；扩展 executor/hardware 在模块加载时注册 |
