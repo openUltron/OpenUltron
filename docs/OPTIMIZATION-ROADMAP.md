@@ -2,7 +2,7 @@
 
 本文档把「深度分析」收敛为**可执行优先级**，与 `WEB-APPS-SANDBOX-DESIGN.md`、`docs/plans/agent-capability-routing.md` 等对齐，便于迭代时对照。
 
-**认知层专项**（角色 / 记忆 / 上下文 / 压缩 / 学习 / 验证 / Hook）见 **`docs/plans/agent-cognitive-architecture-plan.md`**（**§九** 落地状态表）。**消息与 EventBus**：**`docs/MESSAGE-CONTRACT.md`**。
+**认知层专项**（角色 / 记忆 / 上下文 / 压缩 / 学习 / 验证 / Hook）见 **`docs/plans/agent-cognitive-architecture-plan.md`**（当前状态与下一阶段行动项）。**消息与 EventBus**：**`docs/MESSAGE-CONTRACT.md`**。
 
 ---
 
@@ -12,7 +12,7 @@
 |----|------|
 | **模型配置** | `electron/ai/ai-config-normalize.js`：`modelPool` / `modelBindings` 等与 `ai-save-config`、`ai_config_control` 共用 |
 | **渠道 `/model`** | `main-process/inbound-model-command.js` + `main.js` 注入 |
-| **主进程 IPC 拆分** | 大量 `registerChannel` 已迁入 `main-process/ipc/*`；**完整模块表与剩余阶段**见 **`docs/MAIN-PROCESS-REMAINING-PLAN.md`** |
+| **主进程 IPC 拆分** | 大量 `registerChannel` 已迁入 `main-process/ipc/*`；模块化进度与收尾焦点统一维护在 **`docs/MAIN-PROCESS-MODULARIZATION.md`** |
 | **编排与任务取消** | `AbortSignal` 贯穿 `execute_command` → Shell 进程组；MCP `callTool` 在 stdio/HTTP 侧可中断等待；`classifyStopPreviousIntent` 关键词短路；同 session 叠 `runId` 可观测日志；工具 context 优先使用当前 `chatRunId` |
 | **拆分蓝图** | **`docs/MAIN-PROCESS-MODULARIZATION.md`**（原则、目录、风险） |
 
@@ -34,7 +34,7 @@
 
 ## P1 — Web 沙箱规模化
 
-见 `WEB-APPS-SANDBOX-DESIGN.md` §19 与实现清单；重点：
+见 `WEB-APPS-SANDBOX-DESIGN.md` 的实现状态与后续章节；重点：
 
 - `webapp__*` 工具数量 **硬上限** 或与现有 `slimMode` 联动。  
 - 预览与 `file_operation` 写入同一目录时的 **刷新/竞态**（文件监视或显式 reload）。  
@@ -46,7 +46,7 @@
 
 - **`runId`**（`electron/ai/run-id.js`）：`wrappedSender` 对 token / tool / usage / complete / error 统一注入；Gateway WebSocket 转发；`sessions_spawn` / `parentRunId` / `execution-envelope.metrics` 等与上文 P0 对齐。  
 - 错误分类（`_classifyLlmError`）可 **落盘统计**（供应商 / 模型维度）。  
-- **`main.js` 继续瘦身**：Gateway 装配、飞书入站大段、bootstrap — 见 **`docs/MAIN-PROCESS-REMAINING-PLAN.md`** + **`docs/MAIN-PROCESS-MODULARIZATION.md`**。
+- **`main.js` 继续瘦身**：Gateway 装配、飞书入站大段、bootstrap — 见 **`docs/MAIN-PROCESS-MODULARIZATION.md`**。
 
 ---
 

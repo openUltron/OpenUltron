@@ -83,5 +83,5 @@
 
 ## 7. 关联文档
 
-- `docs/plans/agent-cognitive-architecture-plan.md` — 认知层总计划、**§九** 分阶段落地状态  
+- `docs/plans/agent-cognitive-architecture-plan.md` — 认知层当前状态与下一阶段行动项  
 - `docs/plans/README.md` — `plans/` 下其它专项索引  

@@ -2,109 +2,156 @@
 
 [中文](./README.md) | English
 
-OpenUltron is an AI desktop assistant built for real execution, not just chat.
+OpenUltron is an **execution-first AI desktop agent platform**.  
+It turns “chat” into “delivery”: understand tasks, run tools, generate outputs, and send results back to your channels in one local workspace.
 
-Think of it as a local AI workspace that can understand tasks, run tools, produce deliverables, and send results back to your channels.
+> **Request -> Execute -> Deliver**
 
-## Problems It Solves
+## Hero
 
-| Pain point | How OpenUltron helps |
-|------------|----------------------|
-| Chatbots that only talk | Built-in tools + MCP: files, shell, browser, screenshots, Feishu send, etc.—outputs land on disk or channels |
-| Juggling multiple models/providers | **Global model pool** + **per-model provider bindings**; the active model routes to the right `baseUrl` / key; in-app **`/model`** updates the same global **default model** as Settings |
-| Copy-pasting between desktop and IM | Feishu / Telegram / DingTalk integration; first-line **`/model`** + model id in Feishu (model must be in pool) switches the **global** default, same as the app |
-| Spinning up a tiny page/tool without a full repo | **Web sandbox apps**: sidebar **Apps** → install/create; **Studio** = preview + AI edits; CSP, network allowlist, optional `npm install`—see design docs |
-| Losing context or config after reinstall | Local conversations, memory, `~/.openultron/` data; backup ZIP export/import |
+### AI That Actually Gets Work Done
 
-## Why OpenUltron
+- Not just answers: runs commands, edits files, calls tools, produces artifacts
+- Not just one-off chat: persistent sessions, memory, logs, and recovery
+- Not just one model: multi-model, multi-provider, governed orchestration
 
-- Execution-first, not a plain chatbot  
-- One flow: **request → execute → deliver → push to channels**  
-- Local-first with configurable models/proxy for daily and sensitive work  
+### Positioning
 
-## What You Can Do
+OpenUltron is designed for high-frequency execution workflows: development, operations, automation, and channel collaboration.
 
-- Generate webpages, docs, scripts, and reports; write files to disk via tools  
-- Handle screenshots, files, and links as task artifacts  
-- Send results to Feishu / Telegram / DingTalk; Feishu **user space docs** (User Access Token, auto-refresh)  
-- Extend with **Skills** and **MCP**  
-- **Global model selection**: **`/model`** in chat persists to config (same as Settings); AI can also use **`ai_config_control`** (e.g. `switch_model`)  
-- **Web sandbox apps**: **`/web-apps`** (library), **`/web-app-studio`** (preview + chat); see `docs/WEB-APPS-SANDBOX-DESIGN.md` and `docs/WEB-APPS-IPC-REFERENCE.md`  
-- Multi-session history and progress  
+## Feature Highlights
 
-## Key Features
+### Execution Engine
 
-- **Multi-model & multi-provider**: providers, model pool, bindings; OpenAI-compatible APIs; see `docs/OPENAI-CODEX-AND-CHAT-COMPLETIONS.md` for Codex vs chat/completions  
-- **Sub-agents**: `sessions_spawn` for delegated work  
-- **Tools**: built-in + MCP; optional **`webapp__*`** tools in Web App Studio (see checklist)  
-- **Memory & persistence**: conversation and project memory on disk  
-- **Gateway**: local WebSocket entry for scripts/automation (default port in docs)  
-- **Cron**: scheduled jobs (Feishu token refresh optional)  
-- **Backup & restore**: ZIP backup of `~/.openultron/`  
+- Built-in tools: `execute_command`, `file_operation`, `apply_patch`, web tools, and more
+- MCP extensibility for custom integrations
+- Sub-task delegation with `sessions_spawn`
 
-## Typical Use Cases
+### Model Orchestration
 
-- **Ops**: copy, summaries, channel delivery  
-- **Dev**: prototypes, code tasks, packaged outputs; **Web Studio** for sandbox mini-apps  
-- **Teams**: sync AI output to chat/docs  
-- **Personal**: cron + tools for repetitive work  
+- Multi-provider configuration (OpenAI-compatible)
+- Model pool + model bindings + fallback routes
+- Session/global unavailable-model cache to avoid repeated failed attempts
+
+### Workspace & Delivery
+
+- Web sandbox studio: `/web-app-studio` (preview + AI editing)
+- Channel integrations: Feishu / Telegram / DingTalk
+- Scheduled automation with cron tasks
+
+### Reliability & Governance
+
+- Local-first data in `~/.openultron/`
+- Sandbox and path constraints (especially for web apps)
+- Observability via runId, traces, logs, and error classification
+
+## Capability Matrix
+
+| Capability | OpenUltron |
+|---|---|
+| Task understanding | Conversational context + memory |
+| Task execution | Shell / file / tools / MCP |
+| Orchestration | Session state machine + retries + fallback |
+| Delivery | Local artifacts + channel sync |
+| Governance | Sandbox boundaries + logging |
+| Automation | Sub-agents + Gateway + cron |
+
+## Typical Scenarios
+
+- **Development**: rapid prototypes, code fixes, artifact outputs
+- **Operations**: content generation, reports, channel delivery
+- **Team collaboration**: execute locally, sync outcomes to chat/docs
+- **Personal automation**: recurring tasks powered by tools + schedule
+
+## Architecture (Simplified)
+
+```text
+App UI (Electron + Vue)
+  -> IPC Layer
+  -> Orchestrator (prompt/context/state/retry/fallback)
+  -> Tool Runtime (built-in tools + MCP tools)
+  -> Local Services (web-app sandbox / gateway / logs / storage)
+```
 
 ## Quick Start
+
+### Requirements
+
+- Node.js 18+ (LTS recommended)
+- npm 9+
+- macOS / Windows / Linux
+
+### Launch
 
 ```bash
 npm install
 npm run electron:dev
 ```
 
-After launch, configure your model and notification channels in-app, then start dispatching tasks.
-
-## Common Commands
+or
 
 ```bash
-# Frontend dev
+make install
+make run
+```
+
+### First-Time Setup
+
+1. Configure provider key/base URL in Settings  
+2. Select your default model (or use `/model` in chat)  
+3. Connect channels as needed (Feishu / Telegram / DingTalk)  
+4. Start tasks and verify outputs via execution logs and artifacts
+
+## Commands
+
+```bash
+# dev
 npm run dev
-
-# Build frontend
-npm run build
-
-# Start Electron
-npm run electron
-
-# Integrated dev mode (recommended)
 npm run electron:dev
 
-# Build desktop apps
+# build
+npm run build
 npm run electron:build
 npm run electron:build:mac
 npm run electron:build:win
 npm run electron:build:linux
 
-# Release scripts
+# release
 npm run release
 npm run release:x64
 npm run release:all
 ```
 
-## Data & Paths
+## Data Layout
 
-- App data: `~/.openultron/` (includes `openultron.json` AI config: **default model, pool, providers, bindings**)
-- Conversations: `conversations/`
-- Local skills: `skills/`
-- Web sandbox apps: `web-apps/` (per app id / version)
-- Logs: `logs/app.log`
+Default directory: `~/.openultron/`
 
-## Stack (Brief)
-
-- Electron + Vue 3 + Vite
-- Node.js main-process capabilities
-- MCP-based tool extensibility
+- `openultron.json`: model/provider configuration
+- `conversations/`: session history
+- `skills/`: local skills
+- `web-apps/`: sandbox apps (`id/version`)
+- `logs/app.log`: runtime logs
 
 ## Documentation
 
-See **[docs/README.md](./docs/README.md)** for the full index (agent architecture, message contract, main-process split, gateway, web sandbox, skills, plans).  
-Quick links: [Optimization roadmap](./docs/OPTIMIZATION-ROADMAP.md), [Cognitive architecture plan](./docs/plans/agent-cognitive-architecture-plan.md), [Message contract](./docs/MESSAGE-CONTRACT.md), [Gateway WebSocket](./docs/GATEWAY-WEBSOCKET.md), [Web sandbox design](./docs/WEB-APPS-SANDBOX-DESIGN.md), [Skills / ClawHub](./docs/SKILLS-PACK-COMPAT.md).  
-Sidebar **Apps**: library **`/web-apps`**, fullscreen preview **`/app-open`**, studio **`/web-app-studio`** (preview + AI chat).
+See **[docs/README.md](./docs/README.md)** for the full docs hub.
+
+Quick links:
+
+- [Optimization Roadmap](./docs/OPTIMIZATION-ROADMAP.md)
+- [Cognitive Plan](./docs/plans/agent-cognitive-architecture-plan.md)
+- [Capability Routing Plan](./docs/plans/agent-capability-routing.md)
+- [Message Contract](./docs/MESSAGE-CONTRACT.md)
+- [Gateway WebSocket](./docs/GATEWAY-WEBSOCKET.md)
+- [Web Sandbox Design](./docs/WEB-APPS-SANDBOX-DESIGN.md)
+- [Skills / ClawHub Compatibility](./docs/SKILLS-PACK-COMPAT.md)
+
+Sidebar **Apps**:
+
+- Library: `/web-apps`
+- Fullscreen preview: `/app-open`
+- Studio: `/web-app-studio`
 
 ---
 
-If you want AI that delivers outcomes instead of just responses, OpenUltron is built for that.
+If you need AI that executes and delivers, not just responds, OpenUltron is built for that.

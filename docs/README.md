@@ -1,58 +1,70 @@
-# 文档索引
+# Docs Hub
 
-根目录 [README.md](../README.md) 负责产品介绍与快速开始；**技术设计与路线图**集中在本目录，按主题选读即可。
+根目录 [`README.md`](../README.md) 负责产品介绍与快速开始；本目录聚焦**架构、协议、设计与实施计划**。
+
+## 阅读路径
+
+### 新同学 / 首次接触
+
+1. [`MESSAGE-CONTRACT.md`](./MESSAGE-CONTRACT.md)  
+2. [`OPTIMIZATION-ROADMAP.md`](./OPTIMIZATION-ROADMAP.md)  
+3. [`MAIN-PROCESS-MODULARIZATION.md`](./MAIN-PROCESS-MODULARIZATION.md)  
+4. [`WEB-APPS-SANDBOX-DESIGN.md`](./WEB-APPS-SANDBOX-DESIGN.md)
+
+### 做功能开发
+
+1. 先看领域设计文档（如 Web Apps / Gateway / Skills）  
+2. 再看对应计划文档（`docs/plans/`）  
+3. 最后回写路线图与状态（`OPTIMIZATION-ROADMAP.md`）
+
+### 做重构与拆分
+
+1. [`MAIN-PROCESS-MODULARIZATION.md`](./MAIN-PROCESS-MODULARIZATION.md)  
+2. [`OPTIMIZATION-ROADMAP.md`](./OPTIMIZATION-ROADMAP.md)
 
 ---
 
-## 智能体、编排与消息
+## 文档分层
 
-| 文档 | 说明 |
+### A. 稳定规范（优先信任）
+
+| 文档 | 用途 |
 |------|------|
-| [plans/agent-cognitive-architecture-plan.md](./plans/agent-cognitive-architecture-plan.md) | 认知层总览：角色/记忆/上下文/压缩/学习/验证；**§九** 为分阶段落地状态表 |
-| [MESSAGE-CONTRACT.md](./MESSAGE-CONTRACT.md) | 对话消息与 `meta`、工具结果与 envelope、EventBus 约定 |
-| [plans/agent-capability-routing.md](./plans/agent-capability-routing.md) | 能力路由、执行信封、渠道投递（目标与落地状态） |
-| [OPTIMIZATION-ROADMAP.md](./OPTIMIZATION-ROADMAP.md) | 工程与产品向 P0–P3 优先级；与上列文档交叉引用 |
+| [`MESSAGE-CONTRACT.md`](./MESSAGE-CONTRACT.md) | 消息契约、`meta`、工具结果 envelope、EventBus 约定 |
+| [`MAIN-PROCESS-MODULARIZATION.md`](./MAIN-PROCESS-MODULARIZATION.md) | 主进程拆分原则、目录规范与风险控制 |
+| [`GATEWAY-WEBSOCKET.md`](./GATEWAY-WEBSOCKET.md) | Gateway 事件与字段语义 |
+| [`WEB-APPS-IPC-REFERENCE.md`](./WEB-APPS-IPC-REFERENCE.md) | Web 沙箱 IPC / HTTP 接口定义 |
 
----
+### B. 设计与实现（可能持续迭代）
 
-## 主进程与 IPC
-
-| 文档 | 说明 |
+| 文档 | 用途 |
 |------|------|
-| [MAIN-PROCESS-MODULARIZATION.md](./MAIN-PROCESS-MODULARIZATION.md) | 拆分原则、目录约定、按域分组、风险与检查清单 |
-| [MAIN-PROCESS-REMAINING-PLAN.md](./MAIN-PROCESS-REMAINING-PLAN.md) | **已迁模块表**与**剩余阶段**（Gateway 装配、飞书入站大段、bootstrap 等） |
+| [`WEB-APPS-SANDBOX-DESIGN.md`](./WEB-APPS-SANDBOX-DESIGN.md) | Web 沙箱整体设计与安全模型 |
+| [`SKILLS-PACK-COMPAT.md`](./SKILLS-PACK-COMPAT.md) | Skills / ClawHub 兼容与打包约束 |
+| [`OPENAI-CODEX-AND-CHAT-COMPLETIONS.md`](./OPENAI-CODEX-AND-CHAT-COMPLETIONS.md) | Codex/Responses 与 Chat Completions 线路差异 |
+| [`WEB-APPS-INSTALL-ERRORS.md`](./WEB-APPS-INSTALL-ERRORS.md) | Web 应用安装错误码说明 |
+| [`manifest-web-app-mvp.schema.json`](./manifest-web-app-mvp.schema.json) | Web App MVP manifest schema |
 
----
+### C. 计划与路线图（以时间推进）
 
-## 远程接入与模型线路
-
-| 文档 | 说明 |
+| 文档 | 用途 |
 |------|------|
-| [GATEWAY-WEBSOCKET.md](./GATEWAY-WEBSOCKET.md) | 本地 Gateway WebSocket：`runId`、事件字段 |
-| [OPENAI-CODEX-AND-CHAT-COMPLETIONS.md](./OPENAI-CODEX-AND-CHAT-COMPLETIONS.md) | Codex / Responses 与 Chat Completions 差异 |
+| [`OPTIMIZATION-ROADMAP.md`](./OPTIMIZATION-ROADMAP.md) | P0-P3 优先级与跨域演进 |
+| [`plans/README.md`](./plans/README.md) | 专项计划目录索引（认知、能力路由） |
 
 ---
 
-## Web 沙箱应用
+## 专项计划（`docs/plans/`）
 
-| 文档 | 说明 |
-|------|------|
-| [WEB-APPS-SANDBOX-DESIGN.md](./WEB-APPS-SANDBOX-DESIGN.md) | 安全模型、manifest、依赖与整体设计 |
-| [WEB-APPS-IPC-REFERENCE.md](./WEB-APPS-IPC-REFERENCE.md) | IPC / HTTP 接口 |
-| [WEB-APPS-INSTALL-ERRORS.md](./WEB-APPS-INSTALL-ERRORS.md) | 安装错误码 |
-| [WEB-APPS-IMPLEMENTATION-CHECKLIST.md](./WEB-APPS-IMPLEMENTATION-CHECKLIST.md) | MVP 各 Phase 勾选与实现备注（与上设计文档对齐） |
-| [manifest-web-app-mvp.schema.json](./manifest-web-app-mvp.schema.json) | MVP `manifest` JSON Schema |
+见 [`plans/README.md`](./plans/README.md)。
+
+建议把 `plans/` 下文档视为“工作文档”：  
+设计稳定后，核心结论应回流到上面的“稳定规范 / 设计文档”中，避免仅存在于计划稿。
 
 ---
 
-## 技能与 MCP 扩展
+## 维护约定
 
-| 文档 | 说明 |
-|------|------|
-| [SKILLS-PACK-COMPAT.md](./SKILLS-PACK-COMPAT.md) | 技能目录、`SKILL.md`、ClawHub ZIP、相关配置项 |
-
----
-
-## 专项计划（`plans/`）
-
-详见 [plans/README.md](./plans/README.md)（飞书验收、附件摄入等）。
+- 新增文档前，先判断放在“稳定规范 / 设计实现 / 计划路线图”哪一层。
+- API、消息、字段变更时，必须同步更新对应规范文档与引用链接。
+- 计划完成后，优先更新状态并把最终结论回写到稳定文档，避免长期漂移。

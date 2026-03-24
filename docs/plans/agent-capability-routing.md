@@ -1,43 +1,87 @@
-# 智能体能力路由与统一交付
+# 能力路由与统一交付计划（精简版）
 
-## 背景与目标
+本文档聚焦“当前路由现状 + 下一阶段动作”，不再记录历史迁移过程。
 
-主 Agent、子 Agent、渠道投递曾混在同一链路里，容易出现：**回复称已完成但文件未送达**、外部子 Agent 结果未稳定进入主会话、飞书特化逻辑渗透到通用流程。
+关联文档：
 
-**目标**：主 Agent 只做编排（派发、状态、对用户结论）；执行细节在子 Agent；**统一执行结果契约**；渠道通过适配器消费同一套交付语义。
+- `docs/OPTIMIZATION-ROADMAP.md`（跨域优先级）
+- `docs/MESSAGE-CONTRACT.md`（消息与 envelope 契约）
+- `docs/plans/agent-cognitive-architecture-plan.md`（认知层主线）
 
-**非目标**：一次性重写所有工具；替换现有会话存储格式；引入多租户分布式后端。
+---
 
-## 架构要点
+## 1. 当前状态（结论）
 
-1. **Capability Router**（`electron/ai/capability-router.js`）  
-   从用户文本解析：`capability`（如 docs / sheets / bitable / browser / artifact）、`executionMode`（默认 internal，显式指令才 `external:codex` 等）、`deliveryPolicy`、`riskLevel`。当前为**启发式**，复杂意图仍依赖模型与系统提示。含「多维表格」的语句优先判为 **bitable**，避免被「表格」关键词误判为 sheets。
+### 已具备
 
-2. **Execution Envelope**（`electron/ai/execution-envelope.js`）  
-   统一字段：`success`、`summary`、`artifacts[]`、`logs[]`、`tool_events[]`、`error { code, message, retriable }`、`metrics`。`sessions-spawn` 等路径应始终产出可被主流程消费的 envelope。
+- 能力路由基础：`electron/ai/capability-router.js`
+- 统一执行结构基础：`electron/ai/execution-envelope.js`
+- 子任务回传：`sessions_spawn` 可回传 envelope
+- 关键链路可观测：`runId`、工具结果、部分结构化日志
 
-3. **产物与投递（设计中台）**  
-   长期方向：**Artifact Hub**（artifact_id、run_id、渠道引用）与 **Channel Delivery**（`sendText` / `sendImage` / `sendFile` 等）只处理规范化 `DeliveryPayload`，避免从纯文本里猜路径。
+### 仍存在的问题
 
-4. **Run 状态机（目标）**  
-   状态如 `queued` → `running` → `tool_running` → `completed` / `failed`；**完成事件只发一次**；重试由 `error.code` 与 `retriable` 约束。
+- 主会话 / 子任务 / 渠道投递在边界场景下仍可能出现语义不一致
+- 产物与文本回复偶发“看似完成但交付不完整”
+- 一些路由判断仍依赖启发式规则，复杂意图稳定性有提升空间
 
-## 飞书文档能力（P0 场景）
+---
 
-支持创建、读取、追加/改写（当前多为 copy_based 副本策略）、润色、导出发送等；**破坏性全文改写**需确认；定位歧义时让用户消歧。详细手测步骤见 [feishu-capability-checklist.md](./feishu-capability-checklist.md)。
+## 2. 目标边界
 
-## 落地状态（简表）
+### 目标
 
-| 项 | 状态 |
-|----|------|
-| `execution-envelope.js` + `sessions-spawn` 挂 envelope | 已具备基础 |
-| `capability-router.js` + `main.js` 注入 | 已有 |
-| 全链路强制规范化（IM 完成路径、Feishu 投递与 envelope 对齐） | 进行中，见 [OPTIMIZATION-ROADMAP.md](../OPTIMIZATION-ROADMAP.md) P0 |
-| Artifact Hub 单一真相源 | 部分实现，持续收敛 |
-| 结构化观测日志（RouteDecision / DeliveryAttempt / RunState） | 部分：主会话 `runId` → 工具 IPC、`SubAgentDispatch` 的 `parentRunId`、`envelope.metrics.parent_run_id` |
+- 让“能力判断 -> 执行 -> 交付 -> 回传”在各入口语义一致
+- 让成功/失败/可重试状态对用户和日志都可解释
+- 让产物交付不依赖文本猜测，尽量走结构化字段
 
-## 验收方向（摘录）
+### 非目标
 
-- 「打包发我」要么发出 zip，要么**确定性失败**（可区分是否可重试）。
-- 主会话**可见状态**与终端 run 结果一致；外部子 Agent 失败进入 envelope 并展示给用户。
-- 能力路由器本身不承载渠道业务逻辑（渠道差异在 adapter）。
+- 一次性重写全部工具
+- 引入复杂分布式编排体系
+- 在无实际收益前提下增加过多抽象层
+
+---
+
+## 3. 下一阶段动作
+
+### P0（优先）
+
+1. **Envelope 强制化**
+   - 目标：关键执行路径统一产出 envelope
+   - 验收：主会话与子任务都能稳定读取 `success / error.code / artifacts`
+
+2. **渠道回传语义对齐**
+   - 目标：IM 回传和主会话展示语义一致
+   - 验收：失败场景不再出现“回复成功但交付缺失”
+
+3. **边界错误分类统一**
+   - 目标：把“可重试/不可重试/需用户确认”判定规则统一
+   - 验收：日志与用户提示一致，重试策略可预测
+
+### P1（增强）
+
+1. **路由判定稳定性提升**
+   - 验收：复杂意图（文档/表格/多维表等）误判率降低
+
+2. **交付路径可观测增强**
+   - 验收：RouteDecision / DeliveryAttempt / FinalState 可快速串联排查
+
+3. **产物交付结构化优先**
+   - 验收：更多场景由结构化 artifacts 驱动，而非文本推断
+
+---
+
+## 4. 验收口径（最小集）
+
+- “打包发我”类需求：要么真实发送产物，要么返回确定性失败
+- 子任务失败：必须进入 envelope 并可被主会话解释
+- 渠道差异：适配器处理渠道差异，不污染通用路由逻辑
+
+---
+
+## 5. 维护规则
+
+- 本文档只保留“当前状态 + 下一步动作”。
+- 细节规则落地后，优先回写 `MESSAGE-CONTRACT.md` 与相关规范文档。
+- 每次迭代只更新结论和行动项，不追加历史流水账。

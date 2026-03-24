@@ -328,7 +328,7 @@ web-apps/<appId>/
 ## 14. 文档维护
 
 - 本文档随 **manifest schema** 与 **安装协议** 变更而更新；破坏性变更递增 `host.protocol` 或 `schemaVersion`，并在文首 **变更摘要** 中记录。
-- **实现清单**：`WEB-APPS-IMPLEMENTATION-CHECKLIST.md`。
+- **实现状态**：以本文档与代码现状为准，不再维护独立 checklist 文档。
 - **IPC/HTTP 通道**：`WEB-APPS-IPC-REFERENCE.md`。
 - **MVP manifest Schema（草案）**：`manifest-web-app-mvp.schema.json`。
 
@@ -524,7 +524,7 @@ web-apps/<appId>/
 
 ### 20.8 实现进度（仓库内）
 
-- 工程勾选清单与 Phase 划分见 **`WEB-APPS-IMPLEMENTATION-CHECKLIST.md`**（与本文同步维护，不替代产品口径）。
+- 工程阶段与实现状态统一维护在本文档中，避免多份清单漂移。
 - **应用库**：路由 **`/web-apps`**，侧栏 **「应用」** 直达（不再放在 Skills 内）。
 - **打开**（仅预览）：**`/app-open`**（`appId`、`version`），全屏 **webview** 渲染，无 AI 侧栏；工具栏可进 **工作室** 或回应用库。
 - **工作室**：**`/web-app-studio`**（`appId`、`version`），左侧 **webview**、右侧 **ChatPanel**；**新建应用** 创建空白项目后默认进入此页。会话会注入 **当前应用 id / 名称 / 根路径 / 入口 HTML / 预览 URL**；**`file_operation(write)` / `apply_patch`** 成功写入该目录后 **自动防抖刷新** 左侧预览（亦可手动「刷新预览」）。

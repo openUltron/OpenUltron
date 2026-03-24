@@ -1,12 +1,26 @@
-# 专项计划（`docs/plans/`）
+# 专项计划索引（`docs/plans/`）
 
-与 [文档总索引](../README.md) 中的「智能体」「主进程」类文档配合使用。
+与 [`../README.md`](../README.md) 配合使用。  
+本目录主要存放“进行中或分阶段推进”的设计与实施计划。
 
-| 文件 | 说明 |
-|------|------|
-| [agent-cognitive-architecture-plan.md](./agent-cognitive-architecture-plan.md) | 认知层架构、冗余收敛、C0–C3 与 **§九** 落地状态 |
-| [agent-capability-routing.md](./agent-capability-routing.md) | 能力路由、执行信封、产物投递 |
-| [attachment-ingest.md](./attachment-ingest.md) | 主会话与飞书附件统一摄入 |
-| [feishu-capability-checklist.md](./feishu-capability-checklist.md) | 飞书文档/表格/多维表与路由的手动验收清单 |
+## 文档清单
 
-**说明**：原 `agent-self-evolution-roadmap.md`（记忆与进化 A–E 执行清单）条目已全部完成，为避免与认知计划重复维护，已删除；执行记录以 git 历史为准，架构与后续优先级以 `agent-cognitive-architecture-plan.md` 为准。
+| 文件 | 状态 | 说明 |
+|------|------|------|
+| [`agent-cognitive-architecture-plan.md`](./agent-cognitive-architecture-plan.md) | 进行中 | 认知层架构、C0-C3 路线、落地状态总表 |
+| [`agent-capability-routing.md`](./agent-capability-routing.md) | 进行中 | 能力路由、执行信封、产物投递语义 |
+
+## 使用建议
+
+- 需求评审：先看 `agent-cognitive-architecture-plan.md`
+- 执行与交付语义：看 `agent-capability-routing.md`
+- 附件链路问题：以 `electron/ai/attachment-ingest.js` 实现与相关 IPC 接线为准
+- 飞书联调回归：以 `feishu_doc_capability` 当前实现与执行日志为准
+
+## 维护规则
+
+- 计划有重大阶段变更时，优先更新本目录文档状态字段。
+- 计划落地后，把“最终规则”回写到上层稳定文档（如消息契约、路线图、设计文档）。
+- 若某计划文档长期不再维护，应在本文件标记“冻结/归档”，避免误用。
+
+**历史说明**：过期执行清单已归档删除；执行记录以 git 历史与现有实现为准，后续以 `agent-cognitive-architecture-plan.md` 为主线维护。
