@@ -51,6 +51,7 @@ const previewUrl = ref('')
 const loadError = ref('')
 const previewKey = ref(0)
 const previewWebview = ref(null)
+const serviceBooting = ref(false)
 
 const previewSrc = computed(() => {
   const u = previewUrl.value
@@ -109,7 +110,7 @@ async function loadApp() {
     return
   }
   try {
-    const r = await api.getWebApp({ id, version })
+    const r = await api.getWebApp({ id, version, ensureService: false })
     if (!r?.success) {
       loadError.value = r?.error || '无法加载应用'
       return
@@ -118,8 +119,28 @@ async function loadApp() {
     appId.value = id
     appVersion.value = version
     appName.value = r.manifest?.name || id
+    if (r?.service?.running !== true) {
+      void warmupService(id, version)
+    }
   } catch (e) {
     loadError.value = e?.message || String(e)
+  }
+}
+
+async function warmupService(id, version) {
+  if (serviceBooting.value) return
+  if (!api?.startWebAppService) return
+  serviceBooting.value = true
+  try {
+    const r = await api.startWebAppService({ id, version })
+    if (r?.success && r?.url) {
+      previewUrl.value = r.url
+      bumpPreview()
+    }
+  } catch (_) {
+    // 静默失败：保持 local-resource 预览，避免首屏阻塞
+  } finally {
+    serviceBooting.value = false
   }
 }
 

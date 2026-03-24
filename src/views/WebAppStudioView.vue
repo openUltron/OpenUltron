@@ -81,6 +81,7 @@ const previewKey = ref(0)
 const previewWebview = ref(null)
 const serviceRunning = ref(false)
 const serviceMode = ref('')
+const serviceBooting = ref(false)
 let previewRefreshTimer = null
 
 const studioSessionLabel = computed(() =>
@@ -165,7 +166,6 @@ function bumpPreview() {
 }
 
 async function refreshPreview() {
-  await loadApp()
   bumpPreview()
 }
 
@@ -241,7 +241,7 @@ async function loadApp() {
     return
   }
   try {
-    const r = await api.getWebApp({ id, version })
+    const r = await api.getWebApp({ id, version, ensureService: false })
     if (!r?.success) {
       loadError.value = r?.error || '无法加载应用'
       return
@@ -256,8 +256,30 @@ async function loadApp() {
     const ent = r.manifest?.entry && typeof r.manifest.entry === 'object' ? r.manifest.entry.html : ''
     entryHtml.value = String(ent || 'index.html').trim() || 'index.html'
     saveLastWebAppStudio({ appId: id, version })
+    if (r?.service?.running !== true) {
+      void warmupService(id, version)
+    }
   } catch (e) {
     loadError.value = e?.message || String(e)
+  }
+}
+
+async function warmupService(id, version) {
+  if (serviceBooting.value) return
+  if (!api?.startWebAppService) return
+  serviceBooting.value = true
+  try {
+    const r = await api.startWebAppService({ id, version })
+    if (r?.success && r?.url) {
+      previewUrl.value = r.url
+      serviceRunning.value = true
+      serviceMode.value = String(r.mode || '')
+      bumpPreview()
+    }
+  } catch (_) {
+    // 静默失败：保留 local-resource 预览，不阻塞首屏
+  } finally {
+    serviceBooting.value = false
   }
 }
 
@@ -281,7 +303,20 @@ async function stopService() {
   await api.stopWebAppService({ id: appId.value, version: appVersion.value })
   serviceRunning.value = false
   serviceMode.value = ''
-  await loadApp()
+  // 仅回退到本地静态预览，避免重置 appPath 导致右侧会话面板被重建
+  if (api?.previewWebApp) {
+    try {
+      const r = await api.previewWebApp({
+        id: appId.value,
+        version: appVersion.value,
+        ensureService: false
+      })
+      if (r?.success && r?.previewUrl) {
+        previewUrl.value = r.previewUrl
+      }
+    } catch (_) {}
+  }
+  bumpPreview()
 }
 
 function goBack() {

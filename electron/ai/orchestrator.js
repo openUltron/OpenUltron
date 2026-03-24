@@ -240,6 +240,7 @@ function appendOpenAiPlatformBillingHint(statusCode, hostname, message) {
 
 // Claude 模型前缀
 const CLAUDE_PREFIXES = ['claude-']
+const GLOBAL_MODEL_UNAVAILABLE_TTL_MS = 10 * 60 * 1000
 
 class Orchestrator {
   constructor(getAIConfigOrStore, toolRegistry, mcpManager, opts = {}) {
@@ -256,6 +257,10 @@ class Orchestrator {
     this.getSkillsForPrompt = typeof opts.getSkillsForPrompt === 'function' ? opts.getSkillsForPrompt : null
     /** 自动碎片记忆提取：按会话节流，避免每轮对话都打 LLM */
     this._memoryExtractState = new Map()
+    /** 会话级不可用模型缓存：key=sessionId, value=Set("model@@apiBaseUrl") */
+    this._sessionUnavailableModels = new Map()
+    /** 全局不可用模型缓存（进程级，带 TTL）：key="model@@apiBaseUrl", value=expiresAt(ms) */
+    this._globalUnavailableModels = new Map()
   }
 
   getConfig() {
@@ -300,6 +305,73 @@ class Orchestrator {
       if (calls.some(tc => tc?.function?.name === toolName || tc?.name === toolName)) return true
     }
     return false
+  }
+
+  _modelRouteKey(model, routeConfig) {
+    const m = String(model || '').trim()
+    const base = String(routeConfig?.apiBaseUrl || '').trim()
+    return `${m}@@${base}`
+  }
+
+  _rememberSessionUnavailableModel(sessionId, model, routeConfig) {
+    const sid = String(sessionId || '').trim()
+    if (!sid) return
+    const key = this._modelRouteKey(model, routeConfig)
+    if (!key || key.startsWith('@@')) return
+    const set = this._sessionUnavailableModels.get(sid) || new Set()
+    set.add(key)
+    // 防止异常增长，保留最近 32 条
+    if (set.size > 32) {
+      const trimmed = Array.from(set).slice(-32)
+      this._sessionUnavailableModels.set(sid, new Set(trimmed))
+      return
+    }
+    this._sessionUnavailableModels.set(sid, set)
+  }
+
+  _gcGlobalUnavailableModels(now = Date.now()) {
+    for (const [key, expiresAt] of this._globalUnavailableModels.entries()) {
+      if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+        this._globalUnavailableModels.delete(key)
+      }
+    }
+  }
+
+  _rememberGlobalUnavailableModel(model, routeConfig, ttlMs = GLOBAL_MODEL_UNAVAILABLE_TTL_MS) {
+    const key = this._modelRouteKey(model, routeConfig)
+    if (!key || key.startsWith('@@')) return
+    const now = Date.now()
+    this._gcGlobalUnavailableModels(now)
+    const ttl = Number.isFinite(Number(ttlMs)) && Number(ttlMs) > 0
+      ? Number(ttlMs)
+      : GLOBAL_MODEL_UNAVAILABLE_TTL_MS
+    this._globalUnavailableModels.set(key, now + ttl)
+  }
+
+  _isGlobalUnavailableModel(model, routeConfig) {
+    const key = this._modelRouteKey(model, routeConfig)
+    if (!key || key.startsWith('@@')) return false
+    const now = Date.now()
+    const expiresAt = this._globalUnavailableModels.get(key)
+    if (!Number.isFinite(expiresAt)) return false
+    if (expiresAt <= now) {
+      this._globalUnavailableModels.delete(key)
+      return false
+    }
+    return true
+  }
+
+  _isSessionUnavailableModel(sessionId, model, routeConfig) {
+    const sid = String(sessionId || '').trim()
+    if (!sid) return false
+    const set = this._sessionUnavailableModels.get(sid)
+    if (!set || set.size === 0) return false
+    return set.has(this._modelRouteKey(model, routeConfig))
+  }
+
+  _isKnownUnavailableModel(sessionId, model, routeConfig) {
+    return this._isSessionUnavailableModel(sessionId, model, routeConfig) ||
+      this._isGlobalUnavailableModel(model, routeConfig)
   }
 
   // ---------- 启动 Agent 对话循环 ----------
@@ -857,14 +929,19 @@ class Orchestrator {
               modelCandidates.push({ model: m, routeConfig })
             }
           }
-          for (let mi = 0; mi < modelCandidates.length; mi++) {
-            const tryModel = modelCandidates[mi].model
-            const tryConfig = modelCandidates[mi].routeConfig || config
+          const availableCandidates = modelCandidates.filter((c) =>
+            !this._isKnownUnavailableModel(sessionId, c.model, c.routeConfig)
+          )
+          // 极端情况下（缓存过期误判等）不让列表为空
+          const candidatesToTry = availableCandidates.length > 0 ? availableCandidates : modelCandidates
+          for (let mi = 0; mi < candidatesToTry.length; mi++) {
+            const tryModel = candidatesToTry[mi].model
+            const tryConfig = candidatesToTry[mi].routeConfig || config
             const tryAnthropic = this._isClaudeModel(tryModel)
             try {
               // 在流式正文前先插入消息内提示，随后同一 assistant 气泡继续追加备用模型输出
               if (mi > 0 && canSend(wrappedSender)) {
-                const prev = modelCandidates[mi - 1]
+                const prev = candidatesToTry[mi - 1]
                 const prevModel = prev?.model ? String(prev.model).trim() : ''
                 const tryHost = String((tryConfig.apiBaseUrl || '')).replace(/^https?:\/\//, '').replace(/\/.*$/, '')
                 const hostHint = tryHost ? `（${tryHost}）` : ''
@@ -922,7 +999,11 @@ class Orchestrator {
               if (classify.action === 'fail_fast') {
                 throw err
               }
-              if (mi < modelCandidates.length - 1) {
+              if (classify.kind === 'model_unavailable') {
+                this._rememberSessionUnavailableModel(sessionId, tryModel, tryConfig)
+                this._rememberGlobalUnavailableModel(tryModel, tryConfig)
+              }
+              if (mi < candidatesToTry.length - 1) {
                 console.warn(`[AI] 模型 ${tryModel} 调用失败，尝试下一个:`, err.message)
               } else {
                 throw err  // 所有备用模型都失败，抛出错误
