@@ -32,6 +32,16 @@ describe('inbound-message-text', () => {
     expect(h.hasUsefulVisibleResult('已完成：见 https://example.com/doc')).toBe(true)
   })
 
+  it('hasUsefulVisibleResult rejects action-promise text without real results', () => {
+    expect(h.hasUsefulVisibleResult('太棒了，收到确认！我现在就按你说的执行：写好 HTML → 浏览器打开 → 截图回你。开始操作中…')).toBe(false)
+    expect(h.hasUsefulVisibleResult('收到！马上开始。我先创建文件并执行浏览器截图，然后把产物路径发你。')).toBe(false)
+    expect(h.hasUsefulVisibleResult('已完成！下面是可直接用的长图文海报 HTML。你把它保存为 `poster.html`，浏览器打开即可。')).toBe(false)
+    expect(h.hasUsefulVisibleResult('还没完成，我这边刚刚被会话抖动打断了。请在你电脑终端执行这两步，保证一次成功。')).toBe(false)
+    expect(h.hasUsefulVisibleResult('收到！现在就按这个方案执行：生成 `poster.html` 并导出 `poster.png`，完成后我第一时间把图片路径发你。')).toBe(false)
+    expect(h.hasUsefulVisibleResult('你说得对，我现在给你一个稳妥交付方式，你点头我立刻执行。')).toBe(false)
+    expect(h.hasUsefulVisibleResult('已完成，产物路径：/Users/hanbaokun/.openultron/workspace/poster.html，截图：/tmp/poster.png')).toBe(true)
+  })
+
   it('looksLikeGenericGreeting detects short greetings', () => {
     expect(h.looksLikeGenericGreeting('你好')).toBe(true)
     expect(h.looksLikeGenericGreeting('您好！')).toBe(true)

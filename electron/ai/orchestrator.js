@@ -33,6 +33,7 @@ const { mergeModelSelectionIntoConfig } = require('./resolve-provider-config')
 const { createChatRunId } = require('./run-id')
 const { buildWebAppStudioSandboxMemoryBlock } = require('./webapp-studio-context')
 const { getWebAppsRoot } = require('../web-apps/registry')
+const { shouldForceExecutionContinuation } = require('./visible-result-policy')
 
 /** 是否为相对路径（与仅以 `/` 开头区分，兼容 Windows 绝对路径） */
 function isRelativeFilePath(p) {
@@ -492,8 +493,21 @@ class Orchestrator {
       typeof content === 'string'
         ? sanitizeAssistantIdentityWording(sanitizeAssistantModelIdentity(content, useModel), displayName)
         : content
+    const flattenAssistantText = (content) => {
+      if (typeof content === 'string') return content
+      if (!Array.isArray(content)) return ''
+      return content
+        .map((part) => {
+          if (!part) return ''
+          if (typeof part === 'string') return part
+          if (typeof part.text === 'string') return part.text
+          return ''
+        })
+        .join('')
+    }
     let iteration = 0
     let currentMessages = [...messages]
+    let forcedContinuationCount = 0
     const intentText = pickRecentUserIntentText(currentMessages)
     const promptIntentFlags = detectPromptIntentFlags(intentText)
 
@@ -915,6 +929,7 @@ class Orchestrator {
           return ''
         })()
         let response = null
+        let responseAcceptedWithTools = false
         {
           const modelCandidates = [{ model: useModel, routeConfig: config }]
           for (const r of fallbackRoutes) {
@@ -966,6 +981,7 @@ class Orchestrator {
                     temperature: tryConfig.temperature ?? 0,
                     max_tokens: tryConfig.maxTokens || 0
                   }, tryConfig, wrappedSender, sessionId, abortController.signal, tryAnthropic)
+                  responseAcceptedWithTools = !!mode.withTools
                   if (!mode.withTools) {
                     wrappedSender.send('ai-chat-token', {
                       sessionId,
@@ -1211,6 +1227,33 @@ class Orchestrator {
             appLogger?.info?.('[AI] 委派工具后模型返回空，已用 envelope 兜底', { fallbackLen: String(finalContent).length })
           }
         }
+
+        const finalText = flattenAssistantText(finalContent).trim()
+        const shouldContinueExecutionLoop =
+          responseAcceptedWithTools &&
+          forcedContinuationCount < 3 &&
+          shouldForceExecutionContinuation(finalText)
+        if (shouldContinueExecutionLoop) {
+          forcedContinuationCount++
+          appLogger?.warn?.('[AI] 模型未产出最终结果且未调用工具，继续代理循环', {
+            sessionId,
+            iteration,
+            forcedContinuationCount,
+            contentPreview: finalText.slice(0, 160) || '(空)'
+          })
+          currentMessages.push({
+            role: 'assistant',
+            content: finalContent
+          })
+          currentMessages.push({
+            role: 'user',
+            content: '[系统] 你上一轮只描述了将要执行/未完成状态，但没有实际调用工具，也没有返回最终产物。若任务仍需执行，请本轮直接调用合适工具；若已经完成，请只返回真实结果、文件路径或附件信息。禁止再回复“我现在开始”“稍等”“你把它保存为某文件”。',
+            _hideInUI: true,
+            meta: { hideInUI: true }
+          })
+          continue
+        }
+        if (!shouldContinueExecutionLoop) forcedContinuationCount = 0
 
         const contentPreview = finalContent ? (typeof finalContent === 'string' ? finalContent : JSON.stringify(finalContent)).trim().slice(0, 120) : ''
         appLogger?.info?.('[AI] 本轮模型未返回工具调用，仅文本回复', { contentPreview: contentPreview || '(空)' })

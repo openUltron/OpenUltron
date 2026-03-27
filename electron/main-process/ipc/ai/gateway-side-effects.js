@@ -19,7 +19,6 @@ const { FEISHU_PROJECT, TELEGRAM_PROJECT, DINGTALK_PROJECT } = require('./sessio
  * @param {(m: any[], ctx: object) => any[]} deps.registerReferenceArtifactsFromMessages
  * @param {(t: string, o?: object) => string} deps.stripToolProtocolAndJsonNoise
  * @param {(t: string) => boolean} deps.hasUsefulVisibleResult
- * @param {(o: object) => Promise<string>} deps.rescueReplyByMasterAgent
  * @param {(t: string, o?: object) => string} deps.stripFalseDeliveredClaims
  * @param {(images: any[], files: any[]) => any[]} deps.normalizeArtifactsFromItems
  * @param {(m: any[]) => any[]} deps.stripToolExecutionFromMessages
@@ -46,7 +45,6 @@ function createGatewaySideEffectHandlers (deps) {
     registerReferenceArtifactsFromMessages,
     stripToolProtocolAndJsonNoise,
     hasUsefulVisibleResult,
-    rescueReplyByMasterAgent,
     stripFalseDeliveredClaims,
     normalizeArtifactsFromItems,
     stripToolExecutionFromMessages,
@@ -146,32 +144,13 @@ function createGatewaySideEffectHandlers (deps) {
       docHost: feishuDocHost,
       role: 'assistant'
     })
-    const hasSpawnCall = Array.isArray(data.messages) && data.messages.some(m =>
-      m && m.role === 'assistant' && Array.isArray(m.tool_calls) &&
-      m.tool_calls.some(tc => {
-        const n = tc?.function?.name
-        return n === 'sessions_spawn' || n === 'webapp_studio_invoke'
-      })
-    )
     const visibleResultText = String(cleanedFeishu || cleanedSpawn || latestVisibleText || '').trim()
-    let rawTextToSend = visibleResultText || (
+    const safeVisibleResultText = hasUsefulVisibleResult(visibleResultText) ? visibleResultText : ''
+    const rawTextToSend = safeVisibleResultText || (
       imageItems.length > 0
         ? '截图已发至当前会话。'
         : (fileItems.length > 0 ? '文件已发至当前会话。' : '任务已执行完成，但未生成可展示的文本结果。')
     )
-    if (hasSpawnCall && imageItems.length === 0 && fileItems.length === 0 && !hasUsefulVisibleResult(visibleResultText)) {
-      const userText = (() => {
-        const msgs = Array.isArray(conv?.messages) ? conv.messages : []
-        const u = [...msgs].reverse().find((m) => m && m.role === 'user')
-        return u ? String(u.content || '').trim() : ''
-      })()
-      const rescued = await rescueReplyByMasterAgent({
-        userText,
-        channel: 'feishu',
-        hintText: String(visibleResultText || '').trim()
-      })
-      rawTextToSend = String(rescued || '').trim() || '任务仍在处理中，请稍后再试。'
-    }
     const safeRawTextToSend = stripToolProtocolAndJsonNoise(rawTextToSend, { dropJsonEnvelope: true })
     const textToSend = stripFalseDeliveredClaims(safeRawTextToSend, {
       hasImages: imageItems.length > 0,

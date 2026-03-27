@@ -36,7 +36,6 @@ function registerImChannelMessagePipeline(deps) {
     attachArtifactsToLatestAssistant,
     triggerAutoEvolveFromSession,
     runMainAgentDirectRetry,
-    rescueReplyByMasterAgent,
     getToolsForCoordinatorChat,
     getCoordinatorSystemPrompt,
     aiGateway,
@@ -53,7 +52,6 @@ function registerImChannelMessagePipeline(deps) {
     compactSpawnResultText,
     extractLatestVisibleText,
     overwriteLatestAssistantText,
-    looksLikeNoResultPlaceholderText,
     hasUsefulVisibleResult,
     stripToolProtocolAndJsonNoise,
     redactSensitiveText,
@@ -732,6 +730,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
           : ((latestVisibleText && String(latestVisibleText).trim()) ? String(latestVisibleText).trim() : ''))
     const rawFallbackText = seedFallbackText
     const safeRawFallbackText = stripToolProtocolAndJsonNoise(rawFallbackText, { dropJsonEnvelope: true })
+    const safeUsefulRawFallbackText = hasUsefulVisibleResult(safeRawFallbackText) ? safeRawFallbackText : ''
     const cleanedTextTrim = String(cleanedText || '').trim()
     const cleanedSpawnTrim = String(cleanedSpawnText || '').trim()
     const preferSpawnText = !!cleanedSpawnTrim && (
@@ -743,11 +742,13 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       ? cleanedSpawnTrim
       : (cleanedTextTrim || cleanedSpawnTrim || (rawFallbackText || (imageItems.length > 0 ? '截图已发至当前会话。' : null)))
     const safeBaseTextToSend = stripToolProtocolAndJsonNoise(baseTextToSend, { dropJsonEnvelope: true })
-    let rescuedMainText = ''
+    const safeUsefulBaseTextToSend = hasUsefulVisibleResult(safeBaseTextToSend) ? safeBaseTextToSend : ''
+    let directRetryResolvedText = ''
+    let directRetryErrorText = ''
     let directRetryAddedArtifacts = false
     const shouldRescueByMain = !hasSpawnCall &&
       imageItems.length === 0 && fileItems.length === 0 &&
-      (!safeBaseTextToSend || looksLikeNoResultPlaceholderText(safeBaseTextToSend))
+      !hasUsefulVisibleResult(safeBaseTextToSend)
     if (shouldRescueByMain) {
       appendCommandLine('- 主Agent无结果，触发直执行重试')
       scheduleStreamFlush()
@@ -765,8 +766,8 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
         const retryText = String(directRetry.text || '').trim()
         if (retryText) {
           const retryClean = stripToolProtocolAndJsonNoise(retryText, { dropJsonEnvelope: true })
-          if (retryClean && !looksLikeNoResultPlaceholderText(retryClean)) {
-            rescuedMainText = retryClean
+          if (hasUsefulVisibleResult(retryClean)) {
+            directRetryResolvedText = retryClean
           }
         }
         const seenImagePath = new Set(imageItems.map((x) => String(x?.path || '')).filter(Boolean))
@@ -792,30 +793,24 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
           fileItems.push({ path: p })
           directRetryAddedArtifacts = true
         }
+      } else {
+        directRetryErrorText = `执行失败：主Agent直执行失败（${String(directRetry?.error || '未知错误').trim()}）`
       }
-      if (!rescuedMainText && !directRetryAddedArtifacts) {
-        rescuedMainText = await rescueReplyByMasterAgent({
-          userText: String(message?.text || ''),
-          channel: binding.channel,
-          hintText: String(seedFallbackText || '')
-        })
-        if (looksLikeNoResultPlaceholderText(rescuedMainText)) rescuedMainText = ''
-      }
-      if (rescuedMainText) {
+      if (directRetryResolvedText) {
         try {
           appLogger?.info?.('[MainAgent] 主Agent兜底生成成功', {
             runSessionId,
             messageId: userMessageId || '',
-            length: rescuedMainText.length
+            length: directRetryResolvedText.length
           })
         } catch (_) {}
       }
     }
-    let textToSend = stripFalseDeliveredClaims(safeBaseTextToSend, {
+    let textToSend = stripFalseDeliveredClaims(safeUsefulBaseTextToSend, {
       hasImages: imageItems.length > 0,
       hasFiles: fileItems.length > 0,
       channel: binding.channel
-    }) || (rescuedMainText || safeRawFallbackText || (imageItems.length > 0
+    }) || (directRetryResolvedText || safeUsefulRawFallbackText || directRetryErrorText || (imageItems.length > 0
       ? '截图已发至当前会话。'
       : '任务已执行完成，但未生成可展示的文本结果。'))
     
@@ -837,7 +832,10 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
       })
       if (directRetry && directRetry.success) {
         const retryText = String(directRetry.text || '').trim()
-        if (retryText) textToSend = retryText
+        if (retryText) {
+          const retryClean = stripToolProtocolAndJsonNoise(retryText, { dropJsonEnvelope: true })
+          if (hasUsefulVisibleResult(retryClean)) textToSend = retryClean
+        }
         const seenImagePath = new Set(imageItems.map(x => String(x?.path || '')).filter(Boolean))
         const seenFilePath = new Set(fileItems.map(x => String(x?.path || '')).filter(Boolean))
         for (const it of (Array.isArray(directRetry.images) ? directRetry.images : [])) {

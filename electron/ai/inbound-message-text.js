@@ -1,3 +1,11 @@
+const {
+  hasResultSignals,
+  isLowInformationReply,
+  looksLikeNoResultPlaceholderText,
+  looksLikeExecutionPromiseWithoutResult,
+  hasUsefulVisibleResult
+} = require('./visible-result-policy')
+
 /**
  * 飞书 / Telegram / 钉钉 入站回复：文本清洗、截图路径解析、可见文本提取（无 Electron UI 依赖）
  * @param {{ path: typeof import('path'), fs: typeof import('fs'), getAppRoot: () => string, getAppRootPath: (...p: string[]) => string, stripRawToolCallXml: (t: string) => string }} deps
@@ -481,48 +489,6 @@ function createInboundMessageTextHelpers (deps) {
     return next
   }
 
-  function hasResultSignals (text = '') {
-    const t = String(text || '').trim()
-    if (!t) return false
-    if (t.length >= 90) return true
-    if (/(https?:\/\/|\/Users\/|[A-Za-z]:\\|file:\/\/|\.html\b|\.md\b|\.png\b|\.jpg\b|\.zip\b)/i.test(t)) return true
-    const lines = t.split('\n').map(x => x.trim()).filter(Boolean)
-    if (lines.length >= 3) return true
-    const listLike = lines.filter((x) => /^[-*]\s+/.test(x) || /^\d+\.\s+/.test(x)).length
-    if (listLike >= 2) return true
-    if (/^#{1,3}\s+/.test(t)) return true
-    return false
-  }
-
-  function isLowInformationReply (text = '') {
-    const t = String(text || '').replace(/\s+/g, ' ').trim()
-    if (!t) return true
-    if (/[?？]\s*$/.test(t)) return false
-    if (hasResultSignals(t)) return false
-    return t.length <= 60
-  }
-
-  function looksLikeNoResultPlaceholderText (text = '') {
-    const t = String(text || '').replace(/\s+/g, ' ').trim()
-    if (!t) return false
-    const patterns = [
-      /任务已执行完成，但未生成可展示的文本结果/,
-      /未生成可展示的文本结果/,
-      /未生成可展示结果/,
-      /无回复内容/,
-      /无可展示结果/
-    ]
-    return patterns.some((re) => re.test(t))
-  }
-
-  function hasUsefulVisibleResult (text = '') {
-    const t = String(text || '').trim()
-    if (!t) return false
-    if (looksLikeNoResultPlaceholderText(t)) return false
-    if (isLowInformationReply(t)) return false
-    return true
-  }
-
   return {
     extractLocalResourceScreenshots,
     extractLocalFilesFromText,
@@ -547,6 +513,7 @@ function createInboundMessageTextHelpers (deps) {
     hasResultSignals,
     isLowInformationReply,
     looksLikeNoResultPlaceholderText,
+    looksLikeExecutionPromiseWithoutResult,
     hasUsefulVisibleResult
   }
 }

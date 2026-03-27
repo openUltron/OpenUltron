@@ -396,10 +396,8 @@ function bootstrapAiCoreStack(deps) {
   } = createAiChatToolsAccess({ aiToolRegistry, aiMcpManager, store, appLogger })
   subagentChatToolsRef.getToolsForSubChat = getToolsForSubChat
 
-  const { rescueReplyByMasterAgent, runMainAgentDirectRetry } = createImChannelMasterAgentFallbacks({
-    aiOrchestrator,
+  const { runMainAgentDirectRetry } = createImChannelMasterAgentFallbacks({
     stripToolProtocolAndJsonNoise,
-    looksLikeGenericGreeting,
     parseScreenshotFromToolResult,
     getToolsForSubChat,
     path,
@@ -429,7 +427,6 @@ function bootstrapAiCoreStack(deps) {
     registerReferenceArtifactsFromMessages,
     stripToolProtocolAndJsonNoise,
     hasUsefulVisibleResult,
-    rescueReplyByMasterAgent,
     stripFalseDeliveredClaims,
     normalizeArtifactsFromItems,
     stripToolExecutionFromMessages,
@@ -486,7 +483,6 @@ function bootstrapAiCoreStack(deps) {
     stripToolExecutionFromMessages,
     triggerAutoEvolveFromSession,
     runMainAgentDirectRetry,
-    rescueReplyByMasterAgent,
     getToolsForCoordinatorChat,
     getCoordinatorSystemPrompt,
     aiGateway,

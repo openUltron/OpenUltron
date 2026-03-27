@@ -3,13 +3,11 @@
 const { formatCommandFromToolCall } = require('./im-tool-call-format')
 
 /**
- * IM / Gateway 侧：主 Agent 文本整理、兜底生成、协调 run 空结果时的直跑重试。
+ * IM / Gateway 侧：主 Agent 协调 run 空结果时的直跑重试。
  */
 function createImChannelMasterAgentFallbacks(deps) {
   const {
-    aiOrchestrator,
     stripToolProtocolAndJsonNoise,
-    looksLikeGenericGreeting,
     parseScreenshotFromToolResult,
     getToolsForSubChat,
     path,
@@ -23,69 +21,6 @@ function createImChannelMasterAgentFallbacks(deps) {
     extractLocalFilesFromText,
     isImageFilePath
   } = deps
-
-  async function refineReplyByMasterAgent({
-    userText = '',
-    draftText = '',
-    spawnText = '',
-    hasImages = false,
-    hasFiles = false,
-    channel = ''
-  } = {}) {
-    const baseDraft = String(draftText || '').trim()
-    if (!baseDraft) return ''
-    const shouldRefine =
-      looksLikeGenericGreeting(baseDraft) ||
-      !!String(spawnText || '').trim() ||
-      baseDraft.length > 220
-    if (!shouldRefine) return baseDraft
-    try {
-      const channelName = channel === 'feishu' ? '飞书' : (channel === 'telegram' ? 'Telegram' : (channel === 'dingtalk' ? '钉钉' : '当前渠道'))
-      const prompt = [
-        `用户问题：${String(userText || '').trim()}`,
-        `子Agent结果：${String(spawnText || '').trim() || '（无）'}`,
-        `当前草稿：${baseDraft}`,
-        `产物：图片=${hasImages ? '有' : '无'}，文件=${hasFiles ? '有' : '无'}，渠道=${channelName}`,
-        '请输出最终回复（中文，60~220字）：',
-        '1) 先给执行结论；2) 再给关键结果；3) 如有产物说明已发送；4) 禁止自我介绍和寒暄；5) 禁止编造未完成内容。'
-      ].join('\n')
-      const refined = await aiOrchestrator.generateText({
-        prompt,
-        systemPrompt: '你是主Agent最终回复整理器，只做结果归纳，不使用工具，不输出Markdown代码块。'
-      })
-      const cleaned = stripToolProtocolAndJsonNoise(refined || '', { dropJsonEnvelope: true })
-      return String(cleaned || '').trim() || baseDraft
-    } catch (_) {
-      return baseDraft
-    }
-  }
-
-  async function rescueReplyByMasterAgent({
-    userText = '',
-    channel = '',
-    hintText = ''
-  } = {}) {
-    const q = String(userText || '').trim()
-    if (!q) return ''
-    try {
-      const channelName = channel === 'feishu' ? '飞书' : (channel === 'telegram' ? 'Telegram' : (channel === 'dingtalk' ? '钉钉' : '当前渠道'))
-      const prompt = [
-        `用户请求：${q}`,
-        hintText ? `已知上下文：${String(hintText || '').trim().slice(0, 800)}` : '',
-        `渠道：${channelName}`,
-        '请直接给出可执行结果，不要说“我来/我会/稍等/正在处理”。',
-        '若信息不足，请明确列出最少需要的补充信息（不超过3条）。',
-        '禁止输出工具调用协议、JSON、代码块。'
-      ].filter(Boolean).join('\n')
-      const out = await aiOrchestrator.generateText({
-        prompt,
-        systemPrompt: '你是主Agent执行兜底器。仅输出可直接发给用户的最终文本。'
-      })
-      return stripToolProtocolAndJsonNoise(String(out || ''), { dropJsonEnvelope: true }).trim()
-    } catch (_) {
-      return ''
-    }
-  }
 
   async function runMainAgentDirectRetry({
     aiGateway,
@@ -199,8 +134,6 @@ function createImChannelMasterAgentFallbacks(deps) {
   }
 
   return {
-    refineReplyByMasterAgent,
-    rescueReplyByMasterAgent,
     runMainAgentDirectRetry
   }
 }
