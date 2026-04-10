@@ -208,6 +208,13 @@ function createDefaultRegistry(options = {}) {
     console.warn('加载 web_search 工具失败:', e.message)
   }
 
+  // web_browser 工具（隐藏浏览器加载并返回页面文本/链接，供 AI 自解析）
+  try {
+    registry.register('web_browser', require('./tools/web-browser'))
+  } catch (e) {
+    console.warn('加载 web_browser 工具失败:', e.message)
+  }
+
   // 产物库检索：支持 AI 查询本地文件 + 云文档引用，减少找错
   try {
     registry.register('artifact_search', require('./tools/artifact-search'))

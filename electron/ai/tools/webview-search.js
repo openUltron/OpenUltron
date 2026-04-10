@@ -1,13 +1,15 @@
 /**
- * 通过隐藏 BrowserWindow 加载百度/谷歌搜索页，再用 JS 注入提取结果，作为通用搜索的兜底。
- * 不依赖第三方 API，仅依赖本机浏览器环境；百度在国内可访问，谷歌可能被墙或触发验证码。
+ * 通过隐藏 BrowserWindow 加载页面，再把标题、可见文本、链接列表返回给上层工具。
+ * 这样 AI 可以自己解析搜索页或 JS 渲染页，而不是依赖脆弱的站点私有选择器。
  */
 
 const { BrowserWindow } = require('electron')
 
 const TIMEOUT_MS = 18000
+const DEFAULT_WAIT_MS = 2000
 const MAX_RESULTS = 15
-const MAX_SNIPPET_LEN = 400
+const MAX_TEXT_LEN = 6000
+const MAX_LINKS = 40
 
 function getBaiduSearchUrl(query) {
   return `https://www.baidu.com/s?wd=${encodeURIComponent(query.trim())}`
@@ -17,92 +19,143 @@ function getGoogleSearchUrl(query) {
   return `https://www.google.com/search?q=${encodeURIComponent(query.trim())}`
 }
 
-/**
- * 在页面内执行的 JS：从百度搜索结果页提取标题、链接、摘要
- */
-function getBaiduExtractScript() {
+function buildPageExtractScript() {
   return `
-(function() {
-  var items = [];
-  var blocks = document.querySelectorAll('.c-container, .result, .result-op, [class*="result"]');
-  for (var i = 0; i < blocks.length && items.length < 20; i++) {
-    var block = blocks[i];
-    var link = block.querySelector('h3.t a, .t a, a[data-click], h3 a, .c-title a');
-    if (!link || !link.href) continue;
-    var href = link.href;
-    if (href.indexOf('baidu.com/s?') >= 0 || href === '#' || href.indexOf('javascript:') === 0) continue;
-    var title = (link.innerText || link.textContent || '').trim();
-    if (title.length < 2) continue;
-    var snippet = '';
-    var sn = block.querySelector('.c-abstract, .content-right_8Zs40, [class*="abstract"]');
-    if (sn) snippet = (sn.innerText || sn.textContent || '').trim();
-    items.push({ title: title, url: href, content: snippet.slice(0, 500) });
+(function () {
+  function textOf(node) {
+    return String(
+      (node && (node.innerText || node.textContent)) || ''
+    ).replace(/\\s+/g, ' ').trim()
   }
-  if (items.length === 0) {
-    var as = document.querySelectorAll('#content_left a[href^="http"]');
-    for (var j = 0; j < as.length && items.length < 20; j++) {
-      var a = as[j];
-      if (a.href.indexOf('baidu.com') >= 0 && a.href.indexOf('baidu.com/link') < 0) continue;
-      var t = (a.innerText || a.textContent || '').trim();
-      if (t.length > 3 && t.length < 150) items.push({ title: t, url: a.href, content: '' });
+
+  var title = textOf(document.querySelector('title')) || textOf(document.querySelector('h1')) || document.title || ''
+  var bodyText = textOf(document.body)
+  var links = Array.from(document.querySelectorAll('a[href]')).map(function (a) {
+    var href = a.href || a.getAttribute('href') || ''
+    var text = textOf(a)
+    var titleAttr = String(a.getAttribute('title') || '').trim()
+    var container = a.closest('article, main, section, div, li') || a.parentElement
+    var context = textOf(container)
+    return {
+      href: href,
+      text: text,
+      title: titleAttr,
+      context: context
     }
+  })
+
+  return {
+    title: title,
+    url: location.href,
+    text: bodyText,
+    links: links
   }
-  return JSON.stringify(items);
-})();
+})()
 `
 }
 
-/**
- * 在页面内执行的 JS：从谷歌搜索结果页提取
- */
-function getGoogleExtractScript() {
-  return `
-(function() {
-  var items = [];
-  var blocks = document.querySelectorAll('.g');
-  for (var i = 0; i < blocks.length && items.length < 20; i++) {
-    var block = blocks[i];
-    var link = block.querySelector('a[href^="http"]');
-    if (!link || !link.href) continue;
-    var href = link.href;
-    if (href.indexOf('google.com') >= 0) continue;
-    var titleEl = block.querySelector('.LC20lb, h3');
-    var title = titleEl ? (titleEl.innerText || titleEl.textContent || '').trim() : '';
-    if (title.length < 2) continue;
-    var sn = block.querySelector('.VwiC3b, .IsZvec');
-    var snippet = sn ? (sn.innerText || sn.textContent || '').trim() : '';
-    items.push({ title: title, url: href, content: snippet.slice(0, 500) });
-  }
-  return JSON.stringify(items);
-})();
-`
+function truncateText(text, maxLen = MAX_TEXT_LEN) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!normalized) return ''
+  if (normalized.length <= maxLen) return normalized
+  return `${normalized.slice(0, maxLen)}...`
 }
 
-/**
- * 使用隐藏 BrowserWindow 加载搜索页并执行 JS 提取结果
- * @param {string} query - 搜索关键词
- * @param {'baidu'|'google'} engine - 搜索引擎
- * @returns {Promise<{ success: boolean, query: string, results: Array, total: number }|{ success: boolean, error: string }>}
- */
-function searchViaWebview(query, engine = 'baidu') {
-  const url = engine === 'google' ? getGoogleSearchUrl(query) : getBaiduSearchUrl(query)
-  const extractScript = engine === 'google' ? getGoogleExtractScript() : getBaiduExtractScript()
+function normalizeExtractedPage(payload = {}, options = {}) {
+  const pageUrl = String(payload.url || '').trim()
+  const maxLinks = Number.isFinite(Number(options.maxLinks)) ? Math.max(1, Math.min(100, Number(options.maxLinks))) : MAX_LINKS
+  const maxTextLength = Number.isFinite(Number(options.maxTextLength)) ? Math.max(200, Math.min(20000, Number(options.maxTextLength))) : MAX_TEXT_LEN
+  const links = []
+  const seen = new Set()
+
+  const rawLinks = Array.isArray(payload.links) ? payload.links : []
+  for (const raw of rawLinks) {
+    const href = String(raw?.href || '').trim()
+    if (!href) continue
+
+    let absoluteUrl = href
+    try {
+      absoluteUrl = pageUrl ? new URL(href, pageUrl).href : new URL(href).href
+    } catch {
+      continue
+    }
+
+    const protocol = new URL(absoluteUrl).protocol
+    if (!['http:', 'https:'].includes(protocol)) continue
+
+    const text = String(raw?.text || raw?.title || '').replace(/\s+/g, ' ').trim()
+    const context = String(raw?.context || '').replace(/\s+/g, ' ').trim()
+    const label = text || context.slice(0, 120) || absoluteUrl
+    const dedupeKey = absoluteUrl
+    if (seen.has(dedupeKey)) continue
+    seen.add(dedupeKey)
+
+    links.push({
+      text: label.slice(0, 200),
+      url: absoluteUrl,
+      context: truncateText(context, 300)
+    })
+
+    if (links.length >= maxLinks) break
+  }
+
+  return {
+    title: String(payload.title || '').trim().slice(0, 300),
+    url: pageUrl,
+    text: truncateText(payload.text || '', maxTextLength),
+    links
+  }
+}
+
+function buildSearchResultsFromPage(page, engine = 'baidu', maxResults = MAX_RESULTS) {
+  const engineHost = engine === 'google' ? 'google.com' : 'baidu.com'
+  const results = []
+  const seen = new Set()
+  for (const link of Array.isArray(page.links) ? page.links : []) {
+    let parsed
+    try {
+      parsed = new URL(link.url)
+    } catch {
+      continue
+    }
+    if (parsed.hostname.includes(engineHost)) continue
+    if (seen.has(link.url)) continue
+    seen.add(link.url)
+    const title = String(link.text || '').trim()
+    if (title.length < 2) continue
+    results.push({
+      index: results.length + 1,
+      title: title.slice(0, 200),
+      url: link.url,
+      content: String(link.context || '').slice(0, 400)
+    })
+    if (results.length >= maxResults) break
+  }
+  return results
+}
+
+function loadViaWebview(url, options = {}) {
+  const timeoutMs = Number.isFinite(Number(options.timeoutMs)) ? Math.max(3000, Math.min(60000, Number(options.timeoutMs))) : TIMEOUT_MS
+  const waitMs = Number.isFinite(Number(options.waitMs)) ? Math.max(0, Math.min(10000, Number(options.waitMs))) : DEFAULT_WAIT_MS
+  const maxLinks = Number.isFinite(Number(options.maxLinks)) ? Number(options.maxLinks) : MAX_LINKS
+  const maxTextLength = Number.isFinite(Number(options.maxTextLength)) ? Number(options.maxTextLength) : MAX_TEXT_LEN
 
   return new Promise((resolve) => {
     let win = null
+    const cleanup = () => {
+      if (win && !win.isDestroyed()) win.destroy()
+      win = null
+    }
     const timeout = setTimeout(() => {
-      if (win && !win.isDestroyed()) {
-        win.destroy()
-        win = null
-      }
-      resolve({ success: false, error: '网页搜索超时（加载或解析超时）' })
-    }, TIMEOUT_MS)
+      cleanup()
+      resolve({ success: false, error: '隐藏浏览器加载超时' })
+    }, timeoutMs)
 
     try {
       win = new BrowserWindow({
         show: false,
-        width: 1280,
-        height: 800,
+        width: 1366,
+        height: 900,
         webPreferences: {
           nodeIntegration: false,
           contextIsolation: true,
@@ -111,65 +164,71 @@ function searchViaWebview(query, engine = 'baidu') {
       })
 
       win.webContents.setUserAgent(
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
       )
 
       win.webContents.on('did-finish-load', () => {
-        // 百度等页面结果可能由 JS 延迟渲染，延迟 2 秒再提取
-        const runExtract = () => {
+        setTimeout(() => {
           if (!win || win.isDestroyed()) return
-          win.webContents
-            .executeJavaScript(extractScript)
-            .then((jsonStr) => {
+          win.webContents.executeJavaScript(buildPageExtractScript())
+            .then((payload) => {
               clearTimeout(timeout)
-              if (win && !win.isDestroyed()) win.destroy()
-              win = null
-              try {
-                const raw = JSON.parse(jsonStr || '[]')
-                const results = (Array.isArray(raw) ? raw : []).slice(0, MAX_RESULTS).map((r, i) => ({
-                  index: i + 1,
-                  title: (r.title || '').slice(0, 200),
-                  url: r.url || '',
-                  content: (r.content || '').length > MAX_SNIPPET_LEN
-                    ? (r.content || '').slice(0, MAX_SNIPPET_LEN) + '...'
-                    : (r.content || '')
-                }))
-                if (results.length === 0) {
-                  resolve({ success: false, error: '网页结构已变化，未能解析到搜索结果' })
-                } else {
-                  resolve({
-                    success: true,
-                    query: query.trim(),
-                    results,
-                    total: results.length
-                  })
-                }
-              } catch (e) {
-                resolve({ success: false, error: `解析结果失败: ${e.message}` })
-              }
+              const page = normalizeExtractedPage(payload, { maxLinks, maxTextLength })
+              cleanup()
+              resolve({ success: true, page })
             })
             .catch((err) => {
               clearTimeout(timeout)
-              if (win && !win.isDestroyed()) win.destroy()
-              resolve({ success: false, error: `执行提取脚本失败: ${err.message}` })
+              cleanup()
+              resolve({ success: false, error: `执行页面提取失败: ${err.message}` })
             })
-        }
-        setTimeout(runExtract, 2000)
+        }, waitMs)
       })
 
       win.webContents.on('did-fail-load', (_, code, desc) => {
         clearTimeout(timeout)
-        if (win && !win.isDestroyed()) win.destroy()
+        cleanup()
         resolve({ success: false, error: `页面加载失败: ${code} ${desc}` })
       })
 
       win.loadURL(url, { userAgent: win.webContents.getUserAgent() })
     } catch (e) {
       clearTimeout(timeout)
-      if (win && !win.isDestroyed()) win.destroy()
-      resolve({ success: false, error: `创建搜索窗口失败: ${e.message}` })
+      cleanup()
+      resolve({ success: false, error: `创建隐藏浏览器失败: ${e.message}` })
     }
   })
 }
 
-module.exports = { searchViaWebview, getBaiduSearchUrl, getGoogleSearchUrl }
+async function searchViaWebview(query, engine = 'baidu') {
+  const url = engine === 'google' ? getGoogleSearchUrl(query) : getBaiduSearchUrl(query)
+  const loaded = await loadViaWebview(url, { waitMs: DEFAULT_WAIT_MS, maxLinks: 60, maxTextLength: 8000 })
+  if (!loaded.success) return loaded
+
+  const page = loaded.page || {}
+  const results = buildSearchResultsFromPage(page, engine, MAX_RESULTS)
+  if (results.length === 0) {
+    return {
+      success: false,
+      error: '隐藏浏览器已加载页面，但未提取到有效搜索结果',
+      page
+    }
+  }
+
+  return {
+    success: true,
+    query: query.trim(),
+    results,
+    total: results.length,
+    page
+  }
+}
+
+module.exports = {
+  searchViaWebview,
+  loadViaWebview,
+  normalizeExtractedPage,
+  buildSearchResultsFromPage,
+  getBaiduSearchUrl,
+  getGoogleSearchUrl
+}

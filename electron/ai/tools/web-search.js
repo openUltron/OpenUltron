@@ -31,7 +31,8 @@ async function execute(args) {
     query: out.query,
     engine: eng,
     results: out.results || [],
-    total: out.total || 0
+    total: out.total || 0,
+    page: out.page || null
   }
 }
 
