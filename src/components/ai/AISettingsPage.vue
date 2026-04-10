@@ -581,32 +581,6 @@ const normalizePool = (arr) => {
 
 const isInModelPool = (modelId) => normalizePool(config.modelPool).includes(String(modelId || '').trim())
 
-const verifyModelAvailability = async (modelId, providerBaseUrl = '') => {
-  const id = String(modelId || '').trim()
-  if (!id) return false
-  const key = `${id}@@${providerBaseUrl || '*'}`
-  if (verifiedModels.has(key)) return true
-  try {
-    const payload = providerBaseUrl ? { model: id, provider: providerBaseUrl } : { model: id }
-    const res = await window.electronAPI.ai.verifyModel(payload)
-    if (res?.success) {
-      verifiedModels.add(key)
-      if (res.provider) verifiedModelProvider.set(id, res.provider)
-      else if (providerBaseUrl) verifiedModelProvider.set(id, providerBaseUrl)
-      return true
-    }
-    saveMsg.value = (res && (res.error || res.message)) || '模型不可用'
-    saveType.value = 'error'
-    setTimeout(() => { saveMsg.value = '' }, 4000)
-    return false
-  } catch (e) {
-    saveMsg.value = e?.message || '模型校验失败'
-    saveType.value = 'error'
-    setTimeout(() => { saveMsg.value = '' }, 4000)
-    return false
-  }
-}
-
 const setPrimaryFromPool = (modelId) => {
   const id = String(modelId || '').trim()
   if (!id) return
@@ -639,7 +613,6 @@ const removeModelFromPool = (modelId) => {
 const addToPoolWithRule = async (modelId) => {
   const id = String(modelId || '').trim()
   if (!id) return
-  if (!(await verifyModelAvailability(id, config.apiBaseUrl))) return
   const pool = normalizePool(config.modelPool)
   if (!config.defaultModel || pool.length === 0) {
     config.defaultModel = id
@@ -674,13 +647,8 @@ const onModelCardClick = async (modelId) => {
       config.modelPool = normalizePool(nextPool)
       rawData.modelPool = [...config.modelPool]
     }
-    const ok = await verifyModelAvailability(id, config.apiBaseUrl)
-    if (!ok) {
-      config.defaultModel = prevPrimary
-      config.modelBindings = prevBindings
-      config.modelPool = prevPool
-      rawData.modelPool = [...prevPool]
-    }
+    verifiedModels.add(`${id}@@${config.apiBaseUrl || '*'}`)
+    if (!verifiedModelProvider.has(id)) verifiedModelProvider.set(id, config.apiBaseUrl)
     return
   }
   if (id !== config.defaultModel) {
@@ -725,8 +693,8 @@ const confirmManualDialog = async () => {
   if (!modelId || !baseUrl || !apiKey) return
   const provider = ensureProviderByBaseUrl(baseUrl, apiKey)
   if (!provider) return
-  const ok = await verifyModelAvailability(modelId, baseUrl)
-  if (!ok) return
+  verifiedModels.add(`${modelId}@@${baseUrl || '*'}`)
+  if (!verifiedModelProvider.has(modelId)) verifiedModelProvider.set(modelId, baseUrl)
   config.modelBindings[modelId] = baseUrl
   const pool = normalizePool(config.modelPool)
   if (!pool.includes(modelId)) pool.push(modelId)
