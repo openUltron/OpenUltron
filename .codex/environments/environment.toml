@@ -9,3 +9,8 @@ script = ""
 name = "Run"
 icon = "run"
 command = "make run"
+
+[[actions]]
+name = "build"
+icon = "tool"
+command = "make release"

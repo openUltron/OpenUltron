@@ -35,6 +35,8 @@ if [ ! -d "dist" ] && [ "$1" != "dev" ]; then
 fi
 
 # 根据是否在生产模式决定启动方式
+bash scripts/ensure-electron-runtime.sh
+
 if [ "$1" = "dev" ]; then
     echo "📦 开发模式"
     echo "🔧 启动命令: NODE_ENV=development npx electron ."

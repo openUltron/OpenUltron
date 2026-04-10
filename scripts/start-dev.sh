@@ -50,10 +50,11 @@ if [ ! -d "node_modules/electron/dist" ] || [ ! -d "node_modules/vite" ] || [ ! 
     echo "✅ 依赖安装完成"
 fi
 
+bash scripts/ensure-electron-runtime.sh
+
 # 启动开发服务器（先等 5 秒让 Vite 起来，再启动 Electron，不依赖 wait-on）
 echo "🚀 启动开发服务器..."
 npx concurrently "npm run dev" "sleep 5 && NODE_ENV=development npx electron ." --names "VITE,ELECTRON" --prefix-colors "cyan,green"
-
 
 
 
