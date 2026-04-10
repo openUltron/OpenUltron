@@ -176,6 +176,30 @@ function extractScreenshotPathsFromText(text) {
   return out
 }
 
+function buildOutboundImageQueue(payload = {}) {
+  const mergedImages = Array.isArray(payload.images) ? [...payload.images] : []
+  const out = []
+  const seenPath = new Set()
+  const seenBase64Head = new Set()
+  for (const item of mergedImages) {
+    if (!item) continue
+    const p = String(item.path || '').trim()
+    if (p) {
+      if (seenPath.has(p)) continue
+      seenPath.add(p)
+      out.push(item)
+      continue
+    }
+    const base64 = typeof item.base64 === 'string' ? item.base64.trim() : ''
+    if (!base64) continue
+    const head = base64.slice(0, 80)
+    if (seenBase64Head.has(head)) continue
+    seenBase64Head.add(head)
+    out.push(item)
+  }
+  return out
+}
+
 function hasFileReadIntent(text) {
   const t = compactText(text || '')
   if (!t) return false
@@ -548,9 +572,7 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
         normalizeFeishuOutboundText((payload.text && payload.text.trim()) ? payload.text.trim() : '（无回复内容）'),
         preferredDocHost
       )
-      const screenshotPathsFromText = extractScreenshotPathsFromText(textRaw)
-      const mergedImages = Array.isArray(payload.images) ? [...payload.images] : []
-      for (const p of screenshotPathsFromText) mergedImages.push({ path: p })
+      const mergedImages = buildOutboundImageQueue(payload)
       const imageCount = mergedImages.length
       const fileCount = Array.isArray(payload.files) ? payload.files.length : 0
       const text = redactSensitiveText(textRaw.replace(/!\[[^\]]*\]\(local-resource:\/\/screenshots\/[^)]+\)/g, '【截图】'))
@@ -560,7 +582,7 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
         textPreview: redactSensitiveText(text.slice(0, 200)),
         imageCount,
         fileCount,
-        imagePathsFromText: screenshotPathsFromText.slice(0, 8)
+        imagePathsFromText: []
       })
       let imageSent = 0
       let imageFailed = 0
@@ -751,4 +773,10 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
   }
 }
 
-module.exports = { createFeishuAdapter }
+module.exports = {
+  createFeishuAdapter,
+  __testables: {
+    buildOutboundImageQueue,
+    extractScreenshotPathsFromText
+  }
+}
