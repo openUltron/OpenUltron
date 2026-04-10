@@ -6,6 +6,7 @@
 const { spawn } = require('child_process')
 const { tryInProcess } = require('./shell-inprocess')
 const { logger: appLogger } = require('../../app-logger')
+const { cleanEnvForChild } = require('./env-utils')
 
 const DEFAULT_TIMEOUT = 600000
 const MAX_BUFFER = 1024 * 1024 * 5
@@ -48,11 +49,12 @@ async function execute(options, context) {
   })
 
   return new Promise((resolve) => {
+    const childEnv = cleanEnvForChild(env || process.env)
     // detached=true 让子进程成为新的进程组 leader，便于超时后杀掉整个进程组（含 ffmpeg/say 等派生子进程）
     const child = spawn('/bin/sh', ['-c', script], {
       cwd,
       shell: false,
-      env: env || process.env,
+      env: childEnv,
       detached: true
     })
 

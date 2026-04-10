@@ -5,6 +5,7 @@
 const path = require('path')
 const fs = require('fs')
 const { spawn } = require('child_process')
+const { cleanEnvForChild, resolveCommand } = require('./env-utils')
 
 const SCRIPT_FILENAME = '_exec.js'
 const MAX_STDOUT_LEN = 60 * 1024
@@ -28,10 +29,12 @@ async function execute(options, context) {
     return { success: false, error: `写入脚本失败: ${e.message}` }
   }
   return new Promise((resolve) => {
-    const child = spawn('node', [SCRIPT_FILENAME], {
+    const childEnv = cleanEnvForChild(env || process.env)
+    const nodeCmd = resolveCommand('node', childEnv)
+    const child = spawn(nodeCmd, [SCRIPT_FILENAME], {
       cwd,
       shell: false,
-      env: env || process.env
+      env: childEnv
     })
     let stdout = ''
     let stderr = ''
