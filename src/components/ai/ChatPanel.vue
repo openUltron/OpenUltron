@@ -91,6 +91,22 @@
 
     <!-- 输入区 -->
     <div class="chat-input-area">
+      <div v-if="slashSystemPromptCheck.enabled" class="slash-prompt-check" :class="{ 'slash-prompt-check--danger': slashSystemPromptCheck.hasRisk }">
+        <div class="slash-prompt-check-head">
+          <AlertTriangle v-if="slashSystemPromptCheck.hasRisk" :size="14" />
+          <Info v-else :size="14" />
+          <span>斜杠系统提示词（{{ slashSystemPromptCheck.truncated ? '已截断' : '可发送' }}）</span>
+          <span class="slash-prompt-check-length">
+            {{ slashSystemPromptCheck.length }} / {{ SLASH_SYSTEM_PROMPT_MAX_LENGTH }}
+          </span>
+        </div>
+        <pre class="slash-prompt-check-body">{{ slashSystemPromptCheck.previewText }}</pre>
+        <p v-if="slashSystemPromptCheck.hasRisk || slashSystemPromptCheck.truncated || slashSystemPromptCheck.warning" class="slash-prompt-check-note">
+          <template v-if="slashSystemPromptCheck.hasRisk">{{ slashSystemPromptCheck.warning }}</template>
+          <template v-else-if="slashSystemPromptCheck.truncated">提示：系统提示词过长，发送时将按上限截断。</template>
+          <template v-else>{{ slashSystemPromptCheck.warning }}</template>
+        </p>
+      </div>
       <div class="input-row">
         <!-- 斜杠命令面板 -->
         <SlashPalette
@@ -466,6 +482,75 @@ const slashQuery = ref('')
 // 斜杠选择：多技能
 const activeSlashSkills = ref([])
 const hasActiveSlash = computed(() => activeSlashSkills.value.length > 0)
+const SLASH_SYSTEM_PROMPT_MAX_LENGTH = 5000
+const SLASH_SYSTEM_PROMPT_RISK_PATTERNS = [
+  /\b(ignore|disregard|override|bypass)\b\s+.*\b(previous|prior|earlier|all|everything)\b\s+.*\b(instruction|instructions|rule|rules|constraint|constraints|prompt|directive)\b/i,
+  /(你|您|请)?\s*(必须|应该|请)?\s*(忽略|无视|绕过|跳过)\s+(上面|之前|前面|先前|既有)\s*(的?)\s*(所有|全部|既有)?\s*(约束|规则|指令|提示|系统)\b/i,
+  /(ignore|ignore all|bypass|override)\s*[:：]?\s*(previous|prior|above|earlier|existing)\s+(instructions?|constraints?|rules?)/i
+]
+
+const getActiveSlashSystemPrompt = (skills = activeSlashSkills.value) =>
+  skills
+    .map(item => (item && item.type === 'skill' ? String(item.raw?.prompt || '').trim() : ''))
+    .filter(Boolean)
+    .join('\n\n')
+
+const sanitizeSlashSystemPrompt = (text) => String(text || '')
+  .replace(/\r/g, '')
+  .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '')
+  .trim()
+
+const evaluateSlashSystemPrompt = (text) => {
+  const normalized = sanitizeSlashSystemPrompt(text)
+  const base = {
+    enabled: false,
+    length: 0,
+    truncated: false,
+    hasRisk: false,
+    canSend: true,
+    warning: '',
+    value: '',
+    previewText: ''
+  }
+
+  if (!normalized) return base
+
+  if (SLASH_SYSTEM_PROMPT_RISK_PATTERNS.some((p) => p.test(normalized))) {
+    return {
+      ...base,
+      enabled: true,
+      hasRisk: true,
+      canSend: false,
+      warning: '检测到潜在越权注入短语（如“忽略既有规则/override previous instructions”），本次将阻断发送，请修改斜杠内容后重试。',
+      value: '',
+      previewText: normalized.slice(0, 1200),
+      length: normalized.length
+    }
+  }
+
+  let previewText = normalized
+  let value = normalized
+  const isTruncated = normalized.length > SLASH_SYSTEM_PROMPT_MAX_LENGTH
+  if (normalized.length > SLASH_SYSTEM_PROMPT_MAX_LENGTH) {
+    value = `${normalized.slice(0, SLASH_SYSTEM_PROMPT_MAX_LENGTH)}\n\n[已截断：系统提示过长，超过上限 ${SLASH_SYSTEM_PROMPT_MAX_LENGTH} 字]`
+    previewText = value
+  }
+  return {
+    ...base,
+    enabled: true,
+    length: normalized.length,
+    truncated: isTruncated,
+    hasRisk: false,
+    canSend: true,
+    value,
+    previewText: previewText.length > 1200 ? `${previewText.slice(0, 1200)}\n…（后续已省略）` : previewText,
+    warning: normalized.length > SLASH_SYSTEM_PROMPT_MAX_LENGTH
+      ? `当前长度 ${normalized.length}，超出上限 ${SLASH_SYSTEM_PROMPT_MAX_LENGTH}，已按系统规则截断。`
+      : ''
+  }
+}
+
+const slashSystemPromptCheck = computed(() => evaluateSlashSystemPrompt(getActiveSlashSystemPrompt()))
 
 // MCP 服务器列表
 const mcpServers = ref([])
@@ -1325,15 +1410,6 @@ const onKeyDown = (e) => {
   }
 }
 
-// 构建斜杠技能注入的 system prompt
-const buildSlashSystemPrompt = async (item) => {
-  if (!item) return null
-  if (item.type === 'skill') {
-    return item.raw.prompt || null
-  }
-  return null
-}
-
 const handleSend = async (opts = {}) => {
   const { stopPrevious } = opts
   const text = inputText.value.trim()
@@ -1439,8 +1515,12 @@ const handleSend = async (opts = {}) => {
   let visionImageParts = []
 
   if (activeSlashSkills.value.length > 0) {
-    const prompts = await Promise.all(activeSlashSkills.value.map(s => buildSlashSystemPrompt(s)))
-    slashSystemPrompt = prompts.filter(Boolean).join('\n\n')
+    const slashPromptState = slashSystemPromptCheck.value
+    if (!slashPromptState.canSend) {
+      error.value = slashPromptState.warning || '斜杠系统提示词存在风险，发送已阻断。'
+      return
+    }
+    slashSystemPrompt = slashPromptState.value || null
     if (!finalText) {
       finalText = activeSlashSkills.value.length === 1
         ? `Using skill: ${activeSlashSkills.value[0].name}`
@@ -2243,6 +2323,49 @@ defineExpose({ clearMessages, loadMessages, messages, handleExternalSend, isStre
   line-height: 1;
 }
 .slash-tag-inline .slash-tag-remove:hover { opacity: 1; }
+.slash-prompt-check {
+  margin: 6px 0 4px;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--ou-warning) 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ou-warning) 12%, transparent);
+  padding: 8px 10px;
+  color: var(--ou-warning);
+}
+.slash-prompt-check--danger {
+  border-color: color-mix(in srgb, var(--ou-error) 45%, transparent);
+  background: color-mix(in srgb, var(--ou-error) 12%, transparent);
+  color: var(--ou-error);
+}
+.slash-prompt-check-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.slash-prompt-check-length {
+  margin-left: auto;
+  color: var(--ou-text-secondary);
+  font-weight: 500;
+}
+.slash-prompt-check-body {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  background: color-mix(in srgb, #000 5%, transparent);
+  border-radius: 6px;
+  max-height: 96px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.slash-prompt-check-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
 
 .input-inner-field {
   flex: 1;

@@ -15,7 +15,7 @@ const PROMPTS_DIR = 'prompts'
  * 用当前内置默认覆盖（覆盖前会把旧版同名文件拷到 prompts/_backup_rev_<修订>_<时间>/）。
  * 未递增修订则只补全缺失的 .md，不覆盖用户已改文件。
  */
-const PROMPTS_DEFAULTS_REVISION = 6
+const PROMPTS_DEFAULTS_REVISION = 7
 
 const REVISION_FILE = '.defaults-revision'
 

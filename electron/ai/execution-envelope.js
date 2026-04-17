@@ -66,7 +66,10 @@ function buildExecutionEnvelope(out = {}, runtime = 'internal') {
       retries: Math.max(0, (Array.isArray(out.attemptedRuntimes) ? out.attemptedRuntimes.length : 1) - 1),
       runtime: String(out.runtime || runtime || 'internal'),
       parent_run_id: out.parentRunId != null && String(out.parentRunId).trim() ? String(out.parentRunId).trim() : undefined,
-      sub_session_id: out.subSessionId != null && String(out.subSessionId).trim() ? String(out.subSessionId).trim() : undefined
+      sub_session_id: out.subSessionId != null && String(out.subSessionId).trim() ? String(out.subSessionId).trim() : undefined,
+      system_prompt_source: out.systemPromptSource != null && String(out.systemPromptSource).trim()
+        ? String(out.systemPromptSource).trim()
+        : undefined
     }
   }
   return envelope
@@ -89,4 +92,3 @@ module.exports = {
   normalizeErrorCode,
   truncateDelegationStdoutPreview
 }
-
