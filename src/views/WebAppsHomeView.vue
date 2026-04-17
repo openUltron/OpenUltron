@@ -6,9 +6,18 @@
 </template>
 
 <script setup>
+import { onActivated, onMounted } from 'vue'
 import WebAppsManager from '../components/ai/WebAppsManager.vue'
+import { clearLastWebAppStudio } from '../composables/useLastWebAppStudio.js'
 
 defineOptions({ name: 'WebAppsHomeView' })
+
+function resetStudioRestore() {
+  clearLastWebAppStudio()
+}
+
+onMounted(resetStudioRestore)
+onActivated(resetStudioRestore)
 </script>
 
 <style scoped>

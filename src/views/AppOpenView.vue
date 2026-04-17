@@ -110,7 +110,7 @@ async function loadApp() {
     return
   }
   try {
-    const r = await api.getWebApp({ id, version, ensureService: false })
+    const r = await api.getWebApp({ id, version, ensureService: true })
     if (!r?.success) {
       loadError.value = r?.error || '无法加载应用'
       return
@@ -119,9 +119,6 @@ async function loadApp() {
     appId.value = id
     appVersion.value = version
     appName.value = r.manifest?.name || id
-    if (r?.service?.running !== true) {
-      void warmupService(id, version)
-    }
   } catch (e) {
     loadError.value = e?.message || String(e)
   }

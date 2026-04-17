@@ -47,6 +47,15 @@ function parseServiceConfig(manifest) {
   const cwd = String(svc.cwd || '.').trim() || '.'
   const healthPathRaw = String(svc.healthPath || '').trim()
   const portEnv = String(svc.portEnv || 'PORT').trim() || 'PORT'
+  const rawEnv = svc.env && typeof svc.env === 'object' && !Array.isArray(svc.env) ? svc.env : null
+  const env = {}
+  if (rawEnv) {
+    for (const [k, v] of Object.entries(rawEnv)) {
+      const key = String(k || '').trim()
+      if (!key) continue
+      env[key] = String(v == null ? '' : v)
+    }
+  }
   const startupTimeoutMs = Number.isFinite(Number(svc.startupTimeoutMs))
     ? Math.max(3000, Math.min(120000, Number(svc.startupTimeoutMs)))
     : DEFAULT_STARTUP_TIMEOUT_MS
@@ -55,7 +64,8 @@ function parseServiceConfig(manifest) {
     cwd,
     portEnv,
     healthPath: healthPathRaw || '/',
-    startupTimeoutMs
+    startupTimeoutMs,
+    env
   }
 }
 
@@ -230,6 +240,7 @@ async function ensureWebAppService(manifest, appDir, opts = {}) {
     shell: true,
     env: {
       ...process.env,
+      ...svcCfg.env,
       [svcCfg.portEnv]: String(port),
       PORT: String(port)
     }
@@ -317,4 +328,3 @@ module.exports = {
   getWebAppServiceLogs,
   stopAllWebAppServices
 }
-

@@ -5,7 +5,7 @@ const { getWebAppsRoot } = require('../web-apps/registry')
 const { filterToolsByProfile } = require('../ai/agent-profile')
 
 /**
- * 应用工作室侧栏：会话已绑定某沙箱应用根目录，应直接改文件，勿再 webapp_studio_invoke / sessions_spawn。
+ * 应用工作室侧栏：会话已绑定某沙箱应用根目录。
  * @param {string} pp projectPath
  */
 function isWebAppStudioChatProject(pp) {
@@ -28,8 +28,6 @@ function createAiChatToolsAccess(deps) {
 
   const CHROME_DEVTOOLS_TOOL_PREFIX_REGEX = /^mcp__chrome[-_]devtools__/
   const CHANNEL_SEND_TOOL_REGEX = /^(feishu_send_message|telegram_send_message|dingtalk_send_message)$/
-  /** 已在 ~/.openultron/web-apps/... 内编辑时，禁止再委派进沙箱（与子 Agent getToolsForSubChat 对齐） */
-  const DELEGATE_OUT_OF_STUDIO_TOOLS = new Set(['webapp_studio_invoke', 'sessions_spawn'])
   let _loggedNoChromeDevtoolsOnce = false
 
   function coordinatorIncludesSessionsSpawn() {
@@ -61,9 +59,6 @@ function createAiChatToolsAccess(deps) {
     if (opts.excludeChannelSend) {
       all = all.filter((t) => !CHANNEL_SEND_TOOL_REGEX.test(String(t.function?.name || '').trim()))
     }
-    if (isWebAppStudioChatProject(pp)) {
-      all = all.filter((t) => !DELEGATE_OUT_OF_STUDIO_TOOLS.has(String(t?.function?.name || '').trim()))
-    }
     const chromeDevtools = all.filter((t) => CHROME_DEVTOOLS_TOOL_PREFIX_REGEX.test(t.function?.name || ''))
     const rest = all.filter((t) => !CHROME_DEVTOOLS_TOOL_PREFIX_REGEX.test(t.function?.name || ''))
     if (chromeDevtools.length === 0 && !_loggedNoChromeDevtoolsOnce) {
@@ -87,9 +82,11 @@ function createAiChatToolsAccess(deps) {
   function getToolsForSubChat(opts = {}) {
     const pr = opts.profile || null
     const isCoordinator = pr && String(pr.id || '').trim() === 'coordinator'
+    const isStudioProject = isWebAppStudioChatProject(opts.projectPath)
     const base = getToolsForChat(opts).filter((t) => {
       const name = String(t?.function?.name || '').trim()
       if (CHANNEL_SEND_TOOL_REGEX.test(name)) return false
+      if (isStudioProject) return true
       if (name === 'sessions_spawn') return isCoordinator
       if (name === 'webapp_studio_invoke') return false
       if (name === 'web_apps_create') return false

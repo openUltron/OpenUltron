@@ -34,7 +34,7 @@
         </section>
         <aside class="was-chat" aria-label="AI 编辑与调试">
           <div class="was-chat-head">
-            AI 助手 · 工作区为下方「当前应用」目录；保存相关文件后将尝试自动刷新左侧预览
+            AI 助手 · 优先开发当前应用；允许安装依赖、启动 dev server、拆分子任务与跨目录联调；保存相关文件后会尽量刷新左侧预览
           </div>
           <div class="was-chat-panel-wrap">
             <ChatPanel
@@ -135,7 +135,7 @@ function onPreviewDomReady() {
   syncPreviewTheme()
 }
 
-/** 注入模型：明确「当前只改这一沙箱应用」，避免与其它项目混淆 */
+/** 注入模型：当前应用仍为主目标，但允许走完整工程化开发与更广上下文联调。 */
 const studioSystemPrompt = computed(() => {
   const root = appPath.value.replace(/\\/g, '/').replace(/\/+$/, '')
   const id = appId.value
@@ -145,8 +145,8 @@ const studioSystemPrompt = computed(() => {
   const prev = previewUrl.value || ''
   if (!root || !id) return ''
   return [
-    '## 应用工作室（当前唯一编辑目标）',
-    `你正在协助用户开发与调试 **一个** OpenUltron 沙箱应用。本轮会话的 **projectPath / 工作区** 即下方目录；**所有** file_operation、apply_patch 等涉及路径的操作，必须针对 **该应用**，不要改到 OpenUltron 主程序目录或其它无关项目。`,
+    '## 应用工作室（全开放开发模式）',
+    `你正在协助用户开发与调试 **一个** OpenUltron 沙箱应用。本轮会话的 **projectPath / 工作区** 即下方目录；当前应用是默认主目标，但你拥有完整工程化开发权限：可装依赖、跑 dev/build/test、配置 manifest.entry.service、使用 sessions_spawn 拆分任务，也可在必要时通过绝对路径修改宿主侧或其它协作文件。`,
     '',
     `- **应用名称**（来自 \`manifest.json\` 的 \`name\`）：${name}`,
     `- **应用 ID**：\`${id}\``,
@@ -155,8 +155,9 @@ const studioSystemPrompt = computed(() => {
     `- **入口 HTML（相对应用根）**：\`${entry}\``,
     `- **左侧沙箱预览 URL**：\`${prev}\``,
     '',
-    '**路径规则**：优先使用 **绝对路径**（以应用根目录开头）。也可使用 **相对应用根** 的路径（如 `index.html`、`styles.css`），宿主会自动拼接到应用根目录。**不要**把文件写到 OpenUltron 安装目录或其它项目。修改 `index.html`、`.css`、`manifest.json` 等会直接影响左侧预览；保存成功后界面会尝试 **自动刷新预览**，用户也可随时点「刷新预览」。',
-    '**自测**：改动后须在本应用根目录跑通自测（逻辑 + 关键 UI/行为），`package.json` 中提供 `test` / `test:e2e` / `verify` 为宜；宿主安装依赖默认省略 dev，跑 Playwright 等前需在该目录 `npm install --include=dev`。完整要求见系统上下文中「自测·必做」。',
+    '**路径规则**：相对路径默认落在当前应用根目录；若任务需要更广集成，可直接使用绝对路径访问其它目录。修改 `index.html`、`.css`、`manifest.json`、`package.json`、`service.js`、构建配置与脚本都会影响预览/运行模式；保存成功后界面会尝试 **自动刷新预览**，用户也可随时点「刷新预览」。',
+    '**运行模式**：优先把应用做成真实可运行的 WebApp，而不是只停留在静态页。若存在 Node/Vite/Next/Express 等服务，优先补齐 `manifest.json` 的 `entry.service`，让左侧预览尽量跑在应用自己的 dev server 上；需要环境变量时可写入 `entry.service.env`，健康检查路径可用 `entry.service.healthPath`。',
+    '**自测**：改动后须在本应用根目录跑通自测（逻辑 + 关键 UI/行为），`package.json` 中提供 `dev` / `build` / `test` / `verify` 为宜；缺失时主动补齐。若使用 Playwright 等 devDependencies，可直接在当前目录安装并执行。完整要求见系统上下文中「自测·必做」。',
     '**回复时**若提及「当前应用」，请用上述 **名称 / id**，避免与其它仓库混淆。'
   ].join('\n')
 })
@@ -241,7 +242,7 @@ async function loadApp() {
     return
   }
   try {
-    const r = await api.getWebApp({ id, version, ensureService: false })
+    const r = await api.getWebApp({ id, version, ensureService: true })
     if (!r?.success) {
       loadError.value = r?.error || '无法加载应用'
       return
@@ -256,9 +257,6 @@ async function loadApp() {
     const ent = r.manifest?.entry && typeof r.manifest.entry === 'object' ? r.manifest.entry.html : ''
     entryHtml.value = String(ent || 'index.html').trim() || 'index.html'
     saveLastWebAppStudio({ appId: id, version })
-    if (r?.service?.running !== true) {
-      void warmupService(id, version)
-    }
   } catch (e) {
     loadError.value = e?.message || String(e)
   }

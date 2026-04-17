@@ -33,3 +33,11 @@ export function getLastWebAppStudio() {
   }
   return null
 }
+
+export function clearLastWebAppStudio() {
+  try {
+    sessionStorage.removeItem(STORAGE_KEY)
+  } catch {
+    /* ignore */
+  }
+}

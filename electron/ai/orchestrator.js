@@ -2471,32 +2471,6 @@ class Orchestrator {
       }
     }
 
-    // 应用工作室：file_operation 路径一律约束到沙箱根（相对路径拼接；落在沙箱外的绝对路径 → 根目录下同名文件）
-    if (webAppSandbox && name === 'file_operation' && args && typeof args.path === 'string') {
-      const root = path.resolve(projectPath)
-      let fp = String(args.path).trim()
-      if (fp) {
-        if (isRelativeFilePath(fp)) {
-          fp = path.join(root, fp)
-        } else {
-          const abs = path.resolve(fp)
-          if (!abs.startsWith(root + path.sep) && abs !== root) {
-            const redirected = path.join(root, path.basename(abs))
-            try {
-              appLogger?.warn?.('[AI][SandboxApp] file_operation 路径已约束到沙箱根', {
-                sessionId,
-                from: String(args.path),
-                to: redirected
-              })
-            } catch (_) { /* ignore */ }
-            fp = redirected
-          } else {
-            fp = abs
-          }
-        }
-        args = { ...args, path: fp }
-      }
-    }
     const defaultWorkspaceCwd = getWorkspaceRoot()
     if (name === 'execute_command') {
       const rawCwd = args && typeof args.cwd === 'string' ? String(args.cwd).trim() : ''
@@ -2509,8 +2483,8 @@ class Orchestrator {
       if (name === 'git_operation' && !args.repo_path) {
         args = { ...args, repo_path: projectPath }
       }
-      // 相对路径拼到当前会话 projectPath（应用工作室已在上方 webAppSandbox 块处理，勿重复拼接）
-      if (name === 'file_operation' && args.path && isRelativeFilePath(args.path) && !webAppSandbox) {
+      // 相对路径拼到当前会话 projectPath；工作室会话保留绝对路径自由，允许越过当前应用根目录访问更广工程上下文。
+      if (name === 'file_operation' && args.path && isRelativeFilePath(args.path)) {
         args = { ...args, path: path.join(projectPath, args.path) }
       }
       if (name === 'file_operation' && args.path && /web-apps/i.test(projectPath)) {
@@ -2522,28 +2496,14 @@ class Orchestrator {
           })
         } catch (_) { /* ignore */ }
       }
-      // apply_patch：相对路径拼到 projectPath；应用工作室内绝对路径若落在沙箱外则改写到沙箱根下同名文件
+      // apply_patch：相对路径拼到 projectPath；绝对路径保持原值，工作室会话不再强制收束到当前应用根目录。
       if (name === 'apply_patch' && args && Array.isArray(args.changes)) {
-        const root = path.resolve(projectPath)
         args = {
           ...args,
           changes: args.changes.map((ch) => {
             if (!ch || typeof ch !== 'object' || typeof ch.path !== 'string') return ch
             let fp = ch.path.trim()
             if (!fp) return ch
-            if (webAppSandbox) {
-              if (isRelativeFilePath(fp)) {
-                fp = path.join(root, fp)
-              } else {
-                const abs = path.resolve(fp)
-                if (!abs.startsWith(root + path.sep) && abs !== root) {
-                  fp = path.join(root, path.basename(abs))
-                } else {
-                  fp = abs
-                }
-              }
-              return { ...ch, path: fp }
-            }
             if (path.isAbsolute(fp)) return ch
             return { ...ch, path: path.join(projectPath, fp) }
           })

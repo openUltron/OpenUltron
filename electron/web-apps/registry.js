@@ -61,15 +61,30 @@ function validateMvpManifest(m, options = {}) {
     const cmd = String(entry.service.command || '').trim()
     if (!cmd) return { ok: false, error: 'entry.service.command 不能为空' }
     const cwd = String(entry.service.cwd || '.').trim() || '.'
+    const healthPath = String(entry.service.healthPath || '').trim() || '/'
     const portEnv = String(entry.service.portEnv || 'PORT').trim() || 'PORT'
     const startupTimeoutMs = Number.isFinite(Number(entry.service.startupTimeoutMs))
       ? Math.max(3000, Math.min(120000, Number(entry.service.startupTimeoutMs)))
       : 30000
+    const rawEnv = entry.service.env
+    const env = {}
+    if (rawEnv != null) {
+      if (typeof rawEnv !== 'object' || Array.isArray(rawEnv)) {
+        return { ok: false, error: 'entry.service.env 必须是对象' }
+      }
+      for (const [k, v] of Object.entries(rawEnv)) {
+        const key = String(k || '').trim()
+        if (!key) continue
+        env[key] = String(v == null ? '' : v)
+      }
+    }
     service = {
       command: cmd,
       cwd,
+      healthPath,
       portEnv,
-      startupTimeoutMs
+      startupTimeoutMs,
+      ...(Object.keys(env).length ? { env } : {})
     }
   }
 
