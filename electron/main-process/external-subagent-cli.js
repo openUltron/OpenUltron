@@ -43,6 +43,7 @@ const EXTERNAL_SUBAGENT_SPECS = [
 ]
 
 const EXTERNAL_AGENT_SCAN_TTL = 60 * 1000
+const EXTERNAL_AGENT_FAIL_RETRY_TTL = 5 * 60 * 1000
 
 /** 子进程「走代理」变体：仅使用当前 process.env（用户保存的全局代理），不写死地址 */
 function getCodexProxyPresetEnv() {
@@ -84,6 +85,7 @@ function getExternalEnvVariants(specId = '') {
 function createExternalSubagentCli(deps) {
   const { spawn, getWorkspaceRoot, appLogger } = deps
   let externalAgentScanCache = { ts: 0, agents: [] }
+  const externalAgentFailureMemory = new Map()
 
   async function runCliCommand(command, args = [], options = {}) {
     const { cwd, timeoutMs = 90000, env, onStdout, onStderr, shouldAbort } = options
@@ -181,13 +183,35 @@ function createExternalSubagentCli(deps) {
     }
     const list = []
     for (const spec of EXTERNAL_SUBAGENT_SPECS) {
+      const failState = externalAgentFailureMemory.get(spec.id)
+      if (!force && failState && failState.nextRetryAt > now) {
+        list.push({
+          id: spec.id,
+          command: spec.command,
+          available: false,
+          reason: `cooldown:${failState.reason}`
+        })
+        continue
+      }
       const found = await runCliCommand('which', [spec.command], { timeoutMs: 2500 })
       if (!found.success) {
         list.push({ id: spec.id, command: spec.command, available: false, reason: 'not_found' })
+        externalAgentFailureMemory.set(spec.id, {
+          nextRetryAt: now + EXTERNAL_AGENT_FAIL_RETRY_TTL,
+          reason: 'not_found'
+        })
         continue
       }
       const version = await runCliCommand(spec.command, spec.versionArgs || ['--version'], { timeoutMs: 4000 })
       const verText = String(version.stdout || version.stderr || '').trim().split('\n')[0] || ''
+      if (version.success) {
+        externalAgentFailureMemory.delete(spec.id)
+      } else {
+        externalAgentFailureMemory.set(spec.id, {
+          nextRetryAt: now + EXTERNAL_AGENT_FAIL_RETRY_TTL,
+          reason: version.error || 'version_check_failed'
+        })
+      }
       list.push({
         id: spec.id,
         command: spec.command,
