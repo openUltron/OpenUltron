@@ -258,16 +258,32 @@ function appendToDiary(entries, date) {
   fs.appendFileSync(p, lines.join('\n'), 'utf-8')
 }
 
+function normalizeLessonForDedup(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/\r/g, '')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n+/g, '\n')
+    .trim()
+}
+
 /** 追加经验到 LESSONS_LEARNED.md */
 function appendLesson(lesson, category = '通用') {
-  if (!lesson?.trim()) return
+  const normalizedLesson = normalizeLessonForDedup(lesson)
+  if (!normalizedLesson) return false
   const p = getLessonsLearnedPath()
   fs.mkdirSync(path.dirname(p), { recursive: true })
-  if (!fs.existsSync(p)) {
+  if (fs.existsSync(p)) {
+    try {
+      const existing = fs.readFileSync(p, 'utf-8')
+      if (normalizeLessonForDedup(existing).includes(normalizedLesson)) return false
+    } catch (_) {}
+  } else {
     fs.writeFileSync(p, '# 知识库 - 经验教训\n\n> 由 AI 自动提炼，记录失败教训和成功模式\n\n', 'utf-8')
   }
   const now = new Date().toISOString().slice(0, 10)
   fs.appendFileSync(p, `\n### [${now}] ${category}\n${lesson.trim()}\n`, 'utf-8')
+  return true
 }
 
 /** 读取 LESSONS_LEARNED.md（供自进化分析使用） */

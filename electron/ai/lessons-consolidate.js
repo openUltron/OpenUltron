@@ -13,12 +13,12 @@ async function consolidateLessonsLearned({ getResolvedAIConfig, aiOrchestrator, 
   if (!fs.existsSync(p)) {
     return { success: true, skipped: true, reason: 'no_file' }
   }
-  let raw = fs.readFileSync(p, 'utf-8')
+  const raw = fs.readFileSync(p, 'utf-8')
   if (!raw || String(raw).trim().length < MIN_CHARS_TO_CONSOLIDATE) {
     return { success: true, skipped: true, reason: 'too_short' }
   }
   if (String(raw).length > INPUT_MAX_CHARS) {
-    raw = `…(文件前部已省略，共 ${String(raw).length} 字，以下为尾部 ${INPUT_MAX_CHARS} 字用于整理)\n${String(raw).slice(-INPUT_MAX_CHARS)}`
+    return { success: true, skipped: true, reason: 'too_large_to_rewrite', bytes: String(raw).length }
   }
 
   const config = typeof getResolvedAIConfig === 'function' ? getResolvedAIConfig() : null

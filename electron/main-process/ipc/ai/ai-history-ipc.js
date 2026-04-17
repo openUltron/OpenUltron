@@ -216,11 +216,17 @@ function registerAiHistoryIpc (deps) {
         summary = [summary, '', '命令执行情况：', `成功 ${successCount} 次，失败 ${failCount} 次。最近执行：`, ...lines].join('\n')
       }
       if (!summary) return { success: true, summary: '' }
+      const existingSummary = memoryStore.listMemoriesByTags(
+        ['session-summary', `project:${proj}`, `session:${sid}`],
+        proj,
+        1
+      )?.[0]
       memoryStore.saveMemory({
         content: summary,
         tags: ['session-summary', `project:${proj}`, `session:${sid}`],
         projectPath: proj,
-        source: 'auto'
+        source: 'auto',
+        id: existingSummary?.id || null
       })
       return { success: true, summary, summary_source: summarySource }
     } catch (e) {
@@ -233,15 +239,25 @@ function registerAiHistoryIpc (deps) {
       const proj = String(projectPath || MAIN_CHAT_PROJECT).trim() || MAIN_CHAT_PROJECT
       const lim = Math.min(Math.max(Number(limit) || 5, 1), 20)
       const rows = memoryStore.listMemoriesByTags(['session-summary', `project:${proj}`], proj, lim)
-      return {
-        success: true,
-        summaries: (rows || []).map((m) => ({
+      const deduped = []
+      const seenSessions = new Set()
+      for (const m of rows || []) {
+        const tags = Array.isArray(m.tags) ? m.tags : []
+        const sessionTag = tags.find((t) => String(t || '').startsWith('session:')) || `id:${m.id}`
+        if (seenSessions.has(sessionTag)) continue
+        seenSessions.add(sessionTag)
+        deduped.push({
           id: m.id,
           content: m.content || '',
           createdAt: m.createdAt || null,
           updatedAt: m.updatedAt || null,
           tags: m.tags || []
-        }))
+        })
+        if (deduped.length >= lim) break
+      }
+      return {
+        success: true,
+        summaries: deduped
       }
     } catch (e) {
       return { success: false, summaries: [], message: e.message }
@@ -332,10 +348,16 @@ function registerAiHistoryIpc (deps) {
         })
         .join('\n\n')
         .slice(0, 9000)
-      if (!dialogText.trim()) return { success: true, skipped: true, reason: 'empty_dialog' }
-  
+      if (!dialogText.trim()) {
+        evolveSessionState.set(stateKey, { lastTs: Date.now(), lastDialogCount: dialogMsgs.length, running: false })
+        return { success: true, skipped: true, reason: 'empty_dialog' }
+      }
+
       const config = getResolvedAIConfig()
-      if (!config?.apiKey?.trim()) return { success: true, skipped: true, reason: 'missing_api_key' }
+      if (!config?.apiKey?.trim()) {
+        evolveSessionState.set(stateKey, { lastTs: Date.now(), lastDialogCount: dialogMsgs.length, running: false })
+        return { success: true, skipped: true, reason: 'missing_api_key' }
+      }
   
       const cmdSummary = commandExecutionLog.getExecutionSummary(projectPath || '')
       const cmdViewed = commandExecutionLog.getViewedPaths(projectPath || '')
@@ -438,8 +460,7 @@ function registerAiHistoryIpc (deps) {
         const category = (item && item.category) ? String(item.category).trim() : '通用'
         if (!content || !String(content).trim()) continue
         try {
-          memoryStore.appendLesson(String(content).trim(), category)
-          saved++
+          if (memoryStore.appendLesson(String(content).trim(), category) !== false) saved++
         } catch (e) {
           console.warn('[AI] evolve appendLesson failed:', e.message)
         }

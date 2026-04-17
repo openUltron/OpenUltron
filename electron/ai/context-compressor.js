@@ -84,6 +84,28 @@ function capCompressionSystemMessages(systemMsgs, maxKeep = 2) {
   return list.filter((_, i) => !dropSet.has(i))
 }
 
+function getCompressionSummaryContent(message) {
+  let text = String(message?.content || '')
+  if (text.startsWith(COMPRESSION_SUMMARY_MARKER)) {
+    text = text.slice(COMPRESSION_SUMMARY_MARKER.length)
+  }
+  if (text.startsWith('\n')) text = text.slice(1)
+  if (text.endsWith(COMPRESSION_CONTINUATION_HINT)) {
+    text = text.slice(0, -COMPRESSION_CONTINUATION_HINT.length)
+  }
+  return text.trim()
+}
+
+function clipSummaryDialogBody(text, maxChars) {
+  const s = String(text || '')
+  const lim = Number(maxChars) || 0
+  if (!s || lim <= 0 || s.length <= lim) return s
+  const head = Math.min(12000, Math.max(4000, Math.floor(lim * 0.4)))
+  const tail = Math.max(4000, lim - head)
+  const omitted = Math.max(0, s.length - head - tail)
+  return `${s.slice(0, head)}\n\n...(中间 ${omitted} 字已省略)\n\n${s.slice(-tail)}`
+}
+
 /** 供摘要模型阅读的对话行（含 tool 的极短摘录，避免大段 JSON 进 prompt） */
 function dialogMessageForSummaryLine(m, sliceLen) {
   if (!m) return ''
@@ -133,6 +155,7 @@ function shouldCompress(messages, config = {}) {
  * @param {Function} executeTool   - async (name, args) => result（可选，用于执行 memory_save）
  */
 async function flushMemoryBeforeCompaction(messages, callLLM, executeTool) {
+  if (typeof executeTool !== 'function') return
   const dialogMsgs = messages.filter(m => m.role !== 'system').slice(-30)
   if (dialogMsgs.length < 4) return  // 对话太短，无需刷新
 
@@ -167,6 +190,12 @@ async function compressMessages(messages, config = {}, callLLM) {
   // 分离 system messages 和对话消息
   const systemMsgs = messages.filter(m => m.role === 'system')
   const dialogMsgs = messages.filter(m => m.role !== 'system')
+  const previousSummaryMsgs = systemMsgs.filter(
+    m => m && m.role === 'system' && String(m.content || '').startsWith(COMPRESSION_SUMMARY_MARKER)
+  )
+  const plainSystemMsgs = systemMsgs.filter(
+    m => !(m && m.role === 'system' && String(m.content || '').startsWith(COMPRESSION_SUMMARY_MARKER))
+  )
 
   // 保留最近 keepRecent 条原文，其余的送去压缩
   if (dialogMsgs.length <= cfg.keepRecent) {
@@ -180,9 +209,11 @@ async function compressMessages(messages, config = {}, callLLM) {
   const sliceLen = 1800
   let dialogBody = toCompress.map(m => dialogMessageForSummaryLine(m, sliceLen)).filter(Boolean).join('\n\n')
   const MAX_SUMMARY_INPUT_CHARS = 30000
-  if (dialogBody.length > MAX_SUMMARY_INPUT_CHARS) {
-    dialogBody = dialogBody.slice(0, MAX_SUMMARY_INPUT_CHARS) + '\n\n(历史过长，仅前部送入摘要模型；更早细节已省略)'
-  }
+  dialogBody = clipSummaryDialogBody(dialogBody, MAX_SUMMARY_INPUT_CHARS)
+  const previousSummaryText = previousSummaryMsgs
+    .map(m => getCompressionSummaryContent(m))
+    .filter(Boolean)
+    .join('\n\n')
   // 构造摘要请求（含 tool 的短摘录，避免仅 user/assistant 时丢失「执行过什么工具」的语义）
   const summaryPrompt = [
     '请将以下对话历史压缩为简洁摘要（不超过 ' + cfg.summaryMaxTokens + ' 字），保留：',
@@ -190,8 +221,10 @@ async function compressMessages(messages, config = {}, callLLM) {
     '- 已完成的关键操作和重要结论',
     '- 重要的文件路径、变量名、配置值',
     '- 未完成的任务和待确认事项',
+    '- 若存在此前摘要，请与本次对话合并为一份新的完整摘要',
     '直接输出摘要内容，不需要其他说明。',
     '',
+    previousSummaryText ? '此前压缩摘要：\n' + previousSummaryText : '',
     '对话内容：',
     dialogBody
   ].join('\n')
@@ -218,9 +251,7 @@ async function compressMessages(messages, config = {}, callLLM) {
     content: `${COMPRESSION_SUMMARY_MARKER}\n` + summaryText + COMPRESSION_CONTINUATION_HINT
   }
 
-  const maxStack = Math.max(1, Math.min(4, Number(cfg.maxCompressionSummaryStack) || 2))
-  const trimmedSystem = capCompressionSystemMessages(systemMsgs, maxStack)
-  const compressed = [...trimmedSystem, summaryMessage, ...recentMsgs]
+  const compressed = [...plainSystemMsgs, summaryMessage, ...recentMsgs]
   const before = estimateTokens(messages)
   const after = estimateTokens(compressed)
   const saved = before - after

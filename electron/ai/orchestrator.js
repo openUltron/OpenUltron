@@ -233,6 +233,13 @@ function clipInjectedSection(text, maxChars) {
   return `${s.slice(0, lim)}\n\n...(已截断，原始长度 ${s.length} 字)`
 }
 
+function clipInjectedTailSection(text, maxChars) {
+  const s = String(text || '').trim()
+  const lim = Number(maxChars) || 0
+  if (!s || lim <= 0 || s.length <= lim) return s
+  return `...(已截断，原始长度 ${s.length} 字，仅注入最近片段)\n\n${s.slice(-lim)}`
+}
+
 function estimateTokenBreakdown(messages) {
   const list = Array.isArray(messages) ? messages : []
   const buckets = { system: 0, dialog: 0, tool: 0, other: 0 }
@@ -828,7 +835,7 @@ class Orchestrator {
         if (!subMinimal) {
           const lessonsContent = readLessonsLearned()
           if (lessonsContent && lessonsContent.trim()) {
-            memParts.push(`[知识库 - 经验教训]\n${clipInjectedSection(lessonsContent.trim(), 2200)}\n\n**使用方式**：优先复用上述经验，避免重复试错；写 lesson_save 时记录具体场景、原因、命令或路径。`)
+            memParts.push(`[知识库 - 经验教训]\n${clipInjectedTailSection(lessonsContent.trim(), 2200)}\n\n**使用方式**：优先复用上述经验，避免重复试错；写 lesson_save 时记录具体场景、原因、命令或路径。`)
           }
         }
 
