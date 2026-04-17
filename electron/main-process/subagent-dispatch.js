@@ -202,10 +202,17 @@ function createSubagentDispatch(deps) {
     return { success: false, error: msg, runtime: `external:${spec.id}`, systemPromptSource, attempts }
   }
 
-  function resolveRuntimeChain(runtime, availableExternalIds) {
+  function resolveRuntimeChain(runtime, availableExternalIds, preferenceOrder = []) {
     const extIds = dedupeList(availableExternalIds || [])
     const normalized = String(runtime || '').trim().toLowerCase()
-    const pickAutoChain = (base = []) => dedupeList(base)
+    const normalizedPreference = dedupeList(preferenceOrder).map((item) => normalizeRuntimeToken(item))
+      .filter((item) => item && item !== 'internal' && item !== 'auto')
+      .filter((item) => extIds.includes(item))
+    const pickAutoChain = (base = []) => {
+      const ordered = normalizedPreference.slice()
+      const rest = base.filter((id) => !ordered.includes(id))
+      return dedupeList([...ordered, ...rest])
+    }
     if (!normalized) return ['internal']
     if (normalized === 'auto') {
       const chain = pickAutoChain(extIds)
@@ -552,13 +559,14 @@ function createSubagentDispatch(deps) {
     }
     const normalizedForChain = resolveRequestedRuntime(effectiveRuntime)
     effectiveRuntime = normalizedForChain || effectiveRuntime || 'auto'
+    const shouldReportAutoFallback = subOrc.reportAutoFallback !== false
     pushCommandLog(`[meta] effective_runtime=${effectiveRuntime || 'internal'}`)
     emitPartial()
     const scan = await scanExternalSubAgents(false)
     const availableExternal = scan.filter(a => a.available)
     const availableExternalIds = availableExternal.map(a => a.id)
     const availableExternalById = new Map(availableExternal.map(a => [a.id, a]))
-    const runtimeChain = resolveRuntimeChain(normalizedForChain, availableExternalIds)
+    const runtimeChain = resolveRuntimeChain(normalizedForChain, availableExternalIds, subOrc.externalRuntimePreference)
     const attemptErrors = []
     const SUBAGENT_RUN_TIMEOUT_MS = 1800000
     const runCore = async () => {
@@ -592,11 +600,13 @@ function createSubagentDispatch(deps) {
         })
         appLogger?.info?.(`[SubAgentDispatch] runtime=${effectiveRuntime || 'auto'} chain=${runtimeChain.join('>')} available=${availableExternalIds.join(',') || 'none'}`)
         console.log('[SubAgentDispatch] runtime=', effectiveRuntime || 'auto', 'chain=', runtimeChain.join('>'), 'available=', availableExternalIds.join(',') || 'none')
-        if ((effectiveRuntime || 'auto') === 'auto' && availableExternalIds.length === 0) {
+        if ((effectiveRuntime || 'auto') === 'auto' && availableExternalIds.length === 0 && shouldReportAutoFallback) {
           console.warn('[SubAgentDispatch] auto 模式下无可用外部子Agent，将使用 internal')
+          pushCommandLog('[meta] auto 模式无可用外部子 Agent，已回退 internal')
         }
-        if (effectiveRuntime.startsWith('external:') && runtimeChain[0] !== effectiveRuntime.slice('external:'.length)) {
+        if (shouldReportAutoFallback && effectiveRuntime.startsWith('external:') && runtimeChain[0] !== effectiveRuntime.slice('external:'.length)) {
           console.warn('[SubAgentDispatch] 指定外部子Agent不可用，将按回退链执行', effectiveRuntime, runtimeChain.join('>'))
+          pushCommandLog(`[meta] 指定外部子 Agent 不可用，按回退链执行: ${runtimeChain.join(' > ')}`)
         }
       } catch (_) {}
 

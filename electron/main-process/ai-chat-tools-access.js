@@ -120,6 +120,21 @@ function createAiChatToolsAccess(deps) {
       ? '飞书'
       : (channel === 'telegram' ? 'Telegram' : (channel === 'dingtalk' ? '钉钉' : '当前渠道'))
     const spawnOn = coordinatorIncludesSessionsSpawn()
+    const subOrc = (() => {
+      try {
+        const oc = require('../openultron-config')
+        const s = oc.getSubagentOrchestration()
+        return {
+          pref: Array.isArray(s.externalRuntimePreference)
+            ? s.externalRuntimePreference.map((x) => String(x || '').trim()).filter(Boolean)
+            : ['codex', 'claude', 'gateway', 'opencode'],
+          fallback: s.reportAutoFallback !== false
+        }
+      } catch (_) {
+        return { pref: ['codex', 'claude', 'gateway', 'opencode'], fallback: true }
+      }
+    })()
+    const fallbackPolicy = subOrc.fallback ? '如 auto 无可用外部子 Agent 自动回退 internal' : '如 auto 无可用外部子 Agent 不写明回退，仅按 internal 处理'
     const lines = [
       '[协调 Agent 执行契约]',
       `你是 ${channelName} 入口协调 Agent。`,
@@ -127,7 +142,8 @@ function createAiChatToolsAccess(deps) {
       '规则：只有真实调用工具并获得结果后，才能说“已完成”；否则继续执行或返回明确错误。'
     ]
     if (spawnOn) {
-      lines.push('可在复杂/并行任务时调用 sessions_spawn；默认 runtime="auto"，优先尝试可用外部子 Agent，未命中时自动 fallback 到 internal；可选 external:codex / external:claude / external:gateway / external:opencode，或写 runtime: "external:xxx"；本机未安装则会自动跳过。')
+      const prefs = subOrc.pref.length ? subOrc.pref.join(' / ') : 'codex / claude / gateway / opencode'
+      lines.push(`可在复杂/并行任务时调用 sessions_spawn；默认 runtime="auto"，按顺序优先尝试外部子 Agent（当前顺序：${prefs}），${fallbackPolicy}；可选 external:codex / external:claude / external:gateway / external:opencode，或 runtime: "external:xxx"；本机未安装则会自动跳过。`)
     } else {
       lines.push('当前不允许 sessions_spawn，必须在本会话内完成，不得声称已派发子 Agent。')
     }

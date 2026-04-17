@@ -131,7 +131,11 @@ const DEFAULT_SUBAGENT_ORCHESTRATION = {
   /** 子会话默认不注入 SOUL/IDENTITY/USER 等长身份块（executor 等仍可在 profile 中 inherit_identity） */
   subagentMinimalMemory: true,
   /** 允许 wait_for_result=false 异步 spawn（后台跑 + sessions_subagent_poll 取结果） */
-  allowAsyncSpawn: true
+  allowAsyncSpawn: true,
+  /** auto/runtime:external 时的外部子 Agent 候选顺序 */
+  externalRuntimePreference: ['codex', 'claude', 'gateway', 'opencode'],
+  /** auto 模式无外部可用时，是否在日志/元信息保留 fallback 提示 */
+  reportAutoFallback: true
 }
 
 /** 默认含 ClawHub；list_remote 对 type=clawhub 走搜索 API（见 get-skill.js） */
@@ -542,13 +546,18 @@ function getSubagentOrchestration() {
   const m = all.subagentOrchestration && typeof all.subagentOrchestration === 'object'
     ? all.subagentOrchestration
     : {}
+  const externalRuntimePreference = Array.isArray(m.externalRuntimePreference)
+    ? m.externalRuntimePreference.map(x => String(x || '').trim()).filter(Boolean)
+    : DEFAULT_SUBAGENT_ORCHESTRATION.externalRuntimePreference
   return {
     maxSpawnDepth: Number.isFinite(Number(m.maxSpawnDepth)) ? Math.max(1, Math.min(5, Number(m.maxSpawnDepth))) : DEFAULT_SUBAGENT_ORCHESTRATION.maxSpawnDepth,
     maxConcurrent: Number.isFinite(Number(m.maxConcurrent)) ? Math.max(1, Number(m.maxConcurrent)) : DEFAULT_SUBAGENT_ORCHESTRATION.maxConcurrent,
     maxChildrenPerAgent: Number.isFinite(Number(m.maxChildrenPerAgent)) ? Math.max(1, Number(m.maxChildrenPerAgent)) : DEFAULT_SUBAGENT_ORCHESTRATION.maxChildrenPerAgent,
     allowedProfiles: Array.isArray(m.allowedProfiles) && m.allowedProfiles.length > 0 ? m.allowedProfiles.map((x) => String(x || '').trim()).filter(Boolean) : DEFAULT_SUBAGENT_ORCHESTRATION.allowedProfiles,
     subagentMinimalMemory: m.subagentMinimalMemory !== false,
-    allowAsyncSpawn: m.allowAsyncSpawn !== false
+    allowAsyncSpawn: m.allowAsyncSpawn !== false,
+    externalRuntimePreference,
+    reportAutoFallback: m.reportAutoFallback !== false
   }
 }
 
