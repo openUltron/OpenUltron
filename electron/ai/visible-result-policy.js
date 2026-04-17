@@ -92,10 +92,28 @@ function looksLikeExecutionPromiseWithoutResult(text = '') {
   return patterns.some((re) => re.test(t))
 }
 
-function shouldForceExecutionContinuation(text = '') {
+function looksLikeToolActionRequest(userText = '') {
+  const t = normalizeVisibleReplyText(userText).toLowerCase()
+  if (!t) return false
+  const hasActionVerb =
+    /(打开|访问|截图|检查|查询|搜索|执行|运行|调用|读取|编辑|修改|创建|删除|提交|安装|部署|发布|发送|回复|整理|清理|归档|配置|启动|停止|open|visit|screenshot|check|query|search|run|execute|call|read|edit|modify|create|delete|commit|install|deploy|publish|send|reply|clean|archive|config|start|stop)/i
+  const hasToolObject =
+    /(浏览器|页面|网页|网站|文件|目录|日志|终端|命令|工具|mcp|飞书|telegram|dingtalk|webapp|数据库|db|sql|git|api|script|脚本)/i
+  return hasActionVerb.test(t) && hasToolObject.test(t)
+}
+
+function shouldForceExecutionContinuation(text = '', userText = '') {
   const t = normalizeVisibleReplyText(text)
   if (!t) return true
-  return looksLikeNoResultPlaceholderText(t) || looksLikeExecutionPromiseWithoutResult(t)
+  if (looksLikeNoResultPlaceholderText(t) || looksLikeExecutionPromiseWithoutResult(t)) return true
+
+  // 用户明确在请求“执行动作”，但助手只回了非结果性短文本（且非明确拒绝/受限说明）时，强制再走一轮。
+  if (looksLikeToolActionRequest(userText)) {
+    if (hasConcreteArtifactSignal(t) || hasResultSignals(t)) return false
+    if (/(无法|不能|不可以|做不到|无权限|没权限|受限|未登录|需要你先|请你先|请先)/.test(t)) return false
+    if (t.length <= 140) return true
+  }
+  return false
 }
 
 function hasUsefulVisibleResult(text = '') {

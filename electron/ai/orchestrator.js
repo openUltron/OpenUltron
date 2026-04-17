@@ -1355,7 +1355,7 @@ class Orchestrator {
         const shouldContinueExecutionLoop =
           responseAcceptedWithTools &&
           forcedContinuationCount < 3 &&
-          shouldForceExecutionContinuation(finalText)
+          shouldForceExecutionContinuation(finalText, lastUserContent)
         if (shouldContinueExecutionLoop) {
           forcedContinuationCount++
           appLogger?.warn?.('[AI] 模型未产出最终结果且未调用工具，继续代理循环', {
