@@ -133,30 +133,6 @@ npm run release:all
 - `web-apps/`：沙箱应用（`id/version`）
 - `logs/app.log`：运行日志
 
-## 子 Agent 配置（openultron.json）
-
-`openultron.json` 的 `subagentOrchestration` 新增了两项运行时策略字段：
-
-```json
-{
-  "subagentOrchestration": {
-    "externalRuntimePreference": ["codex", "claude", "gateway", "opencode"],
-    "reportAutoFallback": true
-  }
-}
-```
-
-- `externalRuntimePreference`
-  - 说明：`runtime` 设为 `auto` 或 `external` 时，按该顺序尝试可用外部子 Agent（例如 `codex`、`claude`、`gateway`、`opencode`）。
-  - 支持别名映射（如 `gateway_cli` 会转为 `gateway`）。
-- `reportAutoFallback`
-  - `true`（默认）：在 `auto` 下无可用外部子 Agent，或指定外部不可用时，会在日志与工具过程元信息里保留回退说明。
-  - `false`：不记录该类回退说明。
-
-注意：
-- `externalRuntimePreference` 只定义顺序，不保证外部 runtime 已安装；不存在时仍会跳过。
-- 真实执行失败仍会按内部重试链继续执行。
-
 ## Docs
 
 文档总索引：[`docs/README.md`](./docs/README.md)
