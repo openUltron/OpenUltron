@@ -165,13 +165,64 @@ function hasAnyKeyword(text, keywords) {
   return (keywords || []).some(k => t.includes(String(k).toLowerCase()))
 }
 
+function hasModelIdentityQuestion(text) {
+  const raw = String(text || '')
+  if (!raw.trim()) return false
+  const normalized = raw
+    .replace(/[\u0000-\u001f]/g, ' ')
+    .replace(/[，,。、！？!?;:：；…]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+
+  const zhKeywords = [
+    '你是什么模型',
+    '你是哪种模型',
+    '你是哪个模型',
+    '你现在用的模型',
+    '当前模型',
+    '当前用的是哪个模型',
+    '你用的是哪个模型',
+    '当前模型是',
+    '你是什么 ai 模型',
+    '你是什么 llm',
+    '你是什么人工智能模型',
+    '你的模型',
+    '你是什么 llm 模型'
+  ]
+  const enKeywords = [
+    'what model',
+    'which model',
+    'model name',
+    'what llm',
+    "what's your model",
+    'what model are you',
+    'which llm are you',
+  ]
+
+  if (hasAnyKeyword(normalized, zhKeywords)) return true
+  if (hasAnyKeyword(normalized, enKeywords)) return true
+
+  // 兼容直接问法：“你用的模型是…”
+  const directZh = /(你是|你现在用|你现在使用|你用的是|当前|请问(?:你的)?模型|你用的).{0,16}(openai|claude|qwen|gpt|gemini|deepseek|glm|kimi|llm|模型)/u
+  const directEn = /(what|which|are you|model|llm|current model|using now|using).{0,24}(model|llm|provider|vendor)/u
+  if (directZh.test(normalized) && /(模型|llm|large language model|language model|ai 模型|vendor|provider)/u.test(raw.toLowerCase())) {
+    return true
+  }
+  if (/\b(model|llm)\b/.test(normalized) && /\b(are|is|what|which|who|current)\b/.test(normalized) && directEn.test(normalized)) {
+    return true
+  }
+  return false
+}
+
 function detectPromptIntentFlags(userText) {
   const t = String(userText || '')
   return {
     learnSkill: hasAnyKeyword(t, ['学习技能', '新技能', '孵化技能', 'skill', 'skill.md']),
     learnFromWeb: hasAnyKeyword(t, ['网上', '社区', 'github', 'clawhub', '爬', 'web', '搜索']) &&
       hasAnyKeyword(t, ['技能', '玩法', 'skill', 'agent']),
-    configGuide: hasAnyKeyword(t, ['配置', '参数', 'api key', 'apikey', 'token', 'provider', 'openrouter', 'openai', '飞书', 'telegram', 'dingtalk', 'webhook'])
+    configGuide: hasAnyKeyword(t, ['配置', '参数', 'api key', 'apikey', 'token', 'provider', 'openrouter', 'openai', '飞书', 'telegram', 'dingtalk', 'webhook']),
+    identityInquiry: hasModelIdentityQuestion(t)
   }
 }
 
@@ -377,7 +428,7 @@ class Orchestrator {
   }
 
   // ---------- 启动 Agent 对话循环 ----------
-  async startChat({ sessionId, messages, model, tools, sender, config: externalConfig, projectPath, panelId, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId, subagentMinimalMemory = false, inheritIdentityFromProfile = false }) {
+  async startChat({ sessionId, messages, model, tools, sender, config: externalConfig, projectPath, panelId, feishuChatId, feishuTenantKey, feishuDocHost, feishuSenderOpenId, feishuSenderUserId, subagentMinimalMemory = false, inheritIdentityFromProfile = false, allowChannelSend = true }) {
     const chatRunId = createChatRunId(sessionId)
     let config = externalConfig || this.getConfig()
     const requestedModel = model && String(model).trim() ? String(model).trim() : ''
@@ -490,9 +541,17 @@ class Orchestrator {
     const maxIterations = config.maxToolIterations || 0 // 0 = 不限制（安全上限 200）
     const safeMax = maxIterations > 0 ? maxIterations : 200
     const displayName = readAgentDisplayName() || 'Ultron'
+    const minimalPromptMode = String(process.env.OPENULTRON_PROMPT_STYLE || 'minimal').trim().toLowerCase() !== 'rich'
+    let currentMessages = [...messages]
+    const intentText = pickRecentUserIntentText(currentMessages)
+    const promptIntentFlags = detectPromptIntentFlags(intentText)
+    const isModelIdentityInquiry = Boolean(promptIntentFlags && promptIntentFlags.identityInquiry)
+    const shouldBypassIdentitySanitization = isModelIdentityInquiry
     const normalizeAssistantContent = (content) =>
       typeof content === 'string'
-        ? sanitizeAssistantIdentityWording(sanitizeAssistantModelIdentity(content, useModel), displayName)
+        ? (shouldBypassIdentitySanitization
+            ? content
+            : sanitizeAssistantIdentityWording(sanitizeAssistantModelIdentity(content, useModel), displayName))
         : content
     const flattenAssistantText = (content) => {
       if (typeof content === 'string') return content
@@ -507,10 +566,7 @@ class Orchestrator {
         .join('')
     }
     let iteration = 0
-    let currentMessages = [...messages]
     let forcedContinuationCount = 0
-    const intentText = pickRecentUserIntentText(currentMessages)
-    const promptIntentFlags = detectPromptIntentFlags(intentText)
     /** 子会话瘦身：不注入 SOUL/IDENTITY/USER 等（见 agent-orchestration-redesign）；profile inherit_identity 时可恢复身份块 */
     const subMinimal = !!subagentMinimalMemory && String(sessionId || '').startsWith('sub-') && !inheritIdentityFromProfile
 
@@ -526,15 +582,15 @@ class Orchestrator {
     // Memory 注入：全局 MEMORY.md + 项目相关 top-5 记忆
     try {
       const memParts = []
-      const promptStyle = String(process.env.OPENULTRON_PROMPT_STYLE || 'minimal').trim().toLowerCase()
-      const minimalPromptMode = promptStyle !== 'rich'
       const activeSession = this.activeSessions.get(sessionId)
-      const minimalToolNames = Array.isArray(tools)
-        ? tools
-          .map((t) => String(t?.function?.name || '').trim())
-          .filter(Boolean)
-          .slice(0, 120)
-        : []
+      const minimalToolNames = isModelIdentityInquiry
+        ? []
+        : (Array.isArray(tools)
+          ? tools
+            .map((t) => String(t?.function?.name || '').trim())
+            .filter(Boolean)
+            .slice(0, 120)
+          : [])
       const minimalParts = minimalPromptMode
         ? (() => {
             const p = []
@@ -564,220 +620,228 @@ class Orchestrator {
           })()
         : null
       const sandboxRoot = webAppSandbox ? String(projectPath).trim() : ''
-
-      // 0. 当前应用边界（最高优先级）
-      if (webAppSandbox) {
-        memParts.push(buildWebAppStudioSandboxMemoryBlock(sandboxRoot))
-      } else if (!subMinimal) {
+      if (isModelIdentityInquiry) {
+        const currentModelText = `当前模型：${(String(useModel || '').trim() || '未知')}。
+直接回答这个模型，不要额外解释你的职责、能力边界或处理步骤。`
         memParts.push(
-          '[当前应用]\n' +
-          '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
-          '用户要求改外部项目时，先执行命令定位项目与文件，再改；不要在未执行时声称“找不到”。\n' +
-          '安装命令前先查 query_command_log(recent_successful_commands)，已装过则不重复安装。\n' +
-          '排查 OpenUltron 自身异常（Gateway、渠道、内置工具失败）时用 read_app_log 读 app.log 尾部；可按 keyword 缩小范围。\n' +
-          '[「附近」与地域类问题]\n' +
-          '应用**无内置自动定位**（不提供 GPS/经纬度工具）。用户提到附近、周边、当地、本地天气/美食/景点等时：请用户说明**城市或区域**，或参考 USER.md 等已有信息，再用 web_search / web_fetch；勿编造用户位置。\n' +
-          '缺依赖时优先内置工具（如 ffmpeg_run、edge_tts_synthesize），失败再 execute_command 安装或重试一次。\n' +
-          '用户明确要求语音时必须真实调用语音相关工具，不得只文字声称完成。\n' +
-          `默认工作空间：${getWorkspaceRoot()}。\n` +
-          `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
-          '生成 PPT/PDF/Excel 等二进制文件必须用 execute_command 实际生成，并返回绝对路径。\n' +
-          '侧栏「应用」/ Web 沙箱（~/.openultron/web-apps）：**必须**用 **webapp_studio_invoke** 改代码或完整新建功能流；**禁止**对 web-apps 下文件使用 file_operation(write)、apply_patch、或将 execute_command 的 cwd 指到该目录（会被拒绝）。**web_apps_list** 查已装（模型应优先用它，勿让用户背 id）；**web_apps_create** 或 webapp_studio_invoke(create_new) 新建；编辑用 app_hint / path / id@version。\n' +
-          '委派 **webapp_studio_invoke** 时：若用户要「带界面的功能」（表单、上传、按钮、邮件内容编辑区等），在 **task** 里明确写「须同时修改 index.html（或实际入口页）与 service.js / 后端」，避免子 Agent 只改服务端。\n' +
-          '只有工具明确成功才能说“已完成”；失败必须如实反馈错误。\n' +
-          '默认直接执行并给结果，减少模板化空话。'
+          '[模型身份查询]\n' +
+          currentModelText
         )
-      }
-
-      // 0.1 当前模型（从 prompts/current-model.md 或默认）
-      const currentModelText = loadPrompt('current-model', { model: useModel })
-      if (currentModelText) memParts.push(currentModelText)
-
-      // 0.12 任务完成原则（从 prompts/task-persistence.md 或默认；主会话与工作室均注入）
-      const taskPersistenceText = loadPrompt('task-persistence')
-      if (taskPersistenceText) memParts.push(taskPersistenceText)
-
-      memParts.push(buildLocalNowContextBlock())
-
-      // 0.5 飞书会话（从 prompts/feishu-session.md 或默认）
-      const session = this.activeSessions.get(sessionId)
-      if (session && session.feishuChatId) {
-        const feishuText = loadPrompt('feishu-session')
-        if (feishuText) memParts.push(feishuText)
-        const feishuDocsText = loadPrompt('feishu-docs')
-        if (feishuDocsText) memParts.push(feishuDocsText)
-        const feishuSheetBitableText = loadPrompt('feishu-sheets-bitable')
-        if (feishuSheetBitableText) memParts.push(feishuSheetBitableText)
-        memParts.push(
-          '[飞书附件处理规则]\n' +
-          '当用户消息中已包含附件的 local_path（例如 [Inbound Attachment Paths] 或 local_path: /...）时：\n' +
-          '1) 请优先使用这些路径读取/分析；\n' +
-          '2) 避免在 ~/Downloads 或其他目录盲目搜索同名文件；\n' +
-          '3) 若路径读取失败，再明确说明失败原因并给出下一步。'
-        )
-      }
-
-      // 0.6 联网与实时信息（prompts/realtime-info.md）
-      const realtimeText = loadPrompt('realtime-info')
-      if (realtimeText) memParts.push(realtimeText)
-
-      // 0.62 编程执行优先（prompts/coding-execution.md）
-      const codingExecutionText = loadPrompt('coding-execution')
-      if (codingExecutionText) memParts.push(codingExecutionText)
-
-      // 0.63 本机技能索引（含 workspace/skills；优先级见 docs/SKILLS-PACK-COMPAT.md）
-      if (typeof this.getSkillsForPrompt === 'function') {
-        try {
-          const proj = String(session?.projectPath || '').trim()
-          const skillRows = this.getSkillsForPrompt(proj) || []
-          const allLines = skillRows.filter(s => s && s.id).map(s => `- [${s.id}] ${s.name || s.id}`)
-          const lines = allLines.slice(0, 40)
-          if (allLines.length > 0) {
-            memParts.push(
-              '[本机已安装技能]\n' +
-              `以下展示 ${lines.length}/${allLines.length} 个；**get_skill 的 skill_id 必须为方括号内的完整 id**（例如 weather 技能目录常为 weather-1.0.0，不能用简称 weather）。\n` +
-              lines.join('\n') +
-              (allLines.length > lines.length ? `\n- ...(其余 ${allLines.length - lines.length} 个已省略)` : '') +
-              '\n\n**何时必须用技能**：用户要求「用某技能 / 按 xxx 技能 / 查天气」等时，必须先 **get_skill(action="get", skill_id="完整id")** 再按其步骤执行（常见为 execute_command 调用 curl 等），禁止跳过 get_skill 凭记忆编造天气或步骤。'
-            )
-            memParts.push(
-              '[技能执行与 git 规则]\n' +
-              `你有上述可用技能（共 ${allLines.length} 个），请根据用户意图自动判断是否需要使用。需要使用某个技能时，先调用 get_skill(action="get", skill_id="...") 获取完整内容（含描述和步骤）后严格执行。\n\n` +
-              '## 技能自动优化规则\n' +
-              '当你执行某个技能并在对话中做了调整（如修复了步骤错误、补充了遗漏环节、根据用户反馈优化了流程），' +
-              '在对话结束前必须调用 install_skill(action="update") 将最终正确的版本写回该技能文件。\n' +
-              '触发条件（满足任一即更新）：\n' +
-              '1. 执行技能时遇到报错，调整后成功\n' +
-              '2. 用户指出技能步骤有问题并确认了修正方案\n' +
-              '3. 你主动补充了技能中缺失的关键步骤且用户认可\n' +
-              '4. 你通过 run_script 写出的脚本运行成功且可复用，必须用 install_skill 保存为 type: script 技能\n' +
-              '更新时保留原有 frontmatter，只修改正文内容，不得降低原有步骤的完整性。\n\n' +
-              '## git commit 确认规则\n' +
-              '执行 git commit 前调用 user_confirmation 时，必须带上 allow_push: true 参数，' +
-              '让用户可以选择「确认并推送」一步完成提交+推送。若用户选择「确认并推送」，' +
-              '工具返回结果中 push_after_commit 为 true，此时在 commit 成功后立即执行 git push origin <当前分支>。'
-            )
-          }
-        } catch (e) {
-          console.warn('[AI] 技能索引注入失败:', e.message)
+      } else {
+        // 0. 当前应用边界（最高优先级）
+        if (webAppSandbox) {
+          memParts.push(buildWebAppStudioSandboxMemoryBlock(sandboxRoot))
+        } else if (!subMinimal) {
+          memParts.push(
+            '[当前应用]\n' +
+            '你正在运行并直接操作的应用是 **OpenUltron**（本应用）。\n' +
+            '用户要求改外部项目时，先执行命令定位项目与文件，再改；不要在未执行时声称“找不到”。\n' +
+            '安装命令前先查 query_command_log(recent_successful_commands)，已装过则不重复安装。\n' +
+            '排查 OpenUltron 自身异常（Gateway、渠道、内置工具失败）时用 read_app_log 读 app.log 尾部；可按 keyword 缩小范围。\n' +
+            '[「附近」与地域类问题]\n' +
+            '应用**无内置自动定位**（不提供 GPS/经纬度工具）。用户提到附近、周边、当地、本地天气/美食/景点等时：请用户说明**城市或区域**，或参考 USER.md 等已有信息，再用 web_search / web_fetch；勿编造用户位置。\n' +
+            '缺依赖时优先内置工具（如 ffmpeg_run、edge_tts_synthesize），失败再 execute_command 安装或重试一次。\n' +
+            '用户明确要求语音时必须真实调用语音相关工具，不得只文字声称完成。\n' +
+            `默认工作空间：${getWorkspaceRoot()}。\n` +
+            `当无真实项目路径时：脚本优先写入 ${path.join(getWorkspaceRoot(), 'scripts')}，新建项目优先放入 ${path.join(getWorkspaceRoot(), 'projects')}，避免散落在其他目录。\n` +
+            '生成 PPT/PDF/Excel 等二进制文件必须用 execute_command 实际生成，并返回绝对路径。\n' +
+            '侧栏「应用」/ Web 沙箱（~/.openultron/web-apps）：**必须**用 **webapp_studio_invoke** 改代码或完整新建功能流；**禁止**对 web-apps 下文件使用 file_operation(write)、apply_patch、或将 execute_command 的 cwd 指到该目录（会被拒绝）。**web_apps_list** 查已装（模型应优先用它，勿让用户背 id）；**web_apps_create** 或 webapp_studio_invoke(create_new) 新建；编辑用 app_hint / path / id@version。\n' +
+            '委派 **webapp_studio_invoke** 时：若用户要「带界面的功能」（表单、上传、按钮、邮件内容编辑区等），在 **task** 里明确写「须同时修改 index.html（或实际入口页）与 service.js / 后端」，避免子 Agent 只改服务端。\n' +
+            '只有工具明确成功才能说“已完成”；失败必须如实反馈错误。\n' +
+            '默认直接执行并给结果，减少模板化空话。'
+          )
         }
-      }
 
-      // 0.65 浏览器自动化（prompts/browser-automation.md）
-      const browserText = loadPrompt('browser-automation')
-      if (browserText) memParts.push(browserText)
+        // 0.1 当前模型（从 prompts/current-model.md 或默认）
+        const currentModelText = loadPrompt('current-model', { model: useModel })
+        if (!shouldBypassIdentitySanitization && currentModelText) memParts.push(currentModelText)
 
-      // 0.66 桌面原生通知（prompts/desktop-notification.md）
-      const desktopNotifText = loadPrompt('desktop-notification')
-      if (desktopNotifText) memParts.push(desktopNotifText)
+        // 0.12 任务完成原则（从 prompts/task-persistence.md 或默认；主会话与工作室均注入）
+        const taskPersistenceText = loadPrompt('task-persistence')
+        if (taskPersistenceText) memParts.push(taskPersistenceText)
 
-      // 0.67 通用工具缺口兜底（prompts/tool-gap-fallback.md）
-      const toolGapFallbackText = loadPrompt('tool-gap-fallback')
-      if (toolGapFallbackText) memParts.push(toolGapFallbackText)
+        memParts.push(buildLocalNowContextBlock())
 
-      // 1. 全局偏好文件 MEMORY.md
-      if (!subMinimal) {
-        const globalMd = readGlobalMemoryMd()
-        if (globalMd) memParts.push(`[全局偏好 - MEMORY.md]\n${clipInjectedSection(globalMd, 1800)}`)
-      }
-
-      // 2. 本应用 SOUL.md / IDENTITY.md（应用工作室沙箱会话不注入，避免与「改 Hello 页面」冲突）
-      if (!webAppSandbox && !subMinimal) {
-        const soulMd = readSoulMd()
-        if (soulMd) memParts.push(`[SOUL.md - 性格与原则]\n${clipInjectedSection(soulMd, 1800)}`)
-
-        // 2.1 IDENTITY.md（Agent 名字、形象、vibe、代词）
-        const identityMd = readIdentityMd()
-        if (identityMd) memParts.push(`[IDENTITY.md]\n${clipInjectedSection(identityMd, 1500)}`)
-        // 回复与自我介绍：仅用 IDENTITY/SOUL，禁止通用话术（尤其飞书等渠道）
-        memParts.push(
-          '[回复与自我介绍]\n' +
-          '打招呼、回复「你好」「在吗」或自我介绍时，请按 IDENTITY.md 与 SOUL.md 中的名字、语气与身份来回复。不要自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术；若 IDENTITY 里已有名字与 vibe，就用该名字与语气，不要额外套用上述模板。'
-        )
-        // 上下文消歧 + 正确路径：名字/身份指本应用；文件在应用根目录，非 prompts 下
-        memParts.push(
-          '[名字与身份修改]\n' +
-          '当用户说「改名字」「改身份」「修改角色」「你可以修改名字/身份吗」等且**未明确说是某外部项目**时，指**本应用（OpenUltron）**的身份配置。\n' +
-          '**正确路径**：IDENTITY.md、SOUL.md 位于**应用根目录**（与 prompts 目录同级），例如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md。文件名请使用**大写** IDENTITY.md、SOUL.md，请勿写入 prompts/ 目录或使用 identity.md（小写）。修改时请用 file_operation 写入上述路径，或引导用户点击「编辑我的名字与角色」打开正确文件。'
-        )
-      }
-
-      // 2.2 USER.md（用户信息：姓名、时区、工作、偏好等）
-      if (!subMinimal) {
-        const userMd = readUserMd()
-        if (userMd) memParts.push(`[USER.md]\n${clipInjectedSection(userMd, 1200)}`)
-
-        // 2.3 BOOT.md（会话启动时简短指令）
-        const bootMd = readBootMd()
-        if (bootMd) memParts.push(`[BOOT.md - 启动指令]\n${clipInjectedSection(bootMd, 900)}`)
-      }
-
-      // 2.4 AGENTS.md / TOOLS.md（工作区 Agent 与工具说明，若存在则注入）
-      const agentsMd = readAgentsMd()
-      if (agentsMd) memParts.push(`[AGENTS.md - 工作区 Agent 说明]\n${clipInjectedSection(agentsMd, 1200)}`)
-      const toolsMd = readToolsMd()
-      if (toolsMd) memParts.push(`[TOOLS.md - 工作区工具说明]\n${clipInjectedSection(toolsMd, 1200)}`)
-
-      // 2.5–2.7 学习/配置引导（子会话瘦身时跳过）
-      if (!subMinimal) {
-        const learnFlowText = loadPrompt('learn-skill-flow')
-        if (learnFlowText && promptIntentFlags.learnSkill) memParts.push(clipInjectedSection(learnFlowText, 1800))
-
-        const learnWebText = loadPrompt('learn-skills-from-web')
-        if (learnWebText && promptIntentFlags.learnFromWeb) memParts.push(clipInjectedSection(learnWebText, 1800))
-
-        const configGuideText = loadPrompt('openultron-config-guide')
-        if (configGuideText && promptIntentFlags.configGuide) memParts.push(clipInjectedSection(configGuideText, 2200))
-      }
-
-      // 2.8 可用供应商与模型（主会话 vs 子任务；先验证再切换）
-      memParts.push(
-        '[可用供应商与模型]\n' +
-        '**主会话**的供应商与模型由用户在设置页配置。为**子任务**指定模型请用 sessions_spawn(provider=..., model=...)，勿用 ai_config_control 改主会话以免错配。若需改主会话：先调用 verify_provider_model(provider=..., model=...) 验证该供应商+模型可用，仅当返回 success 后再调用 ai_config_control 的 switch_provider 或 switch_model（switch_model 切到别家模型时请同时传 provider）。\n' +
-        '用户问当前/可用模型时，可选用 list_configured_models 或 list_providers_and_models 获取配置后回答，也可根据上下文自然回答。\n' +
-        '派生子 Agent：可先 verify_provider_model(provider, model) 确认可用，再 sessions_spawn(task=..., provider=..., model=...)。'
-      )
-
-      // 3. 项目相关碎片记忆
-      if (!subMinimal && projectPath) {
-        const topMemories = getTopMemoriesForProject(projectPath, 5)
-        if (topMemories.length > 0) {
-          const memText = topMemories.map((m, i) => `${i + 1}. ${clipInjectedSection(m.content, 220)}`).join('\n')
-          memParts.push(`[项目记忆]\n${memText}`)
+        // 0.5 飞书会话（从 prompts/feishu-session.md 或默认）
+        const session = this.activeSessions.get(sessionId)
+        if (session && session.feishuChatId) {
+          const feishuText = loadPrompt('feishu-session')
+          if (feishuText) memParts.push(feishuText)
+          const feishuDocsText = loadPrompt('feishu-docs')
+          if (feishuDocsText) memParts.push(feishuDocsText)
+          const feishuSheetBitableText = loadPrompt('feishu-sheets-bitable')
+          if (feishuSheetBitableText) memParts.push(feishuSheetBitableText)
+          memParts.push(
+            '[飞书附件处理规则]\n' +
+            '当用户消息中已包含附件的 local_path（例如 [Inbound Attachment Paths] 或 local_path: /...）时：\n' +
+            '1) 请优先使用这些路径读取/分析；\n' +
+            '2) 避免在 ~/Downloads 或其他目录盲目搜索同名文件；\n' +
+            '3) 若路径读取失败，再明确说明失败原因并给出下一步。'
+          )
         }
-      }
 
-      // 3.1 项目 AGENT.md（与主窗口原 ChatPanel 注入路径一致：.gitManager/AGENT.md）
-      if (!subMinimal) {
-        const pp = String(projectPath || '').trim()
-        if (pp && !pp.startsWith('__') && path.isAbsolute(pp)) {
+        // 0.6 联网与实时信息（prompts/realtime-info.md）
+        const realtimeText = loadPrompt('realtime-info')
+        if (realtimeText) memParts.push(realtimeText)
+
+        // 0.62 编程执行优先（prompts/coding-execution.md）
+        const codingExecutionText = loadPrompt('coding-execution')
+        if (codingExecutionText) memParts.push(codingExecutionText)
+
+        // 0.63 本机技能索引（含 workspace/skills；优先级见 docs/SKILLS-PACK-COMPAT.md）
+        if (typeof this.getSkillsForPrompt === 'function') {
           try {
-            const agentMdPath = path.join(pp, '.gitManager', 'AGENT.md')
-            if (fs.existsSync(agentMdPath)) {
-              const raw = fs.readFileSync(agentMdPath, 'utf-8').trim()
-              if (raw) memParts.push(`## 项目上下文（AGENT.md）\n${clipInjectedSection(raw, 4000)}`)
+            const proj = String(session?.projectPath || '').trim()
+            const skillRows = this.getSkillsForPrompt(proj) || []
+            const allLines = skillRows.filter(s => s && s.id).map(s => `- [${s.id}] ${s.name || s.id}`)
+            const lines = allLines.slice(0, 40)
+            if (allLines.length > 0) {
+              memParts.push(
+                '[本机已安装技能]\n' +
+                `以下展示 ${lines.length}/${allLines.length} 个；**get_skill 的 skill_id 必须为方括号内的完整 id**（例如 weather 技能目录常为 weather-1.0.0，不能用简称 weather）。\n` +
+                lines.join('\n') +
+                (allLines.length > lines.length ? `\n- ...(其余 ${allLines.length - lines.length} 个已省略)` : '') +
+                '\n\n**何时必须用技能**：用户要求「用某技能 / 按 xxx 技能 / 查天气」等时，必须先 **get_skill(action="get", skill_id="完整id")** 再按其步骤执行（常见为 execute_command 调用 curl 等），禁止跳过 get_skill 凭记忆编造天气或步骤。'
+              )
+              memParts.push(
+                '[技能执行与 git 规则]\n' +
+                `你有上述可用技能（共 ${allLines.length} 个），请根据用户意图自动判断是否需要使用。需要使用某个技能时，先调用 get_skill(action="get", skill_id="...") 获取完整内容（含描述和步骤）后严格执行。\n\n` +
+                '## 技能自动优化规则\n' +
+                '当你执行某个技能并在对话中做了调整（如修复了步骤错误、补充了遗漏环节、根据用户反馈优化了流程），' +
+                '在对话结束前必须调用 install_skill(action="update") 将最终正确的版本写回该技能文件。\n' +
+                '触发条件（满足任一即更新）：\n' +
+                '1. 执行技能时遇到报错，调整后成功\n' +
+                '2. 用户指出技能步骤有问题并确认了修正方案\n' +
+                '3. 你主动补充了技能中缺失的关键步骤且用户认可\n' +
+                '4. 你通过 run_script 写出的脚本运行成功且可复用，必须用 install_skill 保存为 type: script 技能\n' +
+                '更新时保留原有 frontmatter，只修改正文内容，不得降低原有步骤的完整性。\n\n' +
+                '## git commit 确认规则\n' +
+                '执行 git commit 前调用 user_confirmation 时，必须带上 allow_push: true 参数，' +
+                '让用户可以选择「确认并推送」一步完成提交+推送。若用户选择「确认并推送」，' +
+                '工具返回结果中 push_after_commit 为 true，此时在 commit 成功后立即执行 git push origin <当前分支>。'
+              )
             }
-          } catch (_) { /* ignore */ }
+          } catch (e) {
+            console.warn('[AI] 技能索引注入失败:', e.message)
+          }
         }
-      }
 
-      // 4. 知识库经验教训（自动注入，无需再调 read_lessons_learned 即可直接利用）
-      if (!subMinimal) {
-        const lessonsContent = readLessonsLearned()
-        if (lessonsContent && lessonsContent.trim()) {
-          memParts.push(`[知识库 - 经验教训]\n${clipInjectedSection(lessonsContent.trim(), 2200)}\n\n**使用方式**：优先复用上述经验，避免重复试错；写 lesson_save 时记录具体场景、原因、命令或路径。`)
+        // 0.65 浏览器自动化（prompts/browser-automation.md）
+        const browserText = loadPrompt('browser-automation')
+        if (browserText) memParts.push(browserText)
+
+        // 0.66 桌面原生通知（prompts/desktop-notification.md）
+        const desktopNotifText = loadPrompt('desktop-notification')
+        if (desktopNotifText) memParts.push(desktopNotifText)
+
+        // 0.67 通用工具缺口兜底（prompts/tool-gap-fallback.md）
+        const toolGapFallbackText = loadPrompt('tool-gap-fallback')
+        if (toolGapFallbackText) memParts.push(toolGapFallbackText)
+
+        // 1. 全局偏好文件 MEMORY.md
+        if (!subMinimal) {
+          const globalMd = readGlobalMemoryMd()
+          if (globalMd) memParts.push(`[全局偏好 - MEMORY.md]\n${clipInjectedSection(globalMd, 1800)}`)
         }
-      }
 
-      memParts.push(
-        '[记忆工具选用]\n' +
-        '• **memory_save**：用户偏好、项目配置、重要事实等「可检索的碎片事实」。\n' +
-        '• **lesson_save**：踩坑与可复用做法、命令/路径/步骤类「经验教训」（写入 LESSONS_LEARNED）；用户明确拒绝某类操作时用 category **策略**。\n' +
-        '偏「是什么」走 memory_save；偏「下次别怎样 / 怎样做」走 lesson_save，避免混用。'
-      )
+        // 2. 本应用 SOUL.md / IDENTITY.md（应用工作室沙箱会话不注入，避免与「改 Hello 页面」冲突）
+        if (!webAppSandbox && !subMinimal) {
+          const soulMd = readSoulMd()
+          if (soulMd) memParts.push(`[SOUL.md - 性格与原则]\n${clipInjectedSection(soulMd, 1800)}`)
 
-      if (minimalPromptMode && Array.isArray(minimalParts) && minimalParts.length > 0) {
-        memParts.splice(0, memParts.length, ...minimalParts)
+          // 2.1 IDENTITY.md（Agent 名字、形象、vibe、代词）
+          const identityMd = readIdentityMd()
+          if (identityMd) memParts.push(`[IDENTITY.md]\n${clipInjectedSection(identityMd, 1500)}`)
+          // 回复与自我介绍：仅用 IDENTITY/SOUL，禁止通用话术（尤其飞书等渠道）
+          memParts.push(
+            '[回复与自我介绍]\n' +
+            '打招呼、回复「你好」「在吗」或自我介绍时，请按 IDENTITY.md 与 SOUL.md 中的名字、语气与身份来回复。不要自称「OpenUltron 的 AI 助手」「随时为您服务」等通用话术；若 IDENTITY 里已有名字与 vibe，就用该名字与语气，不要额外套用上述模板。'
+          )
+          // 上下文消歧 + 正确路径：名字/身份指本应用；文件在应用根目录，非 prompts 下
+          memParts.push(
+            '[名字与身份修改]\n' +
+            '当用户说「改名字」「改身份」「修改角色」「你可以修改名字/身份吗」等且**未明确说是某外部项目**时，指**本应用（OpenUltron）**的身份配置。\n' +
+            '**正确路径**：IDENTITY.md、SOUL.md 位于**应用根目录**（与 prompts 目录同级），例如 ~/.openultron/IDENTITY.md、~/.openultron/SOUL.md。文件名请使用**大写** IDENTITY.md、SOUL.md，请勿写入 prompts/ 目录或使用 identity.md（小写）。修改时请用 file_operation 写入上述路径，或引导用户点击「编辑我的名字与角色」打开正确文件。'
+          )
+        }
+
+        // 2.2 USER.md（用户信息：姓名、时区、工作、偏好等）
+        if (!subMinimal) {
+          const userMd = readUserMd()
+          if (userMd) memParts.push(`[USER.md]\n${clipInjectedSection(userMd, 1200)}`)
+
+          // 2.3 BOOT.md（会话启动时简短指令）
+          const bootMd = readBootMd()
+          if (bootMd) memParts.push(`[BOOT.md - 启动指令]\n${clipInjectedSection(bootMd, 900)}`)
+        }
+
+        // 2.4 AGENTS.md / TOOLS.md（工作区 Agent 与工具说明，若存在则注入）
+        const agentsMd = readAgentsMd()
+        if (agentsMd) memParts.push(`[AGENTS.md - 工作区 Agent 说明]\n${clipInjectedSection(agentsMd, 1200)}`)
+        const toolsMd = readToolsMd()
+        if (toolsMd) memParts.push(`[TOOLS.md - 工作区工具说明]\n${clipInjectedSection(toolsMd, 1200)}`)
+
+        // 2.5–2.7 学习/配置引导（子会话瘦身时跳过）
+        if (!subMinimal) {
+          const learnFlowText = loadPrompt('learn-skill-flow')
+          if (learnFlowText && promptIntentFlags.learnSkill) memParts.push(clipInjectedSection(learnFlowText, 1800))
+
+          const learnWebText = loadPrompt('learn-skills-from-web')
+          if (learnWebText && promptIntentFlags.learnFromWeb) memParts.push(clipInjectedSection(learnWebText, 1800))
+
+          const configGuideText = loadPrompt('openultron-config-guide')
+          if (configGuideText && promptIntentFlags.configGuide) memParts.push(clipInjectedSection(configGuideText, 2200))
+        }
+
+        // 2.8 可用供应商与模型（主会话 vs 子任务；先验证再切换）
+        memParts.push(
+          '[可用供应商与模型]\n' +
+          '**主会话**的供应商与模型由用户在设置页配置。为**子任务**指定模型请用 sessions_spawn(provider=..., model=...)，勿用 ai_config_control 改主会话以免错配。若需改主会话：先调用 verify_provider_model(provider=..., model=...) 验证该供应商+模型可用，仅当返回 success 后再调用 ai_config_control 的 switch_provider 或 switch_model（switch_model 切到别家模型时请同时传 provider）。\n' +
+          '用户问当前/可用模型时，可选用 list_configured_models 或 list_providers_and_models 获取配置后回答，也可根据上下文自然回答。\n' +
+          '派生子 Agent：可先 verify_provider_model(provider, model) 确认可用，再 sessions_spawn(task=..., provider=..., model=...)。'
+        )
+
+        // 3. 项目相关碎片记忆
+        if (!subMinimal && projectPath) {
+          const topMemories = getTopMemoriesForProject(projectPath, 5)
+          if (topMemories.length > 0) {
+            const memText = topMemories.map((m, i) => `${i + 1}. ${clipInjectedSection(m.content, 220)}`).join('\n')
+            memParts.push(`[项目记忆]\n${memText}`)
+          }
+        }
+
+        // 3.1 项目 AGENT.md（与主窗口原 ChatPanel 注入路径一致：.gitManager/AGENT.md）
+        if (!subMinimal) {
+          const pp = String(projectPath || '').trim()
+          if (pp && !pp.startsWith('__') && path.isAbsolute(pp)) {
+            try {
+              const agentMdPath = path.join(pp, '.gitManager', 'AGENT.md')
+              if (fs.existsSync(agentMdPath)) {
+                const raw = fs.readFileSync(agentMdPath, 'utf-8').trim()
+                if (raw) memParts.push(`## 项目上下文（AGENT.md）\n${clipInjectedSection(raw, 4000)}`)
+              }
+            } catch (_) { /* ignore */ }
+          }
+        }
+
+        // 4. 知识库经验教训（自动注入，无需再调 read_lessons_learned 即可直接利用）
+        if (!subMinimal) {
+          const lessonsContent = readLessonsLearned()
+          if (lessonsContent && lessonsContent.trim()) {
+            memParts.push(`[知识库 - 经验教训]\n${clipInjectedSection(lessonsContent.trim(), 2200)}\n\n**使用方式**：优先复用上述经验，避免重复试错；写 lesson_save 时记录具体场景、原因、命令或路径。`)
+          }
+        }
+
+        memParts.push(
+          '[记忆工具选用]\n' +
+          '• **memory_save**：用户偏好、项目配置、重要事实等「可检索的碎片事实」。\n' +
+          '• **lesson_save**：踩坑与可复用做法、命令/路径/步骤类「经验教训」（写入 LESSONS_LEARNED）；用户明确拒绝某类操作时用 category **策略**。\n' +
+          '偏「是什么」走 memory_save；偏「下次别怎样 / 怎样做」走 lesson_save，避免混用。'
+        )
+
+        if (!isModelIdentityInquiry && minimalPromptMode && Array.isArray(minimalParts) && minimalParts.length > 0) {
+          memParts.splice(0, memParts.length, ...minimalParts)
+        }
       }
 
       const memSystemMsg = {
@@ -1002,9 +1066,9 @@ class Orchestrator {
           for (let mi = 0; mi < candidatesToTry.length; mi++) {
             const tryModel = candidatesToTry[mi].model
             const tryConfig = candidatesToTry[mi].routeConfig || config
-            const tryAnthropic = this._isClaudeModel(tryModel)
-            try {
-              // 在流式正文前先插入消息内提示，随后同一 assistant 气泡继续追加备用模型输出
+              const tryAnthropic = this._isClaudeModel(tryModel)
+              try {
+                // 在流式正文前先插入消息内提示，随后同一 assistant 气泡继续追加备用模型输出
               if (mi > 0 && canSend(wrappedSender)) {
                 const prev = candidatesToTry[mi - 1]
                 const prevModel = prev?.model ? String(prev.model).trim() : ''
@@ -1017,8 +1081,9 @@ class Orchestrator {
                 console.log(`[AI] 已故障转移到备用模型: ${tryModel} @ ${tryHost || '(default host)'}`)
               }
               const messagesToSend = tryAnthropic ? currentMessages : this._sanitizeOpenAIMessages(currentMessages)
-              const toolModes = sanitizedTools.length > 0
-                ? [{ tools: sanitizedTools, withTools: true }, { tools: undefined, withTools: false }]
+              const effectiveTools = isModelIdentityInquiry ? [] : sanitizedTools
+              const toolModes = effectiveTools.length > 0
+                ? [{ tools: effectiveTools, withTools: true }, { tools: undefined, withTools: false }]
                 : [{ tools: undefined, withTools: false }]
               let lastModeErr = null
               for (let ti = 0; ti < toolModes.length; ti++) {
@@ -1032,7 +1097,7 @@ class Orchestrator {
                     max_tokens: tryConfig.maxTokens || 0
                   }, tryConfig, wrappedSender, sessionId, abortController.signal, tryAnthropic)
                   responseAcceptedWithTools = !!mode.withTools
-                  if (!mode.withTools) {
+                  if (!mode.withTools && !isModelIdentityInquiry) {
                     wrappedSender.send('ai-chat-token', {
                       sessionId,
                       token: '\n\n> ⚠️ 当前模型不允许工具调用，已自动切换为无工具模式继续回答。\n\n'
@@ -1125,7 +1190,8 @@ class Orchestrator {
                 }
                 result = await this._executeTool(toolCall.function.name, args, wrappedSender, sessionId, toolCall.id, {
                   abortSignal: abortController.signal,
-                  chatRunId
+                  chatRunId,
+                  allowChannelSend
                 })
               } catch (e) {
                 result = {
@@ -2343,7 +2409,16 @@ class Orchestrator {
     if (!this.toolRegistry) {
       return { error: `工具系统未初始化` }
     }
-    const { abortSignal, chatRunId: metaRunId } = runMeta || {}
+    const { abortSignal, chatRunId: metaRunId, allowChannelSend = true } = runMeta || {}
+    const normalizedToolName = String(name || '').trim()
+    const isChannelSendTool = /^(feishu_send_message|feishu_send_file_message|feishu_send_voice_message|telegram_send_message|dingtalk_send_message|lark\.im_v1_message_create)$/.test(normalizedToolName)
+    if (!allowChannelSend && isChannelSendTool) {
+      return {
+        error: `子会话不允许直接调用外发消息工具：${normalizedToolName}`,
+        code: 'CHANNEL_SEND_FORBIDDEN',
+        non_retryable: true
+      }
+    }
     // Route MCP tools to MCP manager
     if (name.startsWith('mcp__') && this.mcpManager) {
       if (abortSignal?.aborted) return { error: '已取消' }
@@ -2546,4 +2621,10 @@ class Orchestrator {
   }
 }
 
-module.exports = { Orchestrator }
+module.exports = {
+  Orchestrator,
+  __test: {
+    hasModelIdentityQuestion,
+    detectPromptIntentFlags
+  }
+}

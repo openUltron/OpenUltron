@@ -135,11 +135,12 @@ function createGatewaySideEffectHandlers (deps) {
       }
     }
     const feishuDocHost = String((conv && conv.feishuDocHost) || '').trim()
+    const completeRunId = String(data?.runId || '').trim()
     registerReferenceArtifactsFromMessages(data.messages || [], {
       source: 'feishu_assistant',
       channel: 'feishu',
       sessionId: String(sessionId || ''),
-      runSessionId: '',
+      runSessionId: completeRunId,
       messageId: '',
       chatId: String(chatId || ''),
       docHost: feishuDocHost,
@@ -175,7 +176,7 @@ function createGatewaySideEffectHandlers (deps) {
       })
       const win = getMainWindow()
       if (win && win.webContents) {
-        win.webContents.send('feishu-session-updated', { sessionId })
+        win.webContents.send('feishu-session-updated', { sessionId, runId: completeRunId || undefined, runSessionId: completeRunId || undefined })
       }
     } catch (e) {
       appLogger?.warn?.('[Feishu] 应用内会话落库失败', { sessionId: String(sessionId || ''), error: e.message || String(e) })
@@ -191,7 +192,14 @@ function createGatewaySideEffectHandlers (deps) {
       filePaths: fileItems.map((x) => (x && x.path) ? String(x.path) : '').filter(Boolean).slice(0, 8)
     })
     if (imageItems.length > 0) appLogger?.info?.('[Feishu] 应用内飞书会话完成，带图回发', { imageCount: imageItems.length })
-    await eventBus.emitAsync('chat.session.completed', { binding: outBinding, payload: outPayload })
+    await eventBus.emitAsync('chat.session.completed', {
+      binding: {
+        ...outBinding,
+        runSessionId: completeRunId || outBinding.runSessionId || ''
+      },
+      payload: outPayload,
+      runId: completeRunId || undefined
+    })
   }
 
   function forwardToMainWindow (sessionId, _projectPath, channel, data) {

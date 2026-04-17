@@ -13,9 +13,53 @@ function registerChannelsSessionCompletedSend(deps) {
     feishuNotify
   } = deps
 
+  const seenCompletions = new Map()
+  const COMPLETION_DEDUPE_TTL_MS = 60 * 1000
+  const COMPLETION_MAX_CACHE = 200
+
+  function pruneCompletionDedupeCache(now = Date.now()) {
+    if (seenCompletions.size <= COMPLETION_MAX_CACHE) return
+    for (const [k, ts] of seenCompletions.entries()) {
+      if (now - ts > COMPLETION_DEDUPE_TTL_MS) seenCompletions.delete(k)
+      if (seenCompletions.size <= COMPLETION_MAX_CACHE) break
+    }
+  }
+
+  function completionFingerprint(binding, outPayload) {
+    const channel = String(binding?.channel || '').trim()
+    const canonicalSessionId = canonicalSessionIdForCompletion(binding)
+    const text = String(outPayload?.text || '').replace(/\\s+/g, ' ').trim().slice(0, 1200)
+    const images = Array.isArray(outPayload?.images)
+      ? outPayload.images.map(i => String(i?.path || i?.base64?.slice(0, 32) || '').trim()).join(',')
+      : ''
+    const files = Array.isArray(outPayload?.files)
+      ? outPayload.files.map(i => String(i?.path || '').trim()).join(',')
+      : ''
+    return `${channel}|${canonicalSessionId}|${text}|${images}|${files}`
+  }
+
+  function canonicalSessionIdForCompletion(binding) {
+    const sid = String(binding?.sessionId || '').trim()
+    const runSessionId = String(binding?.runSessionId || '').trim()
+    const runId = String(binding?.runId || '').trim()
+    const raw = runSessionId || runId || sid
+    if (!raw) return ''
+    const marker = '-run-'
+    const idx = raw.indexOf(marker)
+    if (idx < 0) return raw
+    const suffix = raw.slice(idx + marker.length)
+    return suffix || raw
+  }
+
   async function handleChatSessionCompleted(payload) {
     const { binding, payload: outPayload } = payload || {}
     if (!binding || !binding.channel) return
+    const dedupeKey = completionFingerprint(binding, outPayload)
+    const now = Date.now()
+    const lastSeen = seenCompletions.get(dedupeKey) || 0
+    if (now - lastSeen < 2500) return
+    seenCompletions.set(dedupeKey, now)
+    pruneCompletionDedupeCache(now)
     if (binding.sessionId && outPayload && (Array.isArray(outPayload.images) || Array.isArray(outPayload.files))) {
       try {
         const reg = registerArtifactsFromItems({

@@ -7,6 +7,7 @@ const fs = require('fs')
 const { buildExecutionEnvelope, truncateDelegationStdoutPreview } = require('../execution-envelope')
 const { ingestEnvelopeArtifacts } = require('../artifact-hub')
 const { listInstalledApps, getWebAppsRoot, createBlankWebApp } = require('../../web-apps/registry')
+const { sanitizeInjectedSystemPrompt } = require('../system-prompt-guard')
 
 const DEFAULT_TASK_AFTER_CREATE =
   '应用已新建。请核对 manifest、README、index.html、service.js，并给用户一句如何本地预览的说明。'
@@ -38,7 +39,10 @@ const definition = {
         type: 'string',
         description: 'create_new 时可选，写入 manifest 展示名；也可用 web_apps_create 再带 path 调用本工具。'
       },
-      system_prompt: { type: 'string', description: '可选，追加到子 Agent 的 system（委派说明仍会自动注入）' },
+      system_prompt: {
+        type: 'string',
+        description: '可选，追加到子 Agent 的 system（委派说明仍会自动注入，max 5000 字符）。'
+      },
       provider: { type: 'string', description: '可选，子 Agent 使用的供应商' },
       model: { type: 'string', description: '可选，子 Agent 使用的模型' }
     },
@@ -194,6 +198,10 @@ function createWebappStudioInvokeTool(runSubChat) {
     let resolvedApp = null
 
     let effectiveTask = String(task || '').trim()
+    const sanitizedSystem = sanitizeInjectedSystemPrompt(system_prompt, { source: 'webapp_studio_invoke' })
+    if (!sanitizedSystem.ok) {
+      return { success: false, error: sanitizedSystem.error }
+    }
 
     if (createNew) {
       if (!effectiveTask) effectiveTask = DEFAULT_TASK_AFTER_CREATE
@@ -251,7 +259,8 @@ function createWebappStudioInvokeTool(runSubChat) {
     try {
       const out = await runSubChat({
         task: effectiveTask,
-        systemPrompt: system_prompt && String(system_prompt).trim() ? String(system_prompt).trim() : undefined,
+        systemPrompt: sanitizedSystem.value,
+        systemPromptSource: 'webapp_studio_invoke',
         roleName: '应用工作室 Agent',
         runtime: 'internal',
         webappStudioDelegate: true,

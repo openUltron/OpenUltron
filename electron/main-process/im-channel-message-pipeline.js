@@ -943,7 +943,7 @@ async function handleChatMessageReceived(payload, runSessionId, mainSessionId, k
     }
     conversationFile.saveConversation(projectKey, savePayload)
     if (binding.channel === 'feishu' && getMainWindow() && getMainWindow().webContents) {
-      getMainWindow().webContents.send('feishu-session-updated', { sessionId: mainSessionId })
+      getMainWindow().webContents.send('feishu-session-updated', { sessionId: mainSessionId, runSessionId })
     }
     // 统一主流程回发：即使模型内部尝试发送，也不走提前 return
     const outBinding = { ...binding, sessionId: mainSessionId, projectPath, remoteId: chatId, ...(binding.channel === 'feishu' && { feishuChatId: chatId }) }

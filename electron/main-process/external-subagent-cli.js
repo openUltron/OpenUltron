@@ -21,7 +21,8 @@ const EXTERNAL_SUBAGENT_SPECS = [
     ]
   },
   {
-    id: 'gateway_cli',
+    id: 'gateway',
+    aliases: ['gateway_cli'],
     command: String(process.env.OPENULTRON_GATEWAY_CLI || 'claw').trim() || 'claw',
     versionArgs: ['--version'],
     runArgBuilders: [
