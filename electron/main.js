@@ -236,7 +236,8 @@ registerStoreConfigSnapshotIpc({ registerChannel, store })
 registerFsDialogBasicIpc({
   registerChannel,
   dialog,
-  getMainWindow: () => mainWindow
+  getMainWindow: () => mainWindow,
+  getAppRoot
 })
 
 registerShellSpawnCommandIpc({ registerChannel })

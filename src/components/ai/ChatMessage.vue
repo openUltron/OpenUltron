@@ -139,14 +139,18 @@
                 @loadedmetadata="captureArtifactDuration(art, $event)"
                 @durationchange="captureArtifactDuration(art, $event)"
               />
-              <a
-                v-else
+              <button
+                v-else-if="isModalPreviewableArtifact(art)"
+                type="button"
                 class="message-artifact-file"
-                :href="art.path"
-                target="_blank"
-                rel="noopener"
                 :title="art.name || art.path"
-              >{{ art.name || (art.kind === 'file' ? '文件' : art.kind) }}</a>
+                @click="openArtifactPreviewModal(art)"
+              >{{ art.name || (art.kind === 'file' ? '文件' : art.kind) }}</button>
+              <span
+                v-else
+                class="message-artifact-file message-artifact-file-static"
+                :title="art.name || art.path"
+              >{{ art.name || (art.kind === 'file' ? '文件' : art.kind) }}</span>
               <div class="message-artifact-meta">
                 <span>{{ artifactTypeLabel(art) }}</span>
                 <span v-if="art.sourceLabel">{{ art.sourceLabel }}</span>
@@ -156,13 +160,19 @@
               </div>
               <div class="message-artifact-actions">
                 <a
+                  v-if="art.kind !== 'audio' && isModalPreviewableArtifact(art)"
+                  class="message-artifact-open"
+                  href="#"
+                  :title="art.name || art.path"
+                  @click.prevent="openArtifactPreviewModal(art)"
+                >预览</a>
+                <a
                   v-if="art.kind !== 'audio'"
                   class="message-artifact-open"
-                  :href="art.path"
-                  target="_blank"
-                  rel="noopener"
+                  href="#"
                   :title="art.name || art.path"
-                >打开</a>
+                  @click.prevent="openArtifactExternal(art)"
+                >系统打开</a>
                 <a
                   v-if="art.kind === 'audio'"
                   class="message-artifact-open"
@@ -230,6 +240,50 @@
       </div>
     </div>
   </template>
+
+  <Teleport to="body">
+    <div
+      v-if="artifactPreviewModal"
+      class="artifact-modal-overlay"
+      @click.self="closeArtifactPreviewModal"
+    >
+      <div class="artifact-modal" role="dialog" aria-modal="true" :aria-label="artifactPreviewModal.name || '文件预览'">
+        <div class="artifact-modal-head">
+          <div class="artifact-modal-meta">
+            <div class="artifact-modal-title">{{ artifactPreviewModal.name || artifactDisplayPath(artifactPreviewModal) }}</div>
+            <div class="artifact-modal-subtitle">
+              <span>{{ artifactTypeLabel(artifactPreviewModal) }}</span>
+              <span v-if="artifactPreviewModal.sourceLabel">{{ artifactPreviewModal.sourceLabel }}</span>
+              <span v-if="artifactPreviewModal.sizeText">{{ artifactPreviewModal.sizeText }}</span>
+              <span class="artifact-modal-path" :title="artifactDisplayPath(artifactPreviewModal)">{{ artifactDisplayPath(artifactPreviewModal) }}</span>
+            </div>
+          </div>
+          <div class="artifact-modal-actions">
+            <button type="button" class="artifact-modal-btn" @click="openArtifactExternal(artifactPreviewModal)">系统打开</button>
+            <button type="button" class="artifact-modal-btn artifact-modal-btn-close" @click="closeArtifactPreviewModal">关闭</button>
+          </div>
+        </div>
+        <div class="artifact-modal-body">
+          <iframe
+            v-if="artifactPreviewModal && isHtmlArtifact(artifactPreviewModal)"
+            class="artifact-modal-frame"
+            :src="artifactPreviewModal.path"
+            :title="artifactPreviewModal.name || 'html preview'"
+          />
+          <iframe
+            v-else-if="artifactPreviewModal && isPdfArtifact(artifactPreviewModal)"
+            class="artifact-modal-frame artifact-modal-frame-pdf"
+            :src="artifactPreviewModal.path"
+            :title="artifactPreviewModal.name || 'pdf preview'"
+          />
+          <div v-else-if="artifactPreviewModalLoading" class="artifact-modal-state">正在加载预览...</div>
+          <div v-else-if="artifactPreviewModalError" class="artifact-modal-state artifact-modal-state-error">{{ artifactPreviewModalError }}</div>
+          <pre v-else-if="artifactPreviewModalText" class="artifact-modal-text">{{ artifactPreviewModalText }}</pre>
+          <div v-else class="artifact-modal-state">该文件类型暂不支持直接预览，请使用“系统打开”。</div>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
@@ -255,18 +309,30 @@ const artifactPreviewOpen = ref({})
 const artifactPreviewText = ref({})
 const artifactPreviewLoading = ref({})
 const artifactPreviewError = ref({})
+const artifactPreviewModal = ref(null)
+const artifactPreviewModalText = ref('')
+const artifactPreviewModalLoading = ref(false)
+const artifactPreviewModalError = ref('')
 const thinkExpanded = ref(false)
 const nowMs = ref(Date.now())
 let nowTimer = null
 
 onMounted(() => {
   nowTimer = setInterval(() => { nowMs.value = Date.now() }, 1000)
+  document.addEventListener('keydown', onDocumentKeydown)
 })
 
 onUnmounted(() => {
   if (nowTimer) clearInterval(nowTimer)
   nowTimer = null
+  document.removeEventListener('keydown', onDocumentKeydown)
 })
+
+const onDocumentKeydown = (event) => {
+  if (event.key === 'Escape' && artifactPreviewModal.value) {
+    closeArtifactPreviewModal()
+  }
+}
 
 const copyContent = async () => {
   try {
@@ -999,8 +1065,8 @@ const captureArtifactDuration = (art, event) => {
 
 const isPreviewableArtifact = (art) => {
   const ext = artifactExtension(art)
-  const target = String(art?.openPath || '').trim()
-  return !!target && target.startsWith('/') && (isTextLikeExtension(ext) || isHtmlArtifact(art))
+  const target = String(art?.openPath || art?.path || '').trim()
+  return !!target && (isTextLikeExtension(ext) || isHtmlArtifact(art))
 }
 
 const isArtifactPreviewOpen = (art) => !!artifactPreviewOpen.value[artifactIdentity(art)]
@@ -1010,10 +1076,17 @@ const isHtmlArtifact = (art) => {
   return ext === '.html' || ext === '.htm' || String(art?.kind || '').toLowerCase() === 'html'
 }
 
+const isPdfArtifact = (art) => artifactExtension(art) === '.pdf'
+
+const isModalPreviewableArtifact = (art) => {
+  if (!art) return false
+  return isHtmlArtifact(art) || isPdfArtifact(art) || isPreviewableArtifact(art)
+}
+
 const loadArtifactPreview = async (art) => {
-  if (isHtmlArtifact(art)) return
+  if (isHtmlArtifact(art) || isPdfArtifact(art)) return
   const key = artifactIdentity(art)
-  const target = String(art?.openPath || '').trim()
+  const target = String(art?.openPath || art?.path || '').trim()
   if (!key || !target || artifactPreviewText.value[key] || artifactPreviewLoading.value[key]) return
   artifactPreviewLoading.value = { ...artifactPreviewLoading.value, [key]: true }
   artifactPreviewError.value = { ...artifactPreviewError.value, [key]: '' }
@@ -1040,6 +1113,44 @@ const toggleArtifactPreview = (art) => {
   const next = !artifactPreviewOpen.value[key]
   artifactPreviewOpen.value = { ...artifactPreviewOpen.value, [key]: next }
   if (next) loadArtifactPreview(art)
+}
+
+const openArtifactExternal = async (art) => {
+  const target = String(art?.path || art?.openPath || '').trim()
+  if (!target) return
+  try {
+    await window.electronAPI?.openExternal?.(target)
+  } catch { /* ignore */ }
+}
+
+const openArtifactPreviewModal = async (art) => {
+  artifactPreviewModal.value = art || null
+  artifactPreviewModalText.value = ''
+  artifactPreviewModalLoading.value = false
+  artifactPreviewModalError.value = ''
+  if (!art || isHtmlArtifact(art) || isPdfArtifact(art)) return
+  if (!isPreviewableArtifact(art)) {
+    artifactPreviewModalError.value = '该文件类型暂不支持直接预览，请使用“系统打开”。'
+    return
+  }
+  const key = artifactIdentity(art)
+  const cachedText = artifactPreviewText.value[key]
+  if (cachedText) {
+    artifactPreviewModalText.value = cachedText
+    return
+  }
+  artifactPreviewModalLoading.value = true
+  await loadArtifactPreview(art)
+  artifactPreviewModalLoading.value = false
+  artifactPreviewModalText.value = artifactPreviewText.value[key] || ''
+  artifactPreviewModalError.value = artifactPreviewError.value[key] || ''
+}
+
+const closeArtifactPreviewModal = () => {
+  artifactPreviewModal.value = null
+  artifactPreviewModalText.value = ''
+  artifactPreviewModalLoading.value = false
+  artifactPreviewModalError.value = ''
 }
 
 const copyArtifactPath = async (art) => {
@@ -1630,8 +1741,150 @@ const renderThink = (text) => renderMarkdown(text)
   overflow: auto;
 }
 .message-artifact-video { max-width: 100%; max-height: 280px; border-radius: 8px; }
-.message-artifact-file { color: var(--ou-primary); text-decoration: underline; font-size: 13px; }
+.message-artifact-file {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ou-primary);
+  text-decoration: underline;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
 .message-artifact-file:hover { opacity: 0.85; }
+.message-artifact-file-static {
+  color: inherit;
+  text-decoration: none;
+  cursor: default;
+}
+.artifact-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.64);
+  backdrop-filter: blur(8px);
+}
+.artifact-modal {
+  width: min(960px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: linear-gradient(180deg, rgba(34,34,34,0.98), rgba(22,22,22,0.98));
+  box-shadow: 0 24px 70px rgba(0,0,0,0.45);
+  overflow: hidden;
+}
+.artifact-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.artifact-modal-meta {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.artifact-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+  color: rgba(255,255,255,0.96);
+  word-break: break-word;
+}
+.artifact-modal-subtitle {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.62);
+}
+.artifact-modal-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.artifact-modal-btn {
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.92);
+  font-size: 12px;
+  cursor: pointer;
+}
+.artifact-modal-btn-close {
+  background: rgba(255,255,255,0.08);
+}
+.artifact-modal-body {
+  flex: 1 1 auto;
+  min-height: 220px;
+  background: rgba(10,10,10,0.62);
+}
+.artifact-modal-frame {
+  display: block;
+  width: 100%;
+  height: min(72vh, 760px);
+  border: 0;
+  background: #fff;
+}
+.artifact-modal-frame-pdf {
+  background: #2c2c2c;
+}
+.artifact-modal-state {
+  padding: 28px 24px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: rgba(255,255,255,0.74);
+}
+.artifact-modal-state-error {
+  color: #ff9898;
+}
+.artifact-modal-text {
+  margin: 0;
+  padding: 24px;
+  max-height: min(72vh, 760px);
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(255,255,255,0.9);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: 'SFMono-Regular', 'Monaco', 'Menlo', 'Consolas', monospace;
+}
+@media (max-width: 720px) {
+  .artifact-modal-overlay {
+    padding: 12px;
+  }
+  .artifact-modal {
+    max-height: 92vh;
+    border-radius: 14px;
+  }
+  .artifact-modal-head {
+    flex-direction: column;
+  }
+  .artifact-modal-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .artifact-modal-frame,
+  .artifact-modal-text {
+    max-height: 68vh;
+  }
+}
 .tc-command-meta {
   margin: 0 0 6px 0;
   padding: 6px 8px;

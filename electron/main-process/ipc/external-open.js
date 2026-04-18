@@ -15,6 +15,24 @@ const { spawn } = require('child_process')
 function registerExternalOpenIpc (deps) {
   const { registerChannel, shell, getAppRoot } = deps
 
+  function resolveLocalPath(inputPath) {
+    const raw = String(inputPath || '').trim()
+    if (!raw) return ''
+    if (raw.startsWith('local-resource://')) {
+      const url = new URL(raw)
+      const relPath = decodeURIComponent((url.host || '') + url.pathname)
+      return path.resolve(getAppRoot(), relPath)
+    }
+    if (raw.startsWith('file://')) {
+      try {
+        return decodeURIComponent(raw.slice('file://'.length))
+      } catch (_) {
+        return raw.slice('file://'.length)
+      }
+    }
+    return raw
+  }
+
   registerChannel('open-cursor', async (event, data) => {
     try {
       console.log(`🎨 尝试打开Cursor: ${data.path}`)
@@ -122,12 +140,7 @@ function registerExternalOpenIpc (deps) {
 
   registerChannel('open-in-finder', async (event, data) => {
     try {
-      let filePath = data.path
-      if (filePath && filePath.startsWith('local-resource://')) {
-        const url = new URL(filePath)
-        const relPath = decodeURIComponent((url.host || '') + url.pathname)
-        filePath = path.resolve(getAppRoot(), relPath)
-      }
+      const filePath = resolveLocalPath(data.path)
       console.log(`📂 在访达中打开: ${filePath}`)
       shell.showItemInFolder(filePath)
       return { success: true }
@@ -139,8 +152,15 @@ function registerExternalOpenIpc (deps) {
 
   registerChannel('open-external', async (event, url) => {
     try {
-      console.log(`🌐 打开外部链接: ${url}`)
-      await shell.openExternal(url)
+      const target = String(url || '').trim()
+      if (!target) return { success: false, message: '打开目标为空' }
+      console.log(`🌐 打开外部链接: ${target}`)
+      if (target.startsWith('local-resource://') || target.startsWith('file://')) {
+        const fullPath = resolveLocalPath(target)
+        await shell.openPath(fullPath)
+      } else {
+        await shell.openExternal(target)
+      }
       return { success: true }
     } catch (error) {
       console.error('❌ 打开外部链接失败:', error.message)

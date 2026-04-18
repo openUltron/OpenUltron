@@ -10,9 +10,28 @@ const path = require('path')
  * @param {(ch: string, fn: Function) => void} deps.registerChannel
  * @param {typeof import('electron').dialog} deps.dialog
  * @param {() => import('electron').BrowserWindow | null | undefined} deps.getMainWindow
+ * @param {() => string} deps.getAppRoot
  */
 function registerFsDialogBasicIpc (deps) {
-  const { registerChannel, dialog, getMainWindow } = deps
+  const { registerChannel, dialog, getMainWindow, getAppRoot } = deps
+
+  function resolveReadablePath(inputPath) {
+    const raw = String(inputPath || '').trim()
+    if (!raw) return ''
+    if (raw.startsWith('local-resource://')) {
+      const url = new URL(raw)
+      const relPath = decodeURIComponent((url.host || '') + url.pathname)
+      return path.resolve(getAppRoot(), relPath)
+    }
+    if (raw.startsWith('file://')) {
+      try {
+        return decodeURIComponent(raw.slice('file://'.length))
+      } catch (_) {
+        return raw.slice('file://'.length)
+      }
+    }
+    return raw
+  }
 
   registerChannel('show-open-dialog', async (event, options) => {
     try {
@@ -28,7 +47,8 @@ function registerFsDialogBasicIpc (deps) {
 
   registerChannel('read-image-as-base64', async (event, filePath) => {
     try {
-      const ext = path.extname(filePath).toLowerCase()
+      const resolvedPath = resolveReadablePath(filePath)
+      const ext = path.extname(resolvedPath).toLowerCase()
       const mimeTypes = {
         '.jpg': 'image/jpeg',
         '.jpeg': 'image/jpeg',
@@ -40,10 +60,10 @@ function registerFsDialogBasicIpc (deps) {
         '.ico': 'image/x-icon'
       }
       const mimeType = mimeTypes[ext] || 'image/jpeg'
-      const imageBuffer = fs.readFileSync(filePath)
+      const imageBuffer = fs.readFileSync(resolvedPath)
       const base64 = imageBuffer.toString('base64')
       const dataUrl = `data:${mimeType};base64,${base64}`
-      console.log(`🖼️ 读取图片成功: ${filePath} (${(imageBuffer.length / 1024).toFixed(1)}KB)`)
+      console.log(`🖼️ 读取图片成功: ${resolvedPath} (${(imageBuffer.length / 1024).toFixed(1)}KB)`)
       return { success: true, dataUrl }
     } catch (error) {
       console.error('❌ 读取图片失败:', error.message)
@@ -79,8 +99,9 @@ function registerFsDialogBasicIpc (deps) {
 
   registerChannel('read-file', async (event, filePath) => {
     try {
-      const content = fs.readFileSync(filePath, 'utf-8')
-      console.log(`📖 文件读取成功: ${filePath}`)
+      const resolvedPath = resolveReadablePath(filePath)
+      const content = fs.readFileSync(resolvedPath, 'utf-8')
+      console.log(`📖 文件读取成功: ${resolvedPath}`)
       return content
     } catch (error) {
       console.error('读取文件失败:', error)

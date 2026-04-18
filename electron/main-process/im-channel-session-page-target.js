@@ -15,7 +15,7 @@ function createSessionPageTargetHelpers(deps) {
     for (const m of recentAssistants) {
       const artifacts = Array.isArray(m?.metadata?.artifacts) ? m.metadata.artifacts : []
       for (const a of artifacts) {
-        const p = String(a?.path || '').trim()
+        const p = String(a?.openPath || a?.path || '').trim()
         if (!p || !path.isAbsolute(p) || !fs.existsSync(p)) continue
         const ext = path.extname(p).toLowerCase()
         if (ext === '.html' || ext === '.htm') return p
