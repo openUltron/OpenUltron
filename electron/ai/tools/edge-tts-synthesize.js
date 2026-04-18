@@ -10,7 +10,13 @@ const definition = {
 
 **通用能力**：与 Edge 在线 TTS 一致的参数——output_format（码率/封装）、pitch、rate、volume、timeout；可选 save_subtitles、proxy。音色可用 tts_voice_manager(list_voices) 或传 shortName / 别名。
 
-**便捷默认**：不传 output_format 时为 24kHz 48kbps 单声道 mp3。生成路径可传给 feishu_send_voice_message(audio_file_path)。不要使用系统 CLI「edge-tts」，请用本工具。`,
+**便捷默认**：不传 output_format 时为 24kHz 48kbps 单声道 mp3。生成路径可传给 feishu_send_voice_message(audio_file_path)。
+
+**使用建议**：
+- 在主会话里，用户说“生成语音 / 生成播报 / 生成 mp3 / 语音介绍”时，优先使用本工具，生成本地可播放音频。
+- 只有当用户明确要“发送到飞书”，且当前是飞书会话或已提供 chat_id 时，才使用 feishu_send_voice_message。
+
+不要使用系统 CLI「edge-tts」，请用本工具。`,
   parameters: {
     type: 'object',
     properties: {
@@ -117,6 +123,9 @@ async function execute(args = {}, context = {}) {
     success: true,
     message: '语音合成成功',
     output_path: outputPath,
+    file_path: outputPath,
+    file_name: path.basename(outputPath),
+    kind: 'audio',
     bytes: size
   }
 }

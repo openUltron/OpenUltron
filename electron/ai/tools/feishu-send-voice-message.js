@@ -8,12 +8,18 @@ const artifactRegistry = require('../artifact-registry')
 const definition = {
   description: `发送飞书「语音消息」（不是文件）。
 
+仅当满足以下条件之一时使用：
+- 当前就是飞书会话
+- 或者你已经明确拿到了 chat_id
+
 你可以用两种方式之一发送：
 - audio_text：输入要朗读的文字（推荐）。会自动 TTS 并转 OPUS 后发送。
 - audio_file_path：本地音频路径（支持 mp3/wav/m4a/aiff/opus 等），会自动转 OPUS 后发送。
 
 可选：audio_voice（音色 shortName 或别名），audio_duration（秒）。
-注意：此工具只用于「语音消息」，不要用来发送 mp3 文件。`,
+注意：
+- 此工具只用于「飞书语音消息」，不要用来发送 mp3 文件。
+- 如果用户只是希望在当前主会话里生成并展示可播放音频，请改用 edge_tts_synthesize。`,
   parameters: {
     type: 'object',
     properties: {
@@ -43,6 +49,12 @@ async function execute(args = {}, context = {}) {
   }
   if (audioPath && (!path.isAbsolute(audioPath) || !fs.existsSync(audioPath))) {
     return { success: false, message: `audio_file_path 不存在或非绝对路径：${audioPath}` }
+  }
+  if (!chatId) {
+    return {
+      success: false,
+      message: '缺少 chat_id。当前不是飞书会话；如果只是生成本地可播放语音，请改用 edge_tts_synthesize。'
+    }
   }
 
   appLogger?.info?.('[FeishuVoiceTool] feishu_send_voice_message 调用', {
@@ -88,4 +100,3 @@ async function execute(args = {}, context = {}) {
 }
 
 module.exports = { definition, execute }
-

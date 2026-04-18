@@ -129,7 +129,7 @@ function registerExternalOpenIpc (deps) {
         filePath = path.resolve(getAppRoot(), relPath)
       }
       console.log(`📂 在访达中打开: ${filePath}`)
-      await shell.openPath(filePath)
+      shell.showItemInFolder(filePath)
       return { success: true }
     } catch (error) {
       console.error('❌ 打开访达失败:', error.message)

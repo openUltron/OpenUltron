@@ -65,6 +65,7 @@
         :key="messageRenderKey(msg, idx)"
         :message="msg"
         :agent-display-name="agentDisplayName"
+        @regenerate-audio="handleRegenerateAudio"
       />
       <!-- 没有工具卡片时才显示纯思考指示器 -->
       <div v-if="isStreaming && !lastAssistantHasActivity" class="streaming-indicator">
@@ -1186,6 +1187,14 @@ const panelRef = ref(null)
 const isComposing = ref(false)  // 中文输入法合成中
 const pendingAttachments = ref([])
 let pendingAttachmentSeed = 0
+
+const handleRegenerateAudio = async (payload = {}) => {
+  const prompt = String(payload?.prompt || '').trim()
+  if (!prompt) return
+  inputText.value = prompt
+  adjustTextareaHeight()
+  await handleSend()
+}
 
 const formatAttachmentSize = (n) => {
   const size = Number(n || 0)

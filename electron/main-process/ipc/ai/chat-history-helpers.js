@@ -81,7 +81,7 @@ function createChatHistoryHelpers (deps) {
           if (url) artifactsToAdd.push({ path: url, kind: rec.kind || 'image', artifactId: rec.artifactId, name: rec.filename })
         }
       }
-      const filePath = obj.file_path || obj.filePath || obj.path
+      const filePath = obj.file_path || obj.filePath || obj.output_path || obj.outputPath || obj.path
       if (filePath && typeof filePath === 'string') {
         const full = path.isAbsolute(filePath) ? filePath : getAppRootPath('screenshots', path.basename(filePath))
         if (fs.existsSync(full) && fs.statSync(full).isFile()) {

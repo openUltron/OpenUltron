@@ -113,28 +113,105 @@
         <!-- 本条消息中已保存的其它产物：音频、视频、文件/PDF（还原展示） -->
         <div v-if="messageArtifactsNonImage.length" class="message-artifacts">
           <template v-for="(art, idx) in messageArtifactsNonImage" :key="art.artifactId || art.path || idx">
-            <audio
-              v-if="art.kind === 'audio'"
-              class="message-artifact-audio"
-              controls
-              :src="art.path"
-              :title="art.name || 'audio'"
-            />
-            <video
-              v-else-if="art.kind === 'video'"
-              class="message-artifact-video"
-              controls
-              :src="art.path"
-              :title="art.name || 'video'"
-            />
-            <a
-              v-else
-              class="message-artifact-file"
-              :href="art.path"
-              target="_blank"
-              rel="noopener"
-              :title="art.name || art.path"
-            >{{ art.name || (art.kind === 'file' ? '文件' : art.kind) }}</a>
+            <div class="message-artifact-card">
+              <div class="message-artifact-head">
+                <span class="message-artifact-icon">
+                  <component :is="artifactIcon(art)" :size="14" />
+                </span>
+                <span class="message-artifact-kind">{{ artifactTypeLabel(art) }}</span>
+                <span class="message-artifact-name" :title="art.name || art.openPath || art.path">{{ art.name || artifactDisplayPath(art) }}</span>
+              </div>
+              <audio
+                v-if="art.kind === 'audio'"
+                class="message-artifact-audio"
+                controls
+                :src="art.path"
+                :title="art.name || 'audio'"
+                @loadedmetadata="captureArtifactDuration(art, $event)"
+              />
+              <video
+                v-else-if="art.kind === 'video'"
+                class="message-artifact-video"
+                controls
+                :src="art.path"
+                :title="art.name || 'video'"
+                @loadedmetadata="captureArtifactDuration(art, $event)"
+              />
+              <a
+                v-else
+                class="message-artifact-file"
+                :href="art.path"
+                target="_blank"
+                rel="noopener"
+                :title="art.name || art.path"
+              >{{ art.name || (art.kind === 'file' ? '文件' : art.kind) }}</a>
+              <div class="message-artifact-meta">
+                <span>{{ artifactTypeLabel(art) }}</span>
+                <span v-if="art.sourceLabel">{{ art.sourceLabel }}</span>
+                <span v-if="art.durationText">{{ art.durationText }}</span>
+                <span v-if="art.sizeText">{{ art.sizeText }}</span>
+                <span class="message-artifact-path" :title="art.openPath || art.path">{{ artifactDisplayPath(art) }}</span>
+              </div>
+              <div class="message-artifact-actions">
+                <a
+                  class="message-artifact-open"
+                  :href="art.path"
+                  target="_blank"
+                  rel="noopener"
+                  :title="art.name || art.path"
+                >打开</a>
+                <a
+                  v-if="art.kind === 'audio'"
+                  class="message-artifact-open"
+                  :href="art.path"
+                  :download="art.name || ''"
+                  :title="art.name || art.path"
+                >下载</a>
+                <button
+                  v-if="art.kind === 'audio'"
+                  type="button"
+                  class="message-artifact-copy"
+                  @click="requestAudioRegenerate(art)"
+                >换音色重生成</button>
+                <button
+                  v-if="isRevealableArtifact(art)"
+                  type="button"
+                  class="message-artifact-reveal"
+                  @click="revealArtifact(art)"
+                >文件夹</button>
+                <button
+                  v-if="isRevealableArtifact(art)"
+                  type="button"
+                  class="message-artifact-copy"
+                  @click="copyArtifactPath(art)"
+                >{{ copiedArtifactPath === (art.openPath || art.path) ? '已复制路径' : '复制路径' }}</button>
+                <button
+                  v-if="art.name"
+                  type="button"
+                  class="message-artifact-copy"
+                  @click="copyArtifactName(art)"
+                >{{ copiedArtifactName === art.name ? '已复制文件名' : '复制文件名' }}</button>
+                <button
+                  v-if="isPreviewableArtifact(art)"
+                  type="button"
+                  class="message-artifact-copy"
+                  @click="toggleArtifactPreview(art)"
+                >{{ isArtifactPreviewOpen(art) ? '收起预览' : '快速预览' }}</button>
+              </div>
+              <div v-if="isArtifactPreviewOpen(art)" class="message-artifact-preview">
+                <iframe
+                  v-if="isHtmlArtifact(art)"
+                  class="message-artifact-preview-frame"
+                  :src="art.path"
+                  :title="art.name || 'html preview'"
+                />
+                <div v-else-if="artifactPreviewLoading[artifactIdentity(art)]" class="message-artifact-preview-state">正在加载预览...</div>
+                <div v-else-if="artifactPreviewError[artifactIdentity(art)]" class="message-artifact-preview-state message-artifact-preview-error">
+                  {{ artifactPreviewError[artifactIdentity(art)] }}
+                </div>
+                <pre v-else class="message-artifact-preview-text">{{ artifactPreviewText[artifactIdentity(art)] || '' }}</pre>
+              </div>
+            </div>
           </template>
         </div>
 
@@ -154,7 +231,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { User, Wrench, ChevronRight, Terminal, GitBranch, FileText, Shield, Search, CheckCircle, XCircle, Copy, Check } from 'lucide-vue-next'
+import { User, Wrench, ChevronRight, Terminal, GitBranch, FileText, Shield, Search, CheckCircle, XCircle, Copy, Check, Music4, Clapperboard, Globe, File as FileIcon } from 'lucide-vue-next'
 import { useLogoUrl } from '../../composables/useLogoUrl.js'
 import { useI18n } from '../../composables/useI18n'
 
@@ -165,8 +242,16 @@ const props = defineProps({
   message: { type: Object, required: true },
   agentDisplayName: { type: String, default: '' }
 })
+const emit = defineEmits(['regenerate-audio'])
 
 const copied = ref(false)
+const copiedArtifactPath = ref('')
+const copiedArtifactName = ref('')
+const artifactDurationMap = ref({})
+const artifactPreviewOpen = ref({})
+const artifactPreviewText = ref({})
+const artifactPreviewLoading = ref({})
+const artifactPreviewError = ref({})
 const thinkExpanded = ref(false)
 const nowMs = ref(Date.now())
 let nowTimer = null
@@ -516,6 +601,140 @@ const parseJsonSafe = (raw) => {
   try { return JSON.parse(raw) } catch { return null }
 }
 
+const basenameOfPath = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  return text.split(/[\\/]/).pop() || text
+}
+
+const artifactExtension = (art) => {
+  const name = String(art?.name || artifactDisplayPath(art) || '').trim().toLowerCase()
+  const match = name.match(/\.([a-z0-9]+)$/i)
+  return match ? `.${match[1]}` : ''
+}
+
+const isTextLikeExtension = (ext) => {
+  return [
+    '.md', '.txt', '.json', '.js', '.mjs', '.cjs',
+    '.ts', '.tsx', '.jsx', '.vue', '.css', '.scss', '.yml', '.yaml',
+    '.xml', '.csv', '.log'
+  ].includes(String(ext || '').toLowerCase())
+}
+
+const formatBytes = (value) => {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
+const formatDuration = (seconds) => {
+  const n = Math.floor(Number(seconds) || 0)
+  if (!Number.isFinite(n) || n <= 0) return ''
+  const h = Math.floor(n / 3600)
+  const m = Math.floor((n % 3600) / 60)
+  const s = n % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+const artifactIdentity = (art) => String(art?.artifactId || art?.openPath || art?.path || '')
+
+const inferArtifactKind = (value, fallback = '') => {
+  const explicit = String(fallback || '').trim().toLowerCase()
+  if (explicit && explicit !== 'file') return explicit
+  const lower = String(value || '').toLowerCase()
+  if (/\.(mp3|wav|m4a|aac|ogg|opus|flac)(\?|$)/.test(lower)) return 'audio'
+  if (/\.(mp4|mov|webm|mkv)(\?|$)/.test(lower)) return 'video'
+  return explicit || 'file'
+}
+
+const artifactKindLabel = (art) => {
+  const kind = String(art?.kind || '').toLowerCase()
+  if (kind === 'audio') return '音频'
+  if (kind === 'video') return '视频'
+  if (kind === 'html') return '网页'
+  return '文件'
+}
+
+const artifactTypeLabel = (art) => {
+  const kind = String(art?.kind || '').toLowerCase()
+  if (kind === 'audio') {
+    const ext = artifactExtension(art)
+    if (ext === '.mp3') return 'MP3'
+    if (ext === '.wav') return 'WAV'
+    if (ext === '.m4a') return 'M4A'
+    if (ext === '.ogg' || ext === '.opus') return '音频'
+    return '音频'
+  }
+  if (kind === 'video') {
+    const ext = artifactExtension(art)
+    if (ext === '.mp4') return 'MP4'
+    if (ext === '.mov') return 'MOV'
+    if (ext === '.webm') return 'WEBM'
+    return '视频'
+  }
+  const ext = artifactExtension(art)
+  if (ext === '.md') return 'Markdown'
+  if (ext === '.json') return 'JSON'
+  if (ext === '.txt') return '文本'
+  if (ext === '.html' || ext === '.htm') return 'HTML'
+  if (ext === '.pdf') return 'PDF'
+  if (ext === '.js' || ext === '.mjs' || ext === '.cjs') return 'JavaScript'
+  if (ext === '.ts' || ext === '.tsx') return 'TypeScript'
+  if (ext === '.jsx') return 'JSX'
+  if (ext === '.vue') return 'Vue'
+  if (ext === '.css') return 'CSS'
+  if (ext === '.scss') return 'SCSS'
+  if (ext === '.yaml' || ext === '.yml') return 'YAML'
+  if (ext === '.xml') return 'XML'
+  if (ext === '.csv') return 'CSV'
+  return artifactKindLabel(art)
+}
+
+const artifactIcon = (art) => {
+  const kind = String(art?.kind || '').toLowerCase()
+  if (kind === 'audio') return Music4
+  if (kind === 'video') return Clapperboard
+  if (kind === 'html') return Globe
+  return FileIcon
+}
+
+const artifactDisplayPath = (art) => {
+  const target = String(art?.openPath || art?.path || '').trim()
+  if (!target) return ''
+  if (target.startsWith('file://')) return target.slice('file://'.length)
+  return target
+}
+
+const artifactIdentity = (art) => String(art?.artifactId || art?.openPath || art?.path || '')
+
+const toRenderableArtifactPath = (value) => {
+  const text = String(value || '').trim()
+  if (!text) return ''
+  if (text.startsWith('local-resource://') || text.startsWith('file://') || /^https?:\/\//i.test(text)) return text
+  if (text.startsWith('/')) return `file://${text}`
+  return text
+}
+
+const toArtifactRecord = (input = {}) => {
+  const rawPath = String(input.openPath || input.path || '').trim()
+  if (!rawPath) return null
+  const identity = String(input.artifactId || rawPath)
+  return {
+    artifactId: input.artifactId || '',
+    kind: inferArtifactKind(rawPath, input.kind),
+    name: input.name || basenameOfPath(rawPath),
+    path: toRenderableArtifactPath(input.path || rawPath),
+    openPath: rawPath,
+    sizeText: formatBytes(input.size),
+    durationText: artifactDurationMap.value[identity] || '',
+    sourceLabel: String(input.sourceLabel || '').trim()
+  }
+}
+
 const shortenLine = (s, max = 120) => {
   const t = String(s || '').replace(/\s+/g, ' ').trim()
   if (!t) return ''
@@ -611,10 +830,163 @@ const screenshotsInMessage = computed(() => {
 
 // 本条消息中已保存的产物（除图片外）：音频、视频、文件/PDF 等，用于还原展示
 const messageArtifactsNonImage = computed(() => {
-  return (props.message.metadata?.artifacts || []).filter(
-    (a) => a && a.path && a.kind && a.kind !== 'image'
-  )
+  const merged = new Map()
+  const pushArtifact = (raw) => {
+    const rec = toArtifactRecord(raw)
+    if (!rec || rec.kind === 'image' || !rec.path) return
+    const key = rec.artifactId ? `id:${rec.artifactId}` : `${rec.kind}:${rec.openPath}:${rec.name}`
+    if (!merged.has(key)) merged.set(key, rec)
+  }
+
+  for (const a of (props.message.metadata?.artifacts || [])) pushArtifact(a)
+  for (const tc of toolCallsAll.value) {
+    const obj = parseJsonSafe(tc?.result || '')
+    if (!obj || typeof obj !== 'object') continue
+    const filePath = obj.file_path || obj.filePath || obj.output_path || obj.outputPath || obj.path
+    if (filePath && typeof filePath === 'string') {
+      pushArtifact({
+        path: filePath,
+        openPath: filePath,
+        kind: obj.kind,
+        name: obj.file_name || obj.filename || obj.name,
+        sourceLabel: tc?.name === 'edge_tts_synthesize' ? 'Edge TTS' : ''
+      })
+    }
+    const fileUrl = obj.file_url || obj.fileUrl
+    if (fileUrl && typeof fileUrl === 'string' && !String(fileUrl).includes('screenshots')) {
+      pushArtifact({
+        path: fileUrl,
+        openPath: fileUrl,
+        kind: obj.kind,
+        name: obj.file_name || obj.filename || obj.name,
+        sourceLabel: tc?.name === 'edge_tts_synthesize' ? 'Edge TTS' : ''
+      })
+    }
+  }
+  const rank = { audio: 0, video: 1, html: 2, file: 3 }
+  return [...merged.values()].sort((a, b) => {
+    const ra = rank[a.kind] ?? 99
+    const rb = rank[b.kind] ?? 99
+    if (ra !== rb) return ra - rb
+    return String(a.name || a.openPath || a.path || '').localeCompare(
+      String(b.name || b.openPath || b.path || ''),
+      'zh-Hans-CN'
+    )
+  })
 })
+
+const isRevealableArtifact = (art) => {
+  const target = String(art?.openPath || art?.path || '').trim()
+  return !!target && (target.startsWith('/') || target.startsWith('local-resource://') || target.startsWith('file://'))
+}
+
+const revealArtifact = (art) => {
+  const target = String(art?.openPath || art?.path || '').trim()
+  if (!target) return
+  try {
+    window.electronAPI?.openInFinder?.({ path: target })
+  } catch { /* ignore */ }
+}
+
+const captureArtifactDuration = (art, event) => {
+  const key = artifactIdentity(art)
+  if (!key) return
+  const duration = Number(event?.target?.duration || 0)
+  const text = formatDuration(duration)
+  if (!text) return
+  artifactDurationMap.value = {
+    ...artifactDurationMap.value,
+    [key]: text
+  }
+}
+
+const isPreviewableArtifact = (art) => {
+  const ext = artifactExtension(art)
+  const target = String(art?.openPath || '').trim()
+  return !!target && target.startsWith('/') && (isTextLikeExtension(ext) || isHtmlArtifact(art))
+}
+
+const isArtifactPreviewOpen = (art) => !!artifactPreviewOpen.value[artifactIdentity(art)]
+
+const isHtmlArtifact = (art) => {
+  const ext = artifactExtension(art)
+  return ext === '.html' || ext === '.htm' || String(art?.kind || '').toLowerCase() === 'html'
+}
+
+const loadArtifactPreview = async (art) => {
+  if (isHtmlArtifact(art)) return
+  const key = artifactIdentity(art)
+  const target = String(art?.openPath || '').trim()
+  if (!key || !target || artifactPreviewText.value[key] || artifactPreviewLoading.value[key]) return
+  artifactPreviewLoading.value = { ...artifactPreviewLoading.value, [key]: true }
+  artifactPreviewError.value = { ...artifactPreviewError.value, [key]: '' }
+  try {
+    const raw = await window.electronAPI?.readFile?.(target)
+    const text = String(raw || '')
+    artifactPreviewText.value = {
+      ...artifactPreviewText.value,
+      [key]: text.length > 12000 ? `${text.slice(0, 12000)}\n\n... (preview truncated)` : text
+    }
+  } catch (e) {
+    artifactPreviewError.value = {
+      ...artifactPreviewError.value,
+      [key]: e?.message ? `预览失败：${e.message}` : '预览失败'
+    }
+  } finally {
+    artifactPreviewLoading.value = { ...artifactPreviewLoading.value, [key]: false }
+  }
+}
+
+const toggleArtifactPreview = (art) => {
+  const key = artifactIdentity(art)
+  if (!key) return
+  const next = !artifactPreviewOpen.value[key]
+  artifactPreviewOpen.value = { ...artifactPreviewOpen.value, [key]: next }
+  if (next) loadArtifactPreview(art)
+}
+
+const copyArtifactPath = async (art) => {
+  const target = artifactDisplayPath(art)
+  if (!target) return
+  try {
+    await navigator.clipboard.writeText(target)
+    copiedArtifactPath.value = art.openPath || art.path
+    setTimeout(() => {
+      if (copiedArtifactPath.value === (art.openPath || art.path)) copiedArtifactPath.value = ''
+    }, 1500)
+  } catch { /* ignore */ }
+}
+
+const copyArtifactName = async (art) => {
+  const name = String(art?.name || '').trim()
+  if (!name) return
+  try {
+    await navigator.clipboard.writeText(name)
+    copiedArtifactName.value = name
+    setTimeout(() => {
+      if (copiedArtifactName.value === name) copiedArtifactName.value = ''
+    }, 1500)
+  } catch { /* ignore */ }
+}
+
+const requestAudioRegenerate = (art) => {
+  const targetName = String(art?.name || '').trim()
+  const targetPath = artifactDisplayPath(art)
+  const sourceLabel = String(art?.sourceLabel || '').trim()
+  const prompt = [
+    '请把刚才这条音频换一个明显不同的音色重新生成。',
+    '保持文案不变。',
+    '请直接使用 edge_tts_synthesize 在当前主会话生成并展示新的音频，不要发送到飞书。',
+    sourceLabel ? `当前来源：${sourceLabel}。` : '',
+    targetName ? `当前音频文件：${targetName}。` : '',
+    targetPath ? `参考路径：${targetPath}。` : ''
+  ].filter(Boolean).join(' ')
+  emit('regenerate-audio', {
+    artifact: art,
+    prompt,
+    message: props.message
+  })
+}
 
 // take_screenshot 类工具结果：提取 file_url 或 image_base64 用于在会话中展示截图（支持被截断的 JSON）
 function screenshotFromResult(resultStr) {
@@ -1053,7 +1425,112 @@ const renderThink = (text) => renderMarkdown(text)
 .message-screenshot-img { max-width: 100%; max-height: 320px; width: auto; height: auto; border-radius: 8px; object-fit: contain; cursor: pointer; }
 
 .message-artifacts { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.message-artifacts { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.message-artifact-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.03);
+}
+.message-artifact-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.message-artifact-icon {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.8);
+}
+.message-artifact-kind {
+  flex: 0 0 auto;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.72);
+}
+.message-artifact-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
 .message-artifact-audio { max-width: 320px; height: 36px; }
+.message-artifact-video { max-width: 360px; border-radius: 8px; }
+.message-artifact-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: rgba(255,255,255,0.6);
+}
+.message-artifact-path {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-artifact-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.message-artifact-open,
+.message-artifact-reveal,
+.message-artifact-copy {
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.04);
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.message-artifact-preview {
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.18);
+  overflow: hidden;
+}
+.message-artifact-preview-frame {
+  display: block;
+  width: 100%;
+  height: 320px;
+  border: 0;
+  background: #fff;
+}
+.message-artifact-preview-state {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: rgba(255,255,255,0.65);
+}
+.message-artifact-preview-error {
+  color: #ff8f8f;
+}
+.message-artifact-preview-text {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
+}
 .message-artifact-video { max-width: 100%; max-height: 280px; border-radius: 8px; }
 .message-artifact-file { color: var(--ou-primary); text-decoration: underline; font-size: 13px; }
 .message-artifact-file:hover { opacity: 0.85; }
