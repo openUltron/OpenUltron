@@ -178,6 +178,18 @@ function extractScreenshotPathsFromText(text) {
 
 function buildOutboundImageQueue(payload = {}) {
   const mergedImages = Array.isArray(payload.images) ? [...payload.images] : []
+  if (Array.isArray(payload.files)) {
+    for (const file of payload.files) {
+      const p = String(file?.path || '').trim()
+      if (!p) continue
+      const ext = path.extname(p).toLowerCase()
+      if (!['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) continue
+      mergedImages.push({
+        path: p,
+        filename: String(file?.name || '').trim() || path.basename(p)
+      })
+    }
+  }
   const out = []
   const seenPath = new Set()
   const seenBase64Head = new Set()
@@ -671,6 +683,9 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
           }
           const ext = path.extname(p).toLowerCase()
           const fileName = (f && f.name) ? String(f.name) : path.basename(p)
+          if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) {
+            continue
+          }
           if (!mentionsMp3 && wantsVoiceMessage && AUDIO_EXTS.has(ext)) {
             const audioResult = await feishuNotify.sendMessage({
               chat_id: chatId,
@@ -695,22 +710,6 @@ function createFeishuAdapter(eventBus, getChannelConfig) {
               fileName,
               reason: (audioResult && audioResult.message) || '未知'
             })
-          }
-          if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext)) {
-            const buf = fs.readFileSync(p)
-            if (!buf || buf.length === 0) continue
-            const imgResult = await feishuNotify.sendMessage({
-              chat_id: chatId,
-              image_base64: buf.toString('base64'),
-              image_filename: fileName
-            })
-            if (!imgResult || !imgResult.success) {
-              imageFailed++
-              await feishuNotify.sendMessage({ chat_id: chatId, text: `图片发送失败：${(imgResult && imgResult.message) || '未知'}` }).catch(() => {})
-            } else {
-              imageSent++
-            }
-            continue
           }
           const result = await feishuNotify.sendMessage({
             chat_id: chatId,

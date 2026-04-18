@@ -31,4 +31,15 @@ describe('feishu outbound image queue', () => {
     })
     expect(queue).toHaveLength(0)
   })
+
+  it('dedupes same image when payload.images and payload.files both contain it', () => {
+    expect(typeof feishu.__testables?.buildOutboundImageQueue).toBe('function')
+    const buildOutboundImageQueue = feishu.__testables.buildOutboundImageQueue
+    const queue = buildOutboundImageQueue({
+      images: [{ path: imagePath, filename: 'dup-test.png' }],
+      files: [{ path: imagePath, name: 'dup-test.png' }]
+    })
+    expect(queue).toHaveLength(1)
+    expect(queue[0].path).toBe(imagePath)
+  })
 })
