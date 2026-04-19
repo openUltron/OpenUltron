@@ -22,6 +22,7 @@ const {
 } = require('./process-manager')
 const WEBAPP_ID_RE = /^[a-zA-Z0-9._-]{1,120}$/
 const WEBAPP_VERSION_RE = /^[a-zA-Z0-9._-]{1,64}$/
+const PROJECT_NAME_RE = /^[a-z][a-z0-9-]{1,63}$/
 const ZIP_MAX_FILES = 5000
 const ZIP_MAX_TOTAL_UNCOMPRESSED = 100 * 1024 * 1024
 
@@ -292,27 +293,29 @@ python3 -c "print('python ok')"
 }
 
 /**
- * 新建空白应用：唯一 id、版本 0.1.0、manifest + 最小 index.html
- * @param {{ name?: string }} opts
+ * 新建空白应用：id 来自英文项目名，版本 0.1.0、manifest + 最小 index.html
+ * @param {{ name?: string, description?: string, projectName?: string }} opts
  */
 function createBlankWebApp(opts = {}) {
   ensureWebAppsRoot()
-  const name = String(opts.name || '').trim() || '未命名应用'
-  const version = '0.1.0'
-  let id = `com.openultron.webapp.${crypto.randomBytes(4).toString('hex')}`
-  let dest = path.join(getWebAppsRoot(), id, version)
-  let guard = 0
-  while (fs.existsSync(dest) && guard < 8) {
-    id = `com.openultron.webapp.${crypto.randomBytes(4).toString('hex')}`
-    dest = path.join(getWebAppsRoot(), id, version)
-    guard++
+  const name = String(opts.name || '').trim()
+  const description = String(opts.description || '').trim()
+  const projectName = String(opts.projectName || '').trim().toLowerCase()
+  if (!name) return { success: false, error: '应用名称不能为空' }
+  if (!description) return { success: false, error: '应用描述不能为空' }
+  if (!PROJECT_NAME_RE.test(projectName)) {
+    return { success: false, error: '英文项目名称仅允许小写字母、数字、短横线，且需字母开头（2-64）' }
   }
+  const version = '0.1.0'
+  const id = projectName
+  const dest = path.join(getWebAppsRoot(), id, version)
   if (fs.existsSync(dest)) {
-    return { success: false, error: '无法生成唯一应用目录' }
+    return { success: false, error: `项目名称已存在：${projectName}` }
   }
   const manifest = {
     id,
     name,
+    description,
     version,
     host: {
       openUltron: '>=1.0.0',
@@ -343,6 +346,7 @@ function createBlankWebApp(opts = {}) {
     'utf-8'
   )
   const safeName = escapeHtml(name)
+  const safeDesc = escapeHtml(description)
   const indexHtml = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -394,7 +398,8 @@ function createBlankWebApp(opts = {}) {
 <body>
   <main class="card">
     <h1>${safeName}</h1>
-    <p>在 <strong>应用工作室</strong> 右侧用 AI 协助，或直接编辑本目录下的 <code>index.html</code>、<code>service.js</code> 与 <code>manifest.json</code>。本页面已兼容浅色/深色主题。</p>
+    <p>${safeDesc}</p>
+    <p style="margin-top:8px;">在 <strong>应用工作室</strong> 右侧用 AI 协助，或直接编辑本目录下的 <code>index.html</code>、<code>service.js</code> 与 <code>manifest.json</code>。本页面已兼容浅色/深色主题。</p>
   </main>
 </body>
 </html>
@@ -758,10 +763,17 @@ function ensureRepoPulled() {
       fs.mkdirSync(path.dirname(repoDir), { recursive: true })
       execGit(['clone', '--depth', '1', '--branch', cfg.branch, cfg.repoUrl, repoDir], process.cwd())
       try { execGit(['fetch', '--tags', 'origin'], repoDir) } catch (_) {}
+      execGit(['checkout', '-B', cfg.branch, `origin/${cfg.branch}`], repoDir)
+      execGit(['reset', '--hard', `origin/${cfg.branch}`], repoDir)
+      // 清理缓存仓库中的未跟踪残留目录，避免远端已删除应用仍出现在列表
+      execGit(['clean', '-fd'], repoDir)
     } else {
       execGit(['fetch', '--depth', '1', 'origin', cfg.branch], repoDir)
       try { execGit(['fetch', '--tags', 'origin'], repoDir) } catch (_) {}
-      execGit(['checkout', '-B', cfg.branch, 'FETCH_HEAD'], repoDir)
+      execGit(['checkout', '-B', cfg.branch, `origin/${cfg.branch}`], repoDir)
+      execGit(['reset', '--hard', `origin/${cfg.branch}`], repoDir)
+      // 清理缓存仓库中的未跟踪残留目录，避免远端已删除应用仍出现在列表
+      execGit(['clean', '-fd'], repoDir)
     }
     const commit = execGit(['rev-parse', 'HEAD'], repoDir)
     return { success: true, repoDir, ...cfg, commit }
@@ -915,7 +927,7 @@ function listRemoteCatalogApps() {
       hasOfficialRelease: !!latest,
       hasUpdate
     }
-  })
+  }).filter((x) => x.hasOfficialRelease)
   return { success: true, apps, commit: pulled.commit }
 }
 
@@ -949,10 +961,17 @@ function checkRemoteUpdates(payload = {}) {
       maybeBackfillCatalogSourceMeta(pulled.repoDir, app.appId, app.installedVersion, app.latestTag)
     }
   }
+  // 仅返回“本地已安装”的应用更新状态；未安装项不应出现在检查更新列表中
+  const installedOnly = listed.apps.filter((x) => String(x?.installedVersion || '').trim())
+  // 无正式版 tag 的应用不参与更新
+  const releaseOnly = installedOnly.map((x) => ({
+    ...x,
+    hasUpdate: x.hasOfficialRelease ? !!x.hasUpdate : false
+  }))
   const wantedIds = Array.isArray(payload.appIds)
     ? [...new Set(payload.appIds.map((x) => String(x || '').trim()).filter(Boolean))]
     : []
-  const items = wantedIds.length > 0 ? listed.apps.filter((a) => wantedIds.includes(a.appId)) : listed.apps
+  const items = wantedIds.length > 0 ? releaseOnly.filter((a) => wantedIds.includes(a.appId)) : releaseOnly
   return { success: true, items }
 }
 
@@ -983,6 +1002,9 @@ function publishWebAppToCatalog(payload = {}) {
   const id = String(payload.id || '').trim()
   const version = String(payload.version || '').trim()
   if (!id || !version) return { success: false, error: '缺少 id 或 version' }
+  if (!semver.valid(version)) {
+    return { success: false, error: '发布版本必须是标准语义化版本（如 0.2.0）' }
+  }
   const root = ensureWebAppsRoot()
   const localDir = path.resolve(path.join(root, id, version))
   if (!isPathInside(root, localDir) || !fs.existsSync(path.join(localDir, 'manifest.json'))) {
@@ -990,6 +1012,20 @@ function publishWebAppToCatalog(payload = {}) {
   }
   const pulled = ensureRepoPulled()
   if (!pulled.success) return { success: false, error: pulled.error || '拉取仓库失败' }
+  const released = listOfficialTagsForApp(pulled.repoDir, id)
+  if (!released.success) return { success: false, error: released.error || '读取远端版本失败' }
+  const latest = released.tags && released.tags[0] ? released.tags[0] : null
+  const installedLatestMap = getInstalledLatestVersionMap()
+  const installedLatest = String(installedLatestMap[id] || '').trim()
+  if (latest && latest.version && semver.valid(installedLatest) && semver.lt(installedLatest, latest.version)) {
+    return {
+      success: false,
+      error: `检测到远端已有更新版本 ${latest.version}，请先安装最新正式版后再修改发布`
+    }
+  }
+  if (latest && latest.version && !semver.gt(version, latest.version)) {
+    return { success: false, error: `版本号需递增：当前远端最新正式版为 ${latest.version}，请先提升本地版本` }
+  }
   const repoDir = pulled.repoDir
   const targetDir = path.resolve(path.join(repoDir, pulled.catalogAppsRoot, id))
   if (!isPathInside(repoDir, targetDir)) return { success: false, error: '目标目录非法（越界）' }
@@ -1020,6 +1056,17 @@ function publishWebAppToCatalog(payload = {}) {
       ['pr', 'create', '--repo', `${ghRepo.owner}/${ghRepo.repo}`, '--base', pulled.branch, '--head', branch, '--title', title, '--body', body],
       { cwd: repoDir, stdio: ['ignore', 'pipe', 'pipe'] }
     ).toString().trim()
+    // 持久化“审核中”状态，跨重启仍可展示
+    const prev = readSourceMeta(localDir)
+    writeSourceMeta(localDir, {
+      ...prev,
+      source: prev.source || 'local',
+      publishState: 'reviewing',
+      publishBranch: branch,
+      publishPrUrl: prUrl,
+      publishVersion: version,
+      publishSubmittedAt: new Date().toISOString()
+    })
     return { success: true, branch, prUrl }
   } catch (e) {
     return { success: false, error: `创建 PR 失败: ${e.message || String(e)}`, branch }
@@ -1178,7 +1225,9 @@ function registerWebAppsIpc(registerChannel) {
   registerChannel('web-apps-create', (event, payload = {}) => {
     try {
       const name = payload && typeof payload.name === 'string' ? payload.name : undefined
-      return createBlankWebApp({ name })
+      const description = payload && typeof payload.description === 'string' ? payload.description : undefined
+      const projectName = payload && typeof payload.projectName === 'string' ? payload.projectName : undefined
+      return createBlankWebApp({ name, description, projectName })
     } catch (e) {
       return { success: false, error: e.message || String(e) }
     }
