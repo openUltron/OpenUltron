@@ -109,6 +109,31 @@ const cleanEnvForChild = (env) => {
   return result
 }
 
+const DEFAULT_PYPI_SIMPLE = 'https://pypi.org/simple'
+
+/**
+ * uvx 会从父进程继承 UV_INDEX_URL / pip 镜像；部分国内源对个别包返回 403，uv 会报「包不存在」。
+ * 对 uvx 子进程：未配置或配置为已知易出问题的镜像时，改用官方 PyPI（仍可在 mcp.json 的 env 里显式写 UV_INDEX_URL 覆盖）。
+ */
+function fixUvPyPiIndexForMcpStdio(env, command) {
+  const cmd = String(command || '').trim()
+  if (!cmd) return
+  const base = path.basename(cmd).toLowerCase()
+  if (cmd !== 'uvx' && base !== 'uvx') return
+  const badMirror = (url) =>
+    /pypi\.tsinghua\.edu\.cn|mirrors\.tuna\.|tsinghua|mirrors\.aliyun\.com\/pypi|pypi\.douban\.com|mirrors\.cloud\.tencent\.com\/pypi/i.test(
+      String(url || '')
+    )
+  const defIdx = String(env.UV_DEFAULT_INDEX || '').trim()
+  const idxUrl = String(env.UV_INDEX_URL || env.UV_DEFAULT_INDEX_URL || '').trim()
+  // uv 0.4+ 默认索引用 UV_DEFAULT_INDEX；仅设 UV_INDEX_URL 时仍可能走全局配置里的清华源
+  if (!defIdx || badMirror(defIdx)) env.UV_DEFAULT_INDEX = DEFAULT_PYPI_SIMPLE
+  if (!idxUrl || badMirror(idxUrl)) env.UV_INDEX_URL = DEFAULT_PYPI_SIMPLE
+  delete env.UV_DEFAULT_INDEX_URL
+  const pipIdx = String(env.PIP_INDEX_URL || '')
+  if (pipIdx && badMirror(pipIdx)) delete env.PIP_INDEX_URL
+}
+
 // 正式包下扩展 PATH，确保含 npx/node/uvx 等常见路径（Finder 启动时 process.env.PATH 很精简）
 // 顺序：先加系统路径（作为后备），再加 userBins、nodeDirs，这样 nvm/fnm 的 Node 会优先于系统 Node
 // minNodeMajor: 可选，若为 20 则只把 Node >= 20 的目录加入前面（用于 chrome-devtools-mcp）
@@ -221,6 +246,7 @@ class StdioMcpConnection {
       }
       // 过滤 Electron 内部变量，避免干扰 npx/node/uvx 等子进程
       const env = cleanEnvForChild({ ...process.env, ...this.env })
+      fixUvPyPiIndexForMcpStdio(env, this.command)
       const pathKey = process.platform === 'win32' ? 'Path' : 'PATH'
       const isBareCommand = !path.isAbsolute(this.command) && this.command.indexOf(path.sep) === -1
 

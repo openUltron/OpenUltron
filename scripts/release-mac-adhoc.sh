@@ -10,6 +10,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# 结束本机调试用的 Vite / Gateway / Electron，避免 electron-builder 替换 dist-electron 时 EBUSY 或端口占用
+bash scripts/kill-for-release.sh
+
 # 避免历史 ~/.npm 缓存权限污染导致 npm ci 在 release 阶段直接 EPERM 退出。
 # release 构建使用仓库内独立缓存，确保脚本在 CI/本机都可重复执行。
 export npm_config_cache="${npm_config_cache:-$PWD/.cache/npm-release}"
