@@ -8,6 +8,7 @@ function createVisionModelSupport(deps) {
     const m = String(modelId || '').toLowerCase()
     if (!m) return false
     const hits = [
+      /gpt-5/,
       /gpt-4o/,
       /gpt-4\.1/,
       /gpt-4\.5/,

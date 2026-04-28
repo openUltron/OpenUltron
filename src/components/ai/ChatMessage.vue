@@ -6,6 +6,54 @@
       <div class="bubble-body">
         <div class="bubble-name">{{ t('chatMessage.me') }}</div>
         <div class="bubble-text user-text">{{ message.content }}</div>
+        <div v-if="screenshotsInMessage.length" class="message-screenshots user-message-screenshots">
+          <img
+            v-for="(src, idx) in screenshotsInMessage"
+            :key="`user-shot-${idx}`"
+            class="chat-image message-screenshot-img"
+            :src="src"
+            :alt="t('chatMessage.screenshot')"
+          />
+        </div>
+        <div v-if="messageArtifactsNonImage.length" class="message-artifacts user-message-artifacts">
+          <template v-for="(art, idx) in messageArtifactsNonImage" :key="art.artifactId || art.path || idx">
+            <div class="message-artifact-card">
+              <div class="message-artifact-head">
+                <span class="message-artifact-icon">
+                  <component :is="artifactIcon(art)" :size="14" />
+                </span>
+                <span class="message-artifact-kind">{{ artifactTypeLabel(art) }}</span>
+                <span class="message-artifact-name" :title="art.name || art.openPath || art.path">{{ art.name || artifactDisplayPath(art) }}</span>
+              </div>
+              <button
+                v-if="isModalPreviewableArtifact(art)"
+                type="button"
+                class="message-artifact-file"
+                :title="art.name || art.path"
+                @click="openArtifactPreviewModal(art)"
+              >{{ art.name || (art.kind === 'file' ? '文件' : art.kind) }}</button>
+              <span
+                v-else
+                class="message-artifact-file message-artifact-file-static"
+                :title="art.name || art.path"
+              >{{ art.name || (art.kind === 'file' ? '文件' : art.kind) }}</span>
+              <div class="message-artifact-meta">
+                <span>{{ artifactTypeLabel(art) }}</span>
+                <span v-if="art.sourceLabel">{{ art.sourceLabel }}</span>
+                <span v-if="art.sizeText">{{ art.sizeText }}</span>
+                <span class="message-artifact-path" :title="art.openPath || art.path">{{ artifactDisplayPath(art) }}</span>
+              </div>
+              <div class="message-artifact-actions">
+                <button
+                  v-if="isRevealableArtifact(art)"
+                  type="button"
+                  class="message-artifact-reveal"
+                  @click="revealArtifact(art)"
+                >文件夹</button>
+              </div>
+            </div>
+          </template>
+        </div>
       </div>
     </div>
   </div>
@@ -1731,7 +1779,10 @@ const screenshotsInMessage = computed(() => {
     if (info?.url) list.push(info.url)
     else if (info?.base64) list.push('data:image/png;base64,' + info.base64)
   }
-  const fromMeta = (props.message.metadata?.artifacts || []).filter((a) => a.kind === 'image').map((a) => a.path).filter(Boolean)
+  const fromMeta = (props.message.metadata?.artifacts || [])
+    .filter((a) => a.kind === 'image')
+    .map((a) => toRenderableArtifactPath(a.path || a.openPath || ''))
+    .filter(Boolean)
   fromMeta.forEach((url) => { if (!list.includes(url)) list.push(url) })
   return list
 })

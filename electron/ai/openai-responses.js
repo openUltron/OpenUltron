@@ -38,6 +38,37 @@ function textContentPart(text, options, role) {
   return { type: 'input_text', text: t }
 }
 
+function imageContentPart(url) {
+  const v = String(url || '').trim()
+  if (!v) return null
+  return { type: 'input_image', image_url: v }
+}
+
+function messageContentParts(content, options, role) {
+  if (Array.isArray(content)) {
+    const out = []
+    for (const part of content) {
+      if (!part || typeof part !== 'object') continue
+      if (part.type === 'text') {
+        const t = String(part.text || '')
+        if (t) out.push(textContentPart(t, options, role))
+        continue
+      }
+      if (part.type === 'input_text' || part.type === 'output_text') {
+        const t = String(part.text || '')
+        if (t) out.push(textContentPart(t, options, role))
+        continue
+      }
+      if (role === 'user' && part.type === 'image_url') {
+        const img = imageContentPart(part.image_url?.url || '')
+        if (img) out.push(img)
+      }
+    }
+    if (out.length > 0) return out
+  }
+  return [textContentPart(normalizeTextContent(content), options, role)]
+}
+
 function buildResponsesRequestBody(messages, body, options = {}) {
   const sys = []
   const items = []
@@ -51,7 +82,7 @@ function buildResponsesRequestBody(messages, body, options = {}) {
       items.push({
         type: 'message',
         role: 'user',
-        content: [textContentPart(normalizeTextContent(m.content), options, 'user')]
+        content: messageContentParts(m.content, options, 'user')
       })
       continue
     }
@@ -62,14 +93,14 @@ function buildResponsesRequestBody(messages, body, options = {}) {
           items.push({
             type: 'message',
             role: 'assistant',
-            content: [textContentPart(text, options, 'assistant')]
+            content: messageContentParts(text, options, 'assistant')
           })
         } else {
           // 多轮工具：仅 tool_calls、无正文时仍要有 assistant 消息块，再跟 function_call（部分 Responses 后端否则与后续 function_call_output 配对不稳）
           items.push({
             type: 'message',
             role: 'assistant',
-            content: [textContentPart('', options, 'assistant')]
+            content: messageContentParts('', options, 'assistant')
           })
         }
         for (const tc of m.tool_calls) {
@@ -85,7 +116,7 @@ function buildResponsesRequestBody(messages, body, options = {}) {
         items.push({
           type: 'message',
           role: 'assistant',
-          content: [textContentPart(text || '', options, 'assistant')]
+          content: messageContentParts(text || '', options, 'assistant')
         })
       }
       continue

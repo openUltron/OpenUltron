@@ -254,12 +254,19 @@ export function useAIChat(hooks = {}) {
   }
 
   // 发送消息（是否先停掉当前任务由后端 AI 根据消息内容识别，或由前端传 stopPrevious 显式指定）
-  const sendMessage = async (content, { model, systemPrompt, projectPath, displayContent, userContentParts, panelId, sessionId: passedSessionId, stopPrevious } = {}) => {
+  const sendMessage = async (content, { model, systemPrompt, projectPath, displayContent, userContentParts, userArtifacts, panelId, sessionId: passedSessionId, stopPrevious } = {}) => {
     error.value = ''
     tokenUsage.value = null
 
     // 添加用户消息（展示用 displayContent，发给 AI 用 content）
-    messages.value.push({ role: 'user', content: displayContent || content, _uiKey: genUiKey() })
+    messages.value.push({
+      role: 'user',
+      content: displayContent || content,
+      ...(Array.isArray(userArtifacts) && userArtifacts.length > 0
+        ? { metadata: { artifacts: toSerializable(userArtifacts) } }
+        : {}),
+      _uiKey: genUiKey()
+    })
 
     // 构建请求消息列表：含 tool_calls / role:tool，多轮对话时 API 才能正确续写
     const reqMessages = []
