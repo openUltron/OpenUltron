@@ -2204,11 +2204,22 @@ const renderedContent = computed(() => renderMarkdown(mainContent.value))
   margin-right: 12px;
 }
 .user-row .chat-bubble.user {
+  display: inline-flex;
   flex-direction: row-reverse;
-  max-width: 85%;
+  width: fit-content;
+  max-width: min(85%, 720px);
+  margin-left: auto;
   border-radius: 12px;
   background: color-mix(in srgb, var(--ou-primary) 15%, transparent);
   border: 1px solid color-mix(in srgb, var(--ou-primary) 30%, transparent);
+}
+.chat-bubble.user .bubble-body {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
 }
 .chat-bubble {
   display: flex;
@@ -2823,6 +2834,7 @@ const renderedContent = computed(() => renderMarkdown(mainContent.value))
 .message-screenshot-img { max-width: 100%; max-height: 320px; width: auto; height: auto; border-radius: 8px; object-fit: contain; cursor: pointer; }
 
 .message-artifacts { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; margin-top: 10px; }
+.user-message-artifacts { align-items: flex-start; align-self: stretch; }
 .message-artifact-card {
   display: flex;
   flex-direction: column;
@@ -2833,6 +2845,11 @@ const renderedContent = computed(() => renderMarkdown(mainContent.value))
   border: 1px solid rgba(255,255,255,0.08);
   border-radius: 10px;
   background: rgba(255,255,255,0.03);
+}
+.user-message-artifacts .message-artifact-card {
+  width: fit-content;
+  max-width: min(100%, 560px);
+  margin-left: 0;
 }
 .message-artifact-head {
   display: flex;
